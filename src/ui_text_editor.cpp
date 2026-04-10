@@ -16,16 +16,17 @@ static string current_file_path = "";
 static void save_content()
 {
     const char *txt = lv_textarea_get_text(text_area);
+    if (lv_strlen(txt) == 0) {
+        return;
+    }
     if (current_file_path.empty()) {
-        if (lv_strlen(txt) > 0) {
-            struct tm timeinfo;
-            hw_get_date_time(timeinfo);
-            char filename[64];
-            snprintf(filename, sizeof(filename), "/%04d%02d%02d_%02d%02d%02d.txt",
-                     timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                     timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-            hw_save_file(filename, txt);
-        }
+        struct tm timeinfo;
+        hw_get_date_time(timeinfo);
+        char filename[64];
+        snprintf(filename, sizeof(filename), "/%04d%02d%02d_%02d%02d%02d.txt",
+                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+        hw_save_file(filename, txt);
     } else {
         hw_save_file(current_file_path.c_str(), txt);
     }
