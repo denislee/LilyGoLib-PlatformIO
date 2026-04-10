@@ -635,6 +635,7 @@ void hw_update_battery_history()
             battery_history.erase(battery_history.begin());
         }
         battery_history.push_back(voltage);
+        log_d("Recorded battery voltage: %d mV", voltage);
     }
 #else
     static int16_t sim_voltage = 4200;
@@ -690,8 +691,8 @@ void hw_init()
     xTaskCreate(playerTask, "app/play", 8 * 1024, NULL, 12, &playerTaskHandler);
 #endif
 
-    // Battery history recording every 5 minutes (300,000 ms)
-    lv_timer_create(battery_history_timer_cb, 300000, NULL);
+    // Battery history recording every 1 minute (60,000 ms)
+    lv_timer_create(battery_history_timer_cb, 60000, NULL);
     // Record first point immediately
     hw_update_battery_history();
 
