@@ -17,7 +17,28 @@ static void event_cb(lv_event_t *e)
 
     const char *text = lv_label_get_text(lv_obj_get_child(obj, 0));
     printf("Button %s clicked\n", text);
-    if (strcmp(text, "Shutdown") == 0) {
+    if (strcmp(text, "Deep Sleep") == 0) {
+        lv_obj_clean(lv_screen_active());
+        lv_obj_set_style_bg_color(lv_screen_active(), lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_radius(lv_screen_active(), 0, 0);
+
+        LV_IMG_DECLARE(img_poweroff);
+        lv_obj_t *image = lv_image_create(lv_screen_active());
+        lv_image_set_src(image, &img_poweroff);
+        lv_obj_center(image);
+
+        lv_obj_t *label = lv_label_create(lv_screen_active());
+        lv_label_set_text(label, "Entering Deep Sleep...");
+        lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -30);
+
+        lv_refr_now(NULL);
+        lv_delay_ms(2000);
+        
+        hw_sleep();
+
+    } else if (strcmp(text, "Shutdown") == 0) {
         lv_obj_clean(lv_screen_active());
         lv_obj_set_style_bg_color(lv_screen_active(), lv_color_black(), LV_PART_MAIN);
         lv_obj_set_style_radius(lv_screen_active(), 0, 0);
@@ -38,7 +59,7 @@ static void event_cb(lv_event_t *e)
         hw_shutdown();
 
     } else if (strcmp(text, "Sleep") == 0) {
-        hw_sleep();
+        hw_light_sleep();
     } else if (strcmp(text, "Close") == 0) {
         lv_obj_clean(menu);
         lv_obj_del(menu);
@@ -83,14 +104,27 @@ void ui_power_enter(lv_obj_t *parent)
     lv_obj_t *btns_cont = lv_obj_create(main_page);
     lv_obj_set_scroll_dir(btns_cont, LV_DIR_NONE);
     lv_obj_set_scrollbar_mode(btns_cont, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_size(btns_cont, lv_pct(99), 50);
+    lv_obj_set_size(btns_cont, lv_pct(99), 100);
     lv_obj_set_style_margin_top(btns_cont, is_small ? 15 : 80, 0);
     lv_obj_set_style_border_width(btns_cont, 0, 0);
+    lv_obj_set_flex_flow(btns_cont, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(btns_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
+
+    lv_obj_t *btn_deep_sleep = lv_btn_create(btns_cont);
+    lv_obj_set_size(btn_deep_sleep, btn_w, btn_h);
+    lv_obj_t *label_btn = lv_label_create(btn_deep_sleep);
+    lv_label_set_text(label_btn, "Deep Sleep");
+    lv_obj_center(label_btn);
+    lv_obj_add_event_cb(btn_deep_sleep, event_cb, LV_EVENT_CLICKED, NULL);
+    if (is_small) {
+        lv_obj_set_style_text_font(label_btn, &lv_font_montserrat_14, 0);
+    } else {
+        lv_obj_set_style_text_font(label_btn, &lv_font_montserrat_24, 0);
+    }
 
     lv_obj_t *btn_shutdown = lv_btn_create(btns_cont);
     lv_obj_set_size(btn_shutdown, btn_w, btn_h);
-    lv_obj_align(btn_shutdown, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t *label_btn = lv_label_create(btn_shutdown);
+    label_btn = lv_label_create(btn_shutdown);
     lv_label_set_text(label_btn, "Shutdown");
     lv_obj_center(label_btn);
     lv_obj_add_event_cb(btn_shutdown, event_cb, LV_EVENT_CLICKED, NULL);
@@ -103,7 +137,6 @@ void ui_power_enter(lv_obj_t *parent)
 
     lv_obj_t *btn_sleep = lv_btn_create(btns_cont);
     lv_obj_set_size(btn_sleep, btn_w, btn_h);
-    lv_obj_align(btn_sleep, LV_ALIGN_CENTER, 0, 0);
     label_btn = lv_label_create(btn_sleep);
     lv_label_set_text(label_btn, "Sleep");
     lv_obj_center(label_btn);
@@ -116,7 +149,6 @@ void ui_power_enter(lv_obj_t *parent)
 
     lv_obj_t *quit_btn = lv_btn_create(btns_cont);
     lv_obj_set_size(quit_btn, btn_w, btn_h);
-    lv_obj_align(quit_btn, LV_ALIGN_RIGHT_MID, 0, 0);
     label_btn = lv_label_create(quit_btn);
     lv_label_set_text(label_btn, "Close");
     lv_obj_center(label_btn);

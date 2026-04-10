@@ -654,6 +654,11 @@ void hw_shutdown();
 void hw_sleep();
 
 /**
+ * @brief Put the hardware into light sleep mode.
+ */
+void hw_light_sleep();
+
+/**
  * @brief Check if the OTG function is enabled.
  *
  * @return True if the OTG function is enabled, false otherwise.
