@@ -121,10 +121,22 @@ static void ui_poll_timer_callback(lv_timer_t *t)
         // Update Battery
         monitor_params_t params;
         hw_get_monitor_params(params);
+        
+        bool is_charging = false;
+        if (!params.charge_state.empty() && 
+            params.charge_state.find("charging") != string::npos && 
+            params.charge_state.find("Not") == string::npos) {
+            is_charging = true;
+        }
+
         const char *batt_sym = LV_SYMBOL_BATTERY_FULL;
-        if (params.battery_percent < 20) batt_sym = LV_SYMBOL_BATTERY_EMPTY;
-        else if (params.battery_percent < 50) batt_sym = LV_SYMBOL_BATTERY_1;
-        else if (params.battery_percent < 80) batt_sym = LV_SYMBOL_BATTERY_2;
+        if (is_charging) {
+            batt_sym = LV_SYMBOL_CHARGE;
+        } else {
+            if (params.battery_percent < 20) batt_sym = LV_SYMBOL_BATTERY_EMPTY;
+            else if (params.battery_percent < 50) batt_sym = LV_SYMBOL_BATTERY_1;
+            else if (params.battery_percent < 80) batt_sym = LV_SYMBOL_BATTERY_2;
+        }
         
         lv_label_set_text_fmt(stat_batt_label, "%s %d%%", batt_sym, params.battery_percent);
     }
