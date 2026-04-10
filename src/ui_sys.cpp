@@ -21,7 +21,7 @@ static lv_obj_t *settings_exit_btn = NULL;
 static lv_obj_t *main_page_group_items[MAX_MAIN_PAGE_ITEMS];
 static uint8_t main_page_group_count = 0;
 
-#define MAX_SUBPAGE_ITEMS 20
+#define MAX_SUBPAGE_ITEMS 64
 static struct {
     lv_obj_t *page;
     lv_obj_t *obj;
@@ -434,12 +434,16 @@ static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_t *label = lv_label_create(cont);
     lv_label_set_text(label, LV_SYMBOL_LIST " System Info");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_add_flag(sub_page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(sub_page, 4, 0);
     lv_obj_set_style_pad_row(sub_page, 0, 0);
 
     auto add_info_row = [&](const char *key, const char *val) -> lv_obj_t* {
         lv_obj_t *row = lv_menu_cont_create(sub_page);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -526,6 +530,7 @@ static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_t *label = lv_label_create(cont);
     lv_label_set_text(label, LV_SYMBOL_USB " Devices");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_add_flag(sub_page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(sub_page, 4, 0);
     lv_obj_set_style_pad_row(sub_page, 0, 0);
@@ -538,6 +543,9 @@ static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
             bool online = (devices_mask & 0x01);
 
             lv_obj_t *row = lv_menu_cont_create(sub_page);
+            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_flag(row, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+            lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
             lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -550,6 +558,8 @@ static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
 
             lv_obj_t *name = lv_label_create(row);
             lv_label_set_text(name, device_name);
+            lv_label_set_long_mode(name, LV_LABEL_LONG_SCROLL);
+            lv_obj_set_style_max_width(name, LV_PCT(65), 0);
 
             lv_obj_t *status = lv_label_create(row);
             if (online) {
