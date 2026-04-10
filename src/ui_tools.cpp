@@ -231,10 +231,6 @@ lv_obj_t *create_slider(lv_obj_t *parent, const char *icon, const char *txt, int
         lv_obj_add_event_cb(slider, cb, filter, NULL);
     }
 
-    if (icon == NULL) {
-        lv_obj_add_flag(slider, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
-    }
-
     return slider;
 }
 
