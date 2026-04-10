@@ -122,15 +122,8 @@ static void ui_poll_timer_callback(lv_timer_t *t)
         monitor_params_t params;
         hw_get_monitor_params(params);
         
-        bool is_charging = false;
-        if (!params.charge_state.empty() && 
-            params.charge_state.find("charging") != string::npos && 
-            params.charge_state.find("Not") == string::npos) {
-            is_charging = true;
-        }
-
         const char *batt_sym = LV_SYMBOL_BATTERY_FULL;
-        if (is_charging) {
+        if (params.is_charging) {
             batt_sym = LV_SYMBOL_CHARGE;
         } else {
             if (params.battery_percent < 20) batt_sym = LV_SYMBOL_BATTERY_EMPTY;

@@ -1692,6 +1692,7 @@ void hw_get_monitor_params(monitor_params_t &params)
 #if defined(USING_PPM_MANAGE)
     params.type = MONITOR_PPM;
     params.charge_state = instance.ppm.getChargeStatusString();
+    params.is_charging = instance.ppm.isVbusIn(); // If VBUS is in, we consider it "charging" for the icon
     params.usb_voltage = instance.ppm.getVbusVoltage();
     params.sys_voltage = instance.ppm.getSystemVoltage();
     instance.ppm.getFaultStatus();
@@ -1702,7 +1703,8 @@ void hw_get_monitor_params(monitor_params_t &params)
     }
 #elif defined(USING_PMU_MANAGE)
     params.type = MONITOR_PMU;
-    params.charge_state = instance.pmu.isCharging() ? "Charging" : "Not charging";
+    params.is_charging = instance.pmu.isCharging();
+    params.charge_state = params.is_charging ? "Charging" : "Not charging";
     params.usb_voltage = instance.pmu.getVbusVoltage();
     params.sys_voltage = instance.pmu.getSystemVoltage();
     params.battery_voltage = instance.pmu.getBattVoltage();
@@ -1726,6 +1728,8 @@ void hw_get_monitor_params(monitor_params_t &params)
         params.maxLoadCurrent = instance.gauge.getMaxLoadCurrent();
         BatteryStatus batteryStatus = instance.gauge.getBatteryStatus();
 
+        params.is_charging = !batteryStatus.isInDischargeMode();
+
         if (batteryStatus.isInDischargeMode()) {
             params.timeToEmpty = instance.gauge.getTimeToEmpty();
             params.timeToFull = 0;
@@ -1745,6 +1749,7 @@ void hw_get_monitor_params(monitor_params_t &params)
     params.type = MONITOR_PPM;
     params.battery_percent = 30 + rand() % (100 - 30 + 1);;
     params.battery_voltage = 4178;
+    params.is_charging = true;
     params.charge_state = "Fast charging";
     params.usb_voltage = 4998;
     params.ntc_state = "Normal";

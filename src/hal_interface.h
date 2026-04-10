@@ -230,6 +230,7 @@ typedef struct {
     uint16_t timeToEmpty;       // minute
     uint16_t timeToFull;        // minute
     string ntc_state;
+    bool is_charging;
 } monitor_params_t;
 
 /**
