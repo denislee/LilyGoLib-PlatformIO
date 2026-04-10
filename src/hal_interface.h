@@ -1540,16 +1540,9 @@ void hw_set_audio_effect_ab_class(bool enable);
 #define USING_BLE_KEYBOARD
 #define  FLOAT_BUTTON_WIDTH  40
 #define  FLOAT_BUTTON_HEIGHT 40
-#ifndef USING_BHI260_SENSOR
-#define USING_BHI260_SENSOR
-#endif
 
 #ifndef RADIOLIB_EXCLUDE_NRF24
 #define USING_EXTERN_NRF2401
-#endif
-
-#ifndef USING_ST25R3916
-#define USING_ST25R3916
 #endif
 
 #define MAIN_FONT   &lv_font_montserrat_16

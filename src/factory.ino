@@ -91,14 +91,18 @@ void setup()
     Serial.println("Start done. run main loop");
 }
 
+#ifdef USING_ST25R3916
 extern void loopNFCReader();
+#endif
 
 void loop()
 {
     instanceLockTake();
     instance.loop();
 #if defined(USING_ST25R3916)
+#ifdef USING_ST25R3916
     loopNFCReader();
+#endif
 #endif
     lv_timer_handler();
     instanceLockGive();

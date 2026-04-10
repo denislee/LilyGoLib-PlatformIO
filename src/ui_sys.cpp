@@ -434,11 +434,12 @@ static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_t *label = lv_label_create(cont);
     lv_label_set_text(label, LV_SYMBOL_LIST " System Info");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(sub_page, 4, 0);
     lv_obj_set_style_pad_row(sub_page, 0, 0);
 
     auto add_info_row = [&](const char *key, const char *val) -> lv_obj_t* {
-        lv_obj_t *row = lv_obj_create(sub_page);
+        lv_obj_t *row = lv_menu_cont_create(sub_page);
         lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -449,7 +450,6 @@ static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
         lv_obj_set_style_border_width(row, 1, 0);
         lv_obj_set_style_border_color(row, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
         lv_obj_set_style_radius(row, 0, 0);
-        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
 
         lv_obj_t *k = lv_label_create(row);
         lv_label_set_text(k, key);
@@ -537,14 +537,13 @@ static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
         if (lv_strcmp(device_name, "") != 0) {
             bool online = (devices_mask & 0x01);
 
-            lv_obj_t *row = lv_obj_create(sub_page);
+            lv_obj_t *row = lv_menu_cont_create(sub_page);
             lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
             lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
             lv_obj_set_style_pad_ver(row, 5, 0);
             lv_obj_set_style_pad_hor(row, 8, 0);
             lv_obj_set_style_radius(row, 0, 0);
-            lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
             lv_obj_set_style_border_width(row, 1, 0);
             lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
             lv_obj_set_style_border_color(row, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);

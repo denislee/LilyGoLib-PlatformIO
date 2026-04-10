@@ -85,14 +85,14 @@ static const uint8_t SCK = 35;
 #define EXPANDS_SD_EN     (12)
 
 // Peripheral definition exists
-#define USING_AUDIO_CODEC
+// #define USING_AUDIO_CODEC
 #define USING_XL9555_EXPANDS
 #define USING_PPM_MANAGE
 #define USING_BQ_GAUGE
 #define USING_INPUT_DEV_ROTARY
 #define USING_INPUT_DEV_KEYBOARD
-#define USING_ST25R3916
-#define USING_BHI260_SENSOR
+// #define USING_ST25R3916
+// #define USING_BHI260_SENSOR
 #define HAS_SD_CARD_SOCKET
 
 #endif /* Pins_Arduino_h */
