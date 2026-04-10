@@ -803,7 +803,9 @@ void hw_get_date_time(struct tm &timeinfo)
     if (hw_get_device_online() & HW_RTC_ONLINE) {
         instance.rtc.getDateTime(&timeinfo);
     } else {
-        timeinfo = {0};
+        time_t now;
+        time(&now);
+        localtime_r(&now, &timeinfo);
     }
 #else
     time_t now;
@@ -816,6 +818,10 @@ void hw_get_date_time(struct tm &timeinfo)
 void hw_set_date_time(struct tm &timeinfo)
 {
 #ifdef ARDUINO
+    struct timeval tv;
+    tv.tv_sec = mktime(&timeinfo);
+    tv.tv_usec = 0;
+    settimeofday(&tv, NULL);
     if (hw_get_device_online() & HW_RTC_ONLINE) {
         instance.rtc.setDateTime(timeinfo);
         instance.rtc.hwClockWrite();

@@ -526,6 +526,7 @@ static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_t *label = lv_label_create(cont);
     lv_label_set_text(label, LV_SYMBOL_USB " Devices");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(sub_page, 4, 0);
     lv_obj_set_style_pad_row(sub_page, 0, 0);
 
