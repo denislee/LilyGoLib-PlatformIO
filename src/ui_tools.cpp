@@ -189,6 +189,19 @@ lv_obj_t *create_msgbox(lv_obj_t *parent, const char *title_txt,
 
 }
 
+static void child_focus_cb(lv_event_t * e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t * obj = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t * parent = lv_obj_get_parent(obj);
+    if(code == LV_EVENT_FOCUSED) {
+        lv_obj_add_state(parent, LV_STATE_FOCUSED);
+        lv_obj_add_state(parent, LV_STATE_FOCUS_KEY);
+    } else if(code == LV_EVENT_DEFOCUSED) {
+        lv_obj_remove_state(parent, LV_STATE_FOCUSED);
+        lv_obj_remove_state(parent, LV_STATE_FOCUS_KEY);
+    }
+}
+
 lv_obj_t *create_text(lv_obj_t *parent, const char *icon, const char *txt,
                       lv_menu_builder_variant_t builder_variant)
 {
@@ -223,9 +236,15 @@ lv_obj_t *create_slider(lv_obj_t *parent, const char *icon, const char *txt, int
     lv_obj_t *obj = create_text(parent, icon, txt, LV_MENU_ITEM_BUILDER_VARIANT_2);
 
     lv_obj_t *slider = lv_slider_create(obj);
+    lv_obj_set_style_outline_width(slider, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(slider, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(slider, 0, LV_STATE_FOCUSED);
     lv_obj_set_flex_grow(slider, 1);
     lv_slider_set_range(slider, min, max);
     lv_slider_set_value(slider, val, LV_ANIM_OFF);
+
+    lv_obj_add_event_cb(slider, child_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(slider, child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
 
     if (cb != NULL) {
         lv_obj_add_event_cb(slider, cb, filter, NULL);
@@ -239,7 +258,14 @@ lv_obj_t *create_switch(lv_obj_t *parent, const char *icon, const char *txt, boo
     lv_obj_t *obj = create_text(parent, icon, txt, LV_MENU_ITEM_BUILDER_VARIANT_1);
 
     lv_obj_t *sw = lv_switch_create(obj);
+    lv_obj_set_style_outline_width(sw, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(sw, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(sw, 0, LV_STATE_FOCUSED);
     lv_obj_add_state(sw, chk ? LV_STATE_CHECKED : LV_STATE_DEFAULT);
+    
+    lv_obj_add_event_cb(sw, child_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(sw, child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+
     lv_obj_add_event_cb(sw, cb, LV_EVENT_VALUE_CHANGED, NULL);
     return sw;
 }
