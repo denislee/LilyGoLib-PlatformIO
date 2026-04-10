@@ -629,22 +629,24 @@ static const size_t MAX_BATTERY_HISTORY = 60; // 5 hours if 5 mins interval
 void hw_update_battery_history()
 {
 #ifdef ARDUINO
-    int16_t voltage = hw_get_battery_voltage();
-    if (voltage > 0) {
+    monitor_params_t params;
+    hw_get_monitor_params(params);
+    int16_t percent = params.battery_percent;
+    if (percent >= 0 && percent <= 100) {
         if (battery_history.size() >= MAX_BATTERY_HISTORY) {
             battery_history.erase(battery_history.begin());
         }
-        battery_history.push_back(voltage);
-        log_d("Recorded battery voltage: %d mV", voltage);
+        battery_history.push_back(percent);
+        log_d("Recorded battery percent: %d%%", percent);
     }
 #else
-    static int16_t sim_voltage = 4200;
+    static int16_t sim_percent = 100;
     if (battery_history.size() >= MAX_BATTERY_HISTORY) {
         battery_history.erase(battery_history.begin());
     }
-    battery_history.push_back(sim_voltage);
-    sim_voltage -= 10;
-    if (sim_voltage < 3200) sim_voltage = 4200;
+    battery_history.push_back(sim_percent);
+    sim_percent -= 2;
+    if (sim_percent < 10) sim_percent = 100;
 #endif
 }
 
@@ -705,6 +707,7 @@ void hw_init()
         user_setting.disp_timeout_second = 0;
         user_setting.charger_current = DEVICE_CHARGE_CURRENT_RECOMMEND;
         user_setting.charger_enable = true;
+        user_setting.sleep_mode = 0;
         prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
     }
 
@@ -743,6 +746,7 @@ void hw_get_user_setting(user_setting_params_t &param)
     printf("Get disp_timeout_second :%u\n", user_setting.disp_timeout_second);
     printf("Get charger_current     :%u\n", user_setting.charger_current);
     printf("Get charger_enable      :%u\n", user_setting.charger_enable);
+    printf("Get sleep_mode          :%u\n", user_setting.sleep_mode);
 }
 
 void hw_set_user_setting(user_setting_params_t &param)
@@ -756,7 +760,7 @@ void hw_set_user_setting(user_setting_params_t &param)
     printf("set disp_timeout_second :%u\n", param.disp_timeout_second);
     printf("set charger_current     :%u\n", param.charger_current);
     printf("set charger_enable      :%u\n", param.charger_enable);
-
+    printf("set sleep_mode          :%u\n", param.sleep_mode);
 }
 
 const uint32_t hw_get_disp_timeout_ms()
@@ -1967,10 +1971,11 @@ void hw_feedback()
 void hw_low_power_loop()
 {
 #ifdef ARDUINO
-    instance.lightSleep((WakeupSource_t)(WAKEUP_SRC_ROTARY_BUTTON));
-    // #ifdef USING_ST25R3916
-    //     beginNFC(nrf_notify_callback, ndef_event_callback);
-    // #endif
+    if (user_setting.sleep_mode == 1) {
+        hw_sleep();
+    } else {
+        instance.lightSleep((WakeupSource_t)(WAKEUP_SRC_ROTARY_BUTTON));
+    }
 #endif
 }
 

@@ -246,6 +246,7 @@ typedef struct {
     uint8_t disp_timeout_second;
     uint16_t charger_current;
     uint8_t charger_enable;
+    uint8_t sleep_mode;
 } user_setting_params_t;
 
 /**

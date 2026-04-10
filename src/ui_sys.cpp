@@ -177,6 +177,20 @@ static void disp_timeout_cb(lv_event_t *e)
     }
 }
 
+static void sleep_mode_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    uint8_t val = (uint8_t)lv_slider_get_value(obj);
+    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
+
+    local_param.sleep_mode = val;
+    if (val == 0) {
+        lv_label_set_text(slider_label, " Light ");
+    } else {
+        lv_label_set_text(slider_label, " Deep ");
+    }
+}
+
 static void otg_output_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -397,6 +411,18 @@ static lv_obj_t *create_subpage_backlight(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_set_user_data(slider, slider_label);
     register_subpage_group_obj(sub_page, slider);
 
+    slider = create_slider(sub_page, NULL, "Sleep Mode", 0, 1,
+                           local_param.sleep_mode, sleep_mode_cb, LV_EVENT_VALUE_CHANGED);
+    parent = lv_obj_get_parent(slider);
+    slider_label = lv_label_create(parent);
+    if (local_param.sleep_mode == 0) {
+        lv_label_set_text(slider_label, " Light ");
+    } else {
+        lv_label_set_text(slider_label, " Deep ");
+    }
+    lv_obj_set_user_data(slider, slider_label);
+    register_subpage_group_obj(sub_page, slider);
+
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
@@ -459,7 +485,7 @@ static lv_obj_t *create_subpage_battery_history(lv_obj_t *menu, lv_obj_t *main_p
 
     if (history.empty()) {
         lv_obj_t *no_data = lv_label_create(sub_page);
-        lv_label_set_text(no_data, "No battery data recorded yet.\nWait 5 minutes...");
+        lv_label_set_text(no_data, "No battery data recorded yet.\nPlease wait...");
         lv_obj_set_style_text_align(no_data, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_center(no_data);
     } else {
@@ -467,22 +493,24 @@ static lv_obj_t *create_subpage_battery_history(lv_obj_t *menu, lv_obj_t *main_p
         lv_obj_set_size(chart, LV_PCT(85), LV_PCT(60));
         lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, 20);
         lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
-        lv_chart_set_point_count(chart, 60); 
-        lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 3200, 4250); 
+        lv_chart_set_point_count(chart, history.size());
+        lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
 
-        // Add grid lines
         lv_chart_set_div_line_count(chart, 5, 6);
 
-        lv_chart_series_t *ser = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y);
+        lv_chart_series_t *ser = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_GREEN), LV_CHART_AXIS_PRIMARY_Y);
 
         for (size_t i = 0; i < history.size(); ++i) {
             lv_chart_set_next_value(chart, ser, history[i]);
         }
-        
+
         lv_chart_refresh(chart);
 
         lv_obj_t *info_label = lv_label_create(sub_page);
-        lv_label_set_text_fmt(info_label, "History: %d points\nRange: 3.2V - 4.25V", (int)history.size());
+        lv_label_set_text_fmt(info_label, "%d min history\n%d%% - %d%%",
+                              (int)history.size(),
+                              (int)history.front(),
+                              (int)history.back());
         lv_obj_set_style_text_align(info_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(info_label, LV_ALIGN_BOTTOM_MID, 0, -5);
     }
