@@ -1,0 +1,669 @@
+/**
+ * @file      ui_sys.cpp
+ * @author    Lewis He (lewishe@outlook.com)
+ * @license   MIT
+ * @copyright Copyright (c) 2025  ShenZhen XinYuan Electronic Technology Co., Ltd
+ * @date      2025-01-05
+ *
+ */
+#include "ui_define.h"
+
+static lv_obj_t *menu = NULL;
+static lv_timer_t *timer = NULL;
+static lv_group_t *menu_g;
+static  user_setting_params_t local_param;
+static uint32_t get_ip_id = 0;
+static lv_obj_t *quit_btn = NULL;
+static lv_obj_t *settings_main_page = NULL;
+static lv_obj_t *settings_exit_btn = NULL;
+
+#define MAX_MAIN_PAGE_ITEMS 8
+static lv_obj_t *main_page_group_items[MAX_MAIN_PAGE_ITEMS];
+static uint8_t main_page_group_count = 0;
+
+#define MAX_SUBPAGE_ITEMS 20
+static struct {
+    lv_obj_t *page;
+    lv_obj_t *obj;
+} subpage_items[MAX_SUBPAGE_ITEMS];
+static uint8_t subpage_item_count = 0;
+
+static void add_main_page_group_item(lv_obj_t *obj)
+{
+    if (main_page_group_count < MAX_MAIN_PAGE_ITEMS) {
+        main_page_group_items[main_page_group_count++] = obj;
+    }
+    lv_group_add_obj(menu_g, obj);
+}
+
+static void register_subpage_group_obj(lv_obj_t *page, lv_obj_t *obj)
+{
+    if (subpage_item_count < MAX_SUBPAGE_ITEMS) {
+        subpage_items[subpage_item_count].page = page;
+        subpage_items[subpage_item_count].obj = obj;
+        subpage_item_count++;
+    }
+}
+
+static void restore_main_page_group()
+{
+    lv_group_remove_all_objs(menu_g);
+    for (uint8_t i = 0; i < main_page_group_count; i++) {
+        lv_group_add_obj(menu_g, main_page_group_items[i]);
+    }
+    if (settings_exit_btn) {
+        lv_group_focus_obj(settings_exit_btn);
+    }
+}
+
+static void activate_subpage_group(lv_obj_t *page)
+{
+    lv_group_remove_all_objs(menu_g);
+    lv_obj_t *back_btn = lv_menu_get_main_header_back_button(menu);
+    if (back_btn) {
+        lv_group_add_obj(menu_g, back_btn);
+    }
+    for (uint8_t i = 0; i < subpage_item_count; i++) {
+        if (subpage_items[i].page == page) {
+            lv_group_add_obj(menu_g, subpage_items[i].obj);
+        }
+    }
+    if (back_btn) {
+        lv_group_focus_obj(back_btn);
+    }
+}
+
+typedef struct {
+
+    lv_obj_t *datetime_label;
+    lv_obj_t *wifi_rssi_label;
+    lv_obj_t *batt_voltage_label;
+
+} sys_label_t;
+
+static sys_label_t sys_label;
+
+
+static void sys_timer_event_cb(lv_timer_t*t)
+{
+    string datetime;
+    hw_get_date_time(datetime);
+    lv_label_set_text_fmt(sys_label.datetime_label, "%s", datetime.c_str());
+
+    if (hw_get_wifi_connected()) {
+        lv_label_set_text_fmt(sys_label.wifi_rssi_label, "%d", hw_get_wifi_rssi());
+    }
+    lv_label_set_text_fmt(sys_label.batt_voltage_label, "%d mV", hw_get_battery_voltage());
+}
+
+static long map_r(long x, long in_min, long in_max, long out_min, long out_max)
+{
+    if (x < in_min) {
+        return out_min;
+    } else if (x > in_max) {
+        return out_max;
+    }
+    return ((x - in_min) * (out_max - out_min)) / (in_max - in_min) + out_min;
+}
+
+static void back_event_handler(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    if (lv_menu_back_btn_is_root(menu, obj)) {
+        if (timer) {
+            lv_timer_del(timer);
+            timer = NULL;
+        }
+        
+        menu_show();
+
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        hw_set_user_setting(local_param);
+
+        if (quit_btn) {
+            lv_obj_del_async(quit_btn);
+        }
+    }
+}
+
+
+static void display_brightness_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    uint8_t val =  lv_slider_get_value(obj);
+    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
+
+    uint16_t min_brightness = hw_get_disp_min_brightness();
+    uint16_t max_brightness = hw_get_disp_max_brightness();
+
+    lv_label_set_text_fmt(slider_label, "   %u%%  ", map_r(val, min_brightness, max_brightness, 0, 100));
+    local_param.brightness_level = val;
+    hw_set_disp_backlight(val);
+}
+
+static void keyboard_brightness_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    uint8_t val =  lv_slider_get_value(obj);
+    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    lv_label_set_text_fmt(slider_label, "   %u%%  ", map_r(val, 0, 255, 0, 100));
+    local_param.keyboard_bl_level = val;
+    hw_set_kb_backlight(val);
+}
+
+static void led_brightness_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    uint8_t val =  lv_slider_get_value(obj);
+    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    lv_label_set_text_fmt(slider_label, "   %u%%  ", map_r(val, 0, 255, 0, 100));
+    local_param.led_indicator_level = val;
+    hw_set_led_backlight(val);
+}
+
+
+static void disp_timeout_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    uint8_t val =  lv_slider_get_value(obj);
+    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
+
+    local_param.disp_timeout_second = val;
+    if (val == 0) {
+        lv_label_set_text(slider_label, " Always ");
+    } else {
+        lv_label_set_text_fmt(slider_label, "   %uS  ", val);
+    }
+}
+
+static void otg_output_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        bool turnOn = lv_obj_has_state(obj, LV_STATE_CHECKED);
+        printf("State: %s\n", turnOn ? "On" : "Off");
+        if (hw_set_otg(turnOn) == false) {
+            lv_obj_clear_state(obj, LV_STATE_CHECKED);
+        }
+    }
+}
+
+static void charger_enable_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        bool turnOn = lv_obj_has_state(obj, LV_STATE_CHECKED);
+        local_param.charger_enable = turnOn;
+        printf("State: %s\n", turnOn ? "On" : "Off");
+        hw_set_charger(turnOn);
+    }
+}
+
+static void charger_current_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    uint16_t val =  lv_slider_get_value(obj) ;
+    local_param.charger_current = hw_set_charger_current_level(val );
+    lv_label_set_text_fmt(slider_label, "%04umA", local_param.charger_current);
+}
+
+static void spinbox_key_event_cb(lv_event_t *e)
+{
+    uint32_t key = lv_event_get_key(e);
+    lv_obj_t *sb = (lv_obj_t *)lv_event_get_target(e);
+    if (key == 'a' || key == 'A') lv_spinbox_step_prev(sb);
+    else if (key == 'd' || key == 'D') lv_spinbox_step_next(sb);
+    else if (key == 'w' || key == 'W' || key == '+') lv_spinbox_increment(sb);
+    else if (key == 's' || key == 'S' || key == '-') lv_spinbox_decrement(sb);
+    else if (key == 'q' || key == 'Q' || key == LV_KEY_UP) {
+        lv_group_focus_prev(lv_obj_get_group(sb));
+    }
+    else if (key == 'e' || key == 'E' || key == LV_KEY_DOWN || key == LV_KEY_ENTER) {
+        lv_group_focus_next(lv_obj_get_group(sb));
+    }
+}
+
+typedef struct {
+    lv_obj_t *year;
+    lv_obj_t *mon;
+    lv_obj_t *day;
+    lv_obj_t *hour;
+    lv_obj_t *min;
+} datetime_setup_t;
+
+static void save_datetime_cb(lv_event_t *e)
+{
+    datetime_setup_t *setup = (datetime_setup_t *)lv_event_get_user_data(e);
+    struct tm timeinfo = {0};
+
+    timeinfo.tm_year = lv_spinbox_get_value(setup->year) - 1900;
+    timeinfo.tm_mon = lv_spinbox_get_value(setup->mon) - 1;
+    timeinfo.tm_mday = lv_spinbox_get_value(setup->day);
+    timeinfo.tm_hour = lv_spinbox_get_value(setup->hour);
+    timeinfo.tm_min = lv_spinbox_get_value(setup->min);
+    timeinfo.tm_sec = 0;
+
+    hw_set_date_time(timeinfo);
+    lv_obj_send_event(lv_menu_get_main_header_back_button(menu), LV_EVENT_CLICKED, NULL);
+}
+
+static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    lv_obj_t *label = lv_label_create(cont);
+    lv_label_set_text(label, LV_SYMBOL_BELL " Date & Time");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(sub_page, 5, 0);
+    lv_obj_set_style_pad_row(sub_page, 4, 0);
+
+    struct tm timeinfo;
+    hw_get_date_time(timeinfo);
+
+    static datetime_setup_t setup;
+
+    /* --- Date row: Year / Month / Day --- */
+    lv_obj_t *date_row = lv_obj_create(sub_page);
+    lv_obj_set_size(date_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(date_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(date_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(date_row, 4, 0);
+    lv_obj_set_style_pad_column(date_row, 6, 0);
+    lv_obj_set_style_border_width(date_row, 0, 0);
+
+    auto create_sb = [&](lv_obj_t *parent, const char *title, int min, int max, int val, int digits) {
+        lv_obj_t *col = lv_obj_create(parent);
+        lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_all(col, 2, 0);
+        lv_obj_set_style_border_width(col, 0, 0);
+        lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+
+        lv_obj_t *l = lv_label_create(col);
+        lv_label_set_text(l, title);
+        lv_obj_set_style_text_color(l, lv_palette_main(LV_PALETTE_GREY), 0);
+
+        lv_obj_t *sb = lv_spinbox_create(col);
+        lv_spinbox_set_range(sb, min, max);
+        lv_spinbox_set_digit_format(sb, digits, 0);
+        lv_spinbox_set_value(sb, val);
+        lv_obj_set_width(sb, digits == 4 ? 70 : 50);
+        lv_obj_add_event_cb(sb, spinbox_key_event_cb, LV_EVENT_KEY, NULL);
+        register_subpage_group_obj(sub_page, sb);
+        return sb;
+    };
+
+    setup.year  = create_sb(date_row, "Year",  2000, 2099, timeinfo.tm_year + 1900, 4);
+    setup.mon   = create_sb(date_row, "Mon",   1, 12, timeinfo.tm_mon + 1, 2);
+    setup.day   = create_sb(date_row, "Day",   1, 31, timeinfo.tm_mday, 2);
+
+    /* --- Time row: Hour / Min --- */
+    lv_obj_t *time_row = lv_obj_create(sub_page);
+    lv_obj_set_size(time_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(time_row, 4, 0);
+    lv_obj_set_style_pad_column(time_row, 6, 0);
+    lv_obj_set_style_border_width(time_row, 0, 0);
+
+    setup.hour  = create_sb(time_row, "Hour",  0, 23, timeinfo.tm_hour, 2);
+
+    lv_obj_t *colon = lv_label_create(time_row);
+    lv_label_set_text(colon, ":");
+    lv_obj_set_style_text_font(colon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_pad_bottom(colon, 0, 0);
+
+    setup.min   = create_sb(time_row, "Min",   0, 59, timeinfo.tm_min, 2);
+
+    /* --- Apply button --- */
+    lv_obj_t *btn_row = lv_obj_create(sub_page);
+    lv_obj_set_size(btn_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_border_width(btn_row, 0, 0);
+    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(btn_row, 0, 0);
+
+    lv_obj_t *save_btn = lv_btn_create(btn_row);
+    lv_obj_set_width(save_btn, LV_PCT(100));
+    lv_obj_t *save_label = lv_label_create(save_btn);
+    lv_label_set_text(save_label, LV_SYMBOL_OK " Apply");
+    lv_obj_center(save_label);
+    lv_obj_add_event_cb(save_btn, save_datetime_cb, LV_EVENT_CLICKED, &setup);
+    register_subpage_group_obj(sub_page, save_btn);
+
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
+static lv_obj_t *create_subpage_backlight(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    lv_obj_t *label = lv_label_create(cont);
+    lv_label_set_text(label, LV_SYMBOL_IMAGE " Display & Backlight");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+
+    lv_obj_t *slider;
+    lv_obj_t *parent;
+    lv_obj_t *slider_label;
+
+    uint16_t min_brightness = hw_get_disp_min_brightness();
+    uint16_t max_brightness = hw_get_disp_max_brightness();
+
+    auto add_slider = [&](const char *txt, int32_t min, int32_t max, int32_t val,
+                          lv_event_cb_t cb, const char *fmt_str) {
+        slider = create_slider(sub_page, NULL, txt, min, max, val, cb, LV_EVENT_VALUE_CHANGED);
+        parent = lv_obj_get_parent(slider);
+        slider_label = lv_label_create(parent);
+        char buf[16];
+        snprintf(buf, sizeof(buf), fmt_str, (int)map_r(val, min, max, 0, 100));
+        lv_label_set_text(slider_label, buf);
+        lv_obj_set_user_data(slider, slider_label);
+        register_subpage_group_obj(sub_page, slider);
+    };
+
+    add_slider("Screen", min_brightness, max_brightness,
+               local_param.brightness_level, display_brightness_cb, "%d%%");
+
+    if (hw_has_keyboard()) {
+        add_slider("Keyboard", 0, 255,
+                   local_param.keyboard_bl_level, keyboard_brightness_cb, "%d%%");
+    }
+
+    if (hw_has_indicator_led()) {
+        add_slider("LED", 0, 255,
+                   local_param.led_indicator_level, led_brightness_cb, "%d%%");
+    }
+
+    slider = create_slider(sub_page, NULL, "Timeout", 0, 180,
+                           local_param.disp_timeout_second, disp_timeout_cb, LV_EVENT_VALUE_CHANGED);
+    parent = lv_obj_get_parent(slider);
+    slider_label = lv_label_create(parent);
+    if (local_param.disp_timeout_second == 0) {
+        lv_label_set_text(slider_label, " Always ");
+    } else {
+        lv_label_set_text_fmt(slider_label, "   %uS  ", local_param.disp_timeout_second);
+    }
+    lv_obj_set_user_data(slider, slider_label);
+    register_subpage_group_obj(sub_page, slider);
+
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
+static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    lv_obj_t *label = lv_label_create(cont);
+    lv_label_set_text(label, LV_SYMBOL_CHARGE " Charger");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+
+    bool enableOtg = hw_get_otg_enable();
+    uint8_t total_charge_level = hw_get_charge_level_nums();
+    uint8_t curr_charge_level = hw_get_charger_current_level();
+
+    if (hw_has_otg_function()) {
+        lv_obj_t *sw = create_switch(sub_page, NULL, "OTG Output", enableOtg, otg_output_cb);
+        register_subpage_group_obj(sub_page, sw);
+    }
+
+    lv_obj_t *sw_chg = create_switch(sub_page, NULL, "Charging", local_param.charger_enable, charger_enable_cb);
+    register_subpage_group_obj(sub_page, sw_chg);
+
+    lv_obj_t *slider = create_slider(sub_page, NULL, "Current",
+                                     1, total_charge_level, curr_charge_level,
+                                     charger_current_cb, LV_EVENT_VALUE_CHANGED);
+    lv_obj_t *parent = lv_obj_get_parent(slider);
+    lv_obj_t *slider_label = lv_label_create(parent);
+    lv_label_set_text_fmt(slider_label, "%umA", local_param.charger_current);
+    lv_obj_set_user_data(slider, slider_label);
+    register_subpage_group_obj(sub_page, slider);
+
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
+static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    lv_obj_t *label = lv_label_create(cont);
+    lv_label_set_text(label, LV_SYMBOL_LIST " System Info");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_all(sub_page, 4, 0);
+    lv_obj_set_style_pad_row(sub_page, 0, 0);
+
+    auto add_info_row = [&](const char *key, const char *val) -> lv_obj_t* {
+        lv_obj_t *row = lv_obj_create(sub_page);
+        lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_ver(row, 4, 0);
+        lv_obj_set_style_pad_hor(row, 8, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_border_color(row, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
+        lv_obj_set_style_radius(row, 0, 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+
+        lv_obj_t *k = lv_label_create(row);
+        lv_label_set_text(k, key);
+        lv_obj_set_style_text_color(k, lv_palette_main(LV_PALETTE_GREY), 0);
+
+        lv_obj_t *v = lv_label_create(row);
+        lv_label_set_text(v, val);
+        lv_label_set_long_mode(v, LV_LABEL_LONG_SCROLL);
+        lv_obj_set_style_max_width(v, LV_PCT(55), 0);
+
+        register_subpage_group_obj(sub_page, row);
+        return v;
+    };
+
+    char buffer[128];
+    uint8_t mac[6] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
+    bool has_mac = hw_get_mac(mac);
+    if (has_mac) {
+        snprintf(buffer, sizeof(buffer), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }
+    add_info_row("MAC", has_mac ? buffer : "N/A");
+
+    string wifi_ssid = "N/A";
+    hw_get_wifi_ssid(wifi_ssid);
+    add_info_row("WiFi", wifi_ssid.c_str());
+
+    sys_label.datetime_label = add_info_row("RTC", "00:00:00");
+
+    static string ip_info = "N/A";
+    hw_get_ip_address(ip_info);
+    add_info_row("IP", ip_info.c_str());
+
+    sys_label.wifi_rssi_label = add_info_row("RSSI", "N/A");
+
+    snprintf(buffer, sizeof(buffer), "%d mV", hw_get_battery_voltage());
+    sys_label.batt_voltage_label = add_info_row("Battery", buffer);
+
+    float size = hw_get_sd_size();
+#if defined(HAS_SD_CARD_SOCKET)
+    const char *storage_name = "SD Card";
+    const char *unit = "GB";
+#else
+    const char *storage_name = "Storage";
+    const char *unit = "MB";
+#endif
+    if (size > 0) {
+        snprintf(buffer, sizeof(buffer), "%.2f %s", size, unit);
+    } else {
+        snprintf(buffer, sizeof(buffer), "N/A");
+    }
+    add_info_row(storage_name, buffer);
+
+    snprintf(buffer, sizeof(buffer), "%d.%d.%d", lv_version_major(), lv_version_minor(), lv_version_patch());
+    add_info_row("LVGL", buffer);
+
+    string ver;
+    hw_get_arduino_version(ver);
+    add_info_row("Core", ver.c_str());
+
+    add_info_row("Built", __DATE__);
+    add_info_row("Hash", hw_get_firmware_hash_string());
+    add_info_row("Chip", hw_get_chip_id_string());
+
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+
+    timer = lv_timer_create(sys_timer_event_cb, 1000, NULL);
+
+    return cont;
+}
+
+static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    lv_obj_t *label = lv_label_create(cont);
+    lv_label_set_text(label, LV_SYMBOL_USB " Devices");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_all(sub_page, 4, 0);
+    lv_obj_set_style_pad_row(sub_page, 0, 0);
+
+    uint8_t devices = hw_get_devices_nums();
+    uint32_t devices_mask = hw_get_device_online();
+    for (int i = 0; i < devices; ++i) {
+        const char *device_name = hw_get_devices_name(i);
+        if (lv_strcmp(device_name, "") != 0) {
+            bool online = (devices_mask & 0x01);
+
+            lv_obj_t *row = lv_obj_create(sub_page);
+            lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+            lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_ver(row, 5, 0);
+            lv_obj_set_style_pad_hor(row, 8, 0);
+            lv_obj_set_style_radius(row, 0, 0);
+            lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(row, 1, 0);
+            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+            lv_obj_set_style_border_color(row, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
+
+            lv_obj_t *name = lv_label_create(row);
+            lv_label_set_text(name, device_name);
+
+            lv_obj_t *status = lv_label_create(row);
+            if (online) {
+                lv_label_set_text(status, LV_SYMBOL_OK);
+                lv_obj_set_style_text_color(status, lv_palette_main(LV_PALETTE_GREEN), 0);
+            } else {
+                lv_label_set_text(status, LV_SYMBOL_CLOSE);
+                lv_obj_set_style_text_color(status, lv_palette_main(LV_PALETTE_RED), 0);
+            }
+
+            register_subpage_group_obj(sub_page, row);
+        }
+        devices_mask >>= 1;
+    }
+
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
+
+static void settings_page_changed_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
+    lv_obj_t *page = lv_menu_get_cur_main_page(obj);
+    if (page != settings_main_page) {
+        activate_subpage_group(page);
+    } else {
+        restore_main_page_group();
+    }
+}
+
+static void settings_exit_cb(lv_event_t *e)
+{
+    if (timer) {
+        lv_timer_del(timer);
+        timer = NULL;
+    }
+    
+    menu_show();
+    lv_refr_now(NULL); // Force refresh to show menu first
+
+    lv_obj_clean(menu);
+    lv_obj_del(menu);
+    hw_set_user_setting(local_param);
+
+    if (quit_btn) {
+        lv_obj_del_async(quit_btn);
+    }
+}
+
+void ui_sys_enter(lv_obj_t *parent)
+{
+    menu_g = lv_group_get_default();
+
+    enable_keyboard();
+
+    hw_get_user_setting(local_param);
+
+    menu = lv_menu_create(parent);
+    lv_obj_set_size(menu, LV_PCT(100), LV_PCT(100));
+    lv_obj_center(menu);
+
+    /*Create a main page*/
+    lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
+
+    lv_obj_t *cont;
+    main_page_group_count = 0;
+    subpage_item_count = 0;
+
+    // //! EXIT BUTTON (FIRST)
+    cont = lv_menu_cont_create(main_page);
+    settings_exit_btn = lv_btn_create(cont);
+    lv_obj_t *exit_label = lv_label_create(settings_exit_btn);
+    lv_label_set_text(exit_label, LV_SYMBOL_LEFT);
+    lv_obj_add_event_cb(settings_exit_btn, settings_exit_cb, LV_EVENT_CLICKED, NULL);
+    add_main_page_group_item(settings_exit_btn);
+
+    // //! BACKLIGHT SETTING
+    cont = create_subpage_backlight(menu, main_page);
+    add_main_page_group_item(cont);
+
+    // //! DATE & TIME SETTING
+    cont = create_subpage_datetime(menu, main_page);
+    add_main_page_group_item(cont);
+
+    // //! SYSTEM INFO
+    cont = create_subpage_info(menu, main_page);
+    add_main_page_group_item(cont);
+
+    cont = create_device_probe(menu, main_page);
+    add_main_page_group_item(cont);
+
+    cont = create_subpage_otg(menu, main_page);
+    add_main_page_group_item(cont);
+
+    settings_main_page = main_page;
+    lv_menu_set_page(menu, main_page);
+    lv_obj_add_event_cb(menu, settings_page_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+#ifdef USING_TOUCHPAD
+    quit_btn  = create_floating_button([](lv_event_t*e) {
+        lv_obj_send_event(lv_menu_get_main_header_back_button(menu), LV_EVENT_CLICKED, lv_event_get_target_obj(e));
+    }, NULL);
+#endif
+}
+
+
+void ui_sys_exit(lv_obj_t *parent)
+{
+    disable_keyboard();
+}
+
+app_t ui_sys_main = {
+    .setup_func_cb = ui_sys_enter,
+    .exit_func_cb = ui_sys_exit,
+    .user_data = nullptr,
+};
