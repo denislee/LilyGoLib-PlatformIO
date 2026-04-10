@@ -182,10 +182,14 @@ static void otg_output_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (code == LV_EVENT_VALUE_CHANGED) {
-        bool turnOn = lv_obj_has_state(obj, LV_STATE_CHECKED);
+        bool turnOn = lv_slider_get_value(obj) == 1;
+        lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
         printf("State: %s\n", turnOn ? "On" : "Off");
         if (hw_set_otg(turnOn) == false) {
-            lv_obj_clear_state(obj, LV_STATE_CHECKED);
+            lv_slider_set_value(obj, 0, LV_ANIM_OFF);
+            if (slider_label) lv_label_set_text(slider_label, " Off ");
+        } else {
+            if (slider_label) lv_label_set_text(slider_label, turnOn ? " On " : " Off ");
         }
     }
 }
@@ -195,10 +199,12 @@ static void charger_enable_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (code == LV_EVENT_VALUE_CHANGED) {
-        bool turnOn = lv_obj_has_state(obj, LV_STATE_CHECKED);
+        bool turnOn = lv_slider_get_value(obj) == 1;
+        lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
         local_param.charger_enable = turnOn;
         printf("State: %s\n", turnOn ? "On" : "Off");
         hw_set_charger(turnOn);
+        if (slider_label) lv_label_set_text(slider_label, turnOn ? " On " : " Off ");
     }
 }
 
@@ -408,18 +414,30 @@ static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
     uint8_t curr_charge_level = hw_get_charger_current_level();
 
     if (hw_has_otg_function()) {
-        lv_obj_t *sw = create_switch(sub_page, NULL, "OTG Output", enableOtg, otg_output_cb);
-        register_subpage_group_obj(sub_page, sw);
+        lv_obj_t *slider = create_slider(sub_page, NULL, "OTG Output",
+                                         0, 1, enableOtg ? 1 : 0,
+                                         otg_output_cb, LV_EVENT_VALUE_CHANGED);
+        lv_obj_t *parent = lv_obj_get_parent(slider);
+        lv_obj_t *slider_label = lv_label_create(parent);
+        lv_label_set_text(slider_label, enableOtg ? " On " : " Off ");
+        lv_obj_set_user_data(slider, slider_label);
+        register_subpage_group_obj(sub_page, slider);
     }
 
-    lv_obj_t *sw_chg = create_switch(sub_page, NULL, "Charging", local_param.charger_enable, charger_enable_cb);
-    register_subpage_group_obj(sub_page, sw_chg);
-
-    lv_obj_t *slider = create_slider(sub_page, NULL, "Current",
-                                     1, total_charge_level, curr_charge_level,
-                                     charger_current_cb, LV_EVENT_VALUE_CHANGED);
+    lv_obj_t *slider = create_slider(sub_page, NULL, "Charging",
+                                     0, 1, local_param.charger_enable ? 1 : 0,
+                                     charger_enable_cb, LV_EVENT_VALUE_CHANGED);
     lv_obj_t *parent = lv_obj_get_parent(slider);
     lv_obj_t *slider_label = lv_label_create(parent);
+    lv_label_set_text(slider_label, local_param.charger_enable ? " On " : " Off ");
+    lv_obj_set_user_data(slider, slider_label);
+    register_subpage_group_obj(sub_page, slider);
+
+    slider = create_slider(sub_page, NULL, "Current",
+                                     1, total_charge_level, curr_charge_level,
+                                     charger_current_cb, LV_EVENT_VALUE_CHANGED);
+    parent = lv_obj_get_parent(slider);
+    slider_label = lv_label_create(parent);
     lv_label_set_text_fmt(slider_label, "%umA", local_param.charger_current);
     lv_obj_set_user_data(slider, slider_label);
     register_subpage_group_obj(sub_page, slider);
