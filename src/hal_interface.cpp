@@ -1388,7 +1388,14 @@ bool hw_read_file(const char *path, string &content)
 }
 
 #ifdef ARDUINO
-static void list_files(vector<string> &list, fs::FS &fs, const char *dirname, const char *ext)
+#include <algorithm>
+
+struct FileInfo {
+    string name;
+    time_t time;
+};
+
+static void list_files(vector<FileInfo> &list, fs::FS &fs, const char *dirname, const char *ext)
 {
     File root = fs.open(dirname);
     if (!root || !root.isDirectory()) return;
@@ -1398,7 +1405,7 @@ static void list_files(vector<string> &list, fs::FS &fs, const char *dirname, co
         if (!file.isDirectory()) {
             String filename = file.name();
             if (filename.endsWith(ext)) {
-                list.push_back(filename.c_str());
+                list.push_back({filename.c_str(), file.getLastWrite()});
             }
         }
         file.close();
@@ -1412,12 +1419,21 @@ void hw_get_txt_files(vector<string> &list)
 {
     list.clear();
 #ifdef ARDUINO
+    vector<FileInfo> file_infos;
     if (HW_SD_ONLINE & hw_get_device_online()) {
         instance.lockSPI();
-        list_files(list, SD, "/", ".txt");
+        list_files(file_infos, SD, "/", ".txt");
         instance.unlockSPI();
     }
-    list_files(list, FFat, "/", ".txt");
+    list_files(file_infos, FFat, "/", ".txt");
+
+    std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo& a, const FileInfo& b) {
+        return a.time > b.time;
+    });
+
+    for (const auto& fi : file_infos) {
+        list.push_back(fi.name);
+    }
 #else
     list.push_back("test1.txt");
     list.push_back("test2.txt");
