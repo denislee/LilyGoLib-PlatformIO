@@ -110,7 +110,7 @@ void ui_text_editor_enter(lv_obj_t *parent)
     text_area = lv_textarea_create(main_page);
     lv_obj_set_width(text_area, LV_PCT(100));
     lv_obj_set_flex_grow(text_area, 1);
-    lv_textarea_set_placeholder_text(text_area, "Write here...");
+    lv_textarea_set_placeholder_text(text_area, "");
     lv_obj_set_style_text_font(text_area, &lv_font_montserrat_14, 0);
     lv_obj_set_style_border_width(text_area, 0, 0);
 

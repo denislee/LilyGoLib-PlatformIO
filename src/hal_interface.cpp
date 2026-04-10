@@ -1463,7 +1463,7 @@ void hw_sleep()
 #endif
 
     instance.decrementBrightness(0, 5, false);
-    instance.sleep((WakeupSource_t)(WAKEUP_SRC_BOOT_BUTTON | WAKEUP_SRC_ROTARY_BUTTON));
+    instance.sleep((WakeupSource_t)(WAKEUP_SRC_ROTARY_BUTTON));
 #endif
 }
 
@@ -1896,7 +1896,7 @@ void hw_feedback()
 void hw_low_power_loop()
 {
 #ifdef ARDUINO
-    instance.lightSleep();
+    instance.lightSleep((WakeupSource_t)(WAKEUP_SRC_ROTARY_BUTTON));
     // #ifdef USING_ST25R3916
     //     beginNFC(nrf_notify_callback, ndef_event_callback);
     // #endif
