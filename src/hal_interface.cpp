@@ -1463,7 +1463,7 @@ void hw_sleep()
 #endif
 
     instance.decrementBrightness(0, 5, false);
-    instance.sleep();
+    instance.sleep((WakeupSource_t)(WAKEUP_SRC_BOOT_BUTTON | WAKEUP_SRC_ROTARY_BUTTON));
 #endif
 }
 
