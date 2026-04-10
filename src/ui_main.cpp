@@ -92,6 +92,15 @@ static void shutdown_event_cb(lv_event_t *e)
     }
 }
 
+static void sleep_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        hw_feedback();
+        lv_delay_ms(200); 
+        hw_sleep();
+    }
+}
+
 static void create_app(lv_obj_t *list, const char *name, const char *symbol, app_t *app_fun)
 {
     lv_obj_t *btn = lv_list_add_btn(list, symbol, name);
@@ -190,6 +199,10 @@ void setupGui()
     create_app(home_list, "Editor", LV_SYMBOL_KEYBOARD, &ui_text_editor_main);
     create_app(home_list, "Setting", LV_SYMBOL_SETTINGS, &ui_sys_main);
     create_app(home_list, "Files", LV_SYMBOL_FILE, &ui_file_browser_main);
+
+    lv_obj_t *sleep_btn = lv_list_add_btn(home_list, LV_SYMBOL_CHARGE, "Deep Sleep");
+    lv_obj_add_event_cb(sleep_btn, sleep_event_cb, LV_EVENT_CLICKED, NULL);
+    lv_group_add_obj(menu_g, sleep_btn);
 
     lv_obj_t *shutdown_btn = lv_list_add_btn(home_list, LV_SYMBOL_POWER, "Shutdown");
     lv_obj_add_event_cb(shutdown_btn, shutdown_event_cb, LV_EVENT_CLICKED, NULL);
