@@ -200,13 +200,13 @@ void setupGui()
     create_app(home_list, "Setting", LV_SYMBOL_SETTINGS, &ui_sys_main);
     create_app(home_list, "Files", LV_SYMBOL_FILE, &ui_file_browser_main);
 
-    lv_obj_t *sleep_btn = lv_list_add_btn(home_list, LV_SYMBOL_CHARGE, "Deep Sleep");
-    lv_obj_add_event_cb(sleep_btn, sleep_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_group_add_obj(menu_g, sleep_btn);
-
     lv_obj_t *shutdown_btn = lv_list_add_btn(home_list, LV_SYMBOL_POWER, "Shutdown");
     lv_obj_add_event_cb(shutdown_btn, shutdown_event_cb, LV_EVENT_CLICKED, NULL);
     lv_group_add_obj(menu_g, shutdown_btn);
+
+    lv_obj_t *sleep_btn = lv_list_add_btn(home_list, LV_SYMBOL_CHARGE, "Deep Sleep");
+    lv_obj_add_event_cb(sleep_btn, sleep_event_cb, LV_EVENT_CLICKED, NULL);
+    lv_group_add_obj(menu_g, sleep_btn);
 
     disp_timer = lv_timer_create(ui_poll_timer_callback, 1000, NULL);
     dev_timer = lv_timer_create(hw_device_poll, 5000, NULL);
