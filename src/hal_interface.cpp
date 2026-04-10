@@ -623,6 +623,40 @@ const uint8_t mic_gain = 10;
 #endif
 
 
+static vector<int16_t> battery_history;
+static const size_t MAX_BATTERY_HISTORY = 60; // 5 hours if 5 mins interval
+
+void hw_update_battery_history()
+{
+#ifdef ARDUINO
+    int16_t voltage = hw_get_battery_voltage();
+    if (voltage > 0) {
+        if (battery_history.size() >= MAX_BATTERY_HISTORY) {
+            battery_history.erase(battery_history.begin());
+        }
+        battery_history.push_back(voltage);
+    }
+#else
+    static int16_t sim_voltage = 4200;
+    if (battery_history.size() >= MAX_BATTERY_HISTORY) {
+        battery_history.erase(battery_history.begin());
+    }
+    battery_history.push_back(sim_voltage);
+    sim_voltage -= 10;
+    if (sim_voltage < 3200) sim_voltage = 4200;
+#endif
+}
+
+void hw_get_battery_history(vector<int16_t> &history)
+{
+    history = battery_history;
+}
+
+static void battery_history_timer_cb(lv_timer_t *timer)
+{
+    hw_update_battery_history();
+}
+
 void hw_init()
 {
 #ifdef ARDUINO
@@ -654,7 +688,14 @@ void hw_init()
 
 
     xTaskCreate(playerTask, "app/play", 8 * 1024, NULL, 12, &playerTaskHandler);
+#endif
 
+    // Battery history recording every 5 minutes (300,000 ms)
+    lv_timer_create(battery_history_timer_cb, 300000, NULL);
+    // Record first point immediately
+    hw_update_battery_history();
+
+#ifdef ARDUINO
     prefs.begin(NVS_NAME);
     if (prefs.getBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t)) != sizeof(user_setting_params_t)) {  // simple check that data fits
         log_e("Data is not correct size!,set default setting");

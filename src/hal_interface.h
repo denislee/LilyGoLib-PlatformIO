@@ -659,6 +659,17 @@ void hw_sleep();
 void hw_light_sleep();
 
 /**
+ * @brief Get the battery voltage history.
+ * @param history Reference to a vector to store the history.
+ */
+void hw_get_battery_history(vector<int16_t> &history);
+
+/**
+ * @brief Update battery history. Should be called periodically.
+ */
+void hw_update_battery_history();
+
+/**
  * @brief Check if the OTG function is enabled.
  *
  * @return True if the OTG function is enabled, false otherwise.
