@@ -1,4 +1,8 @@
-#include "esp_sleep.h"
-void test() {
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+#include <Arduino.h>
+#include <driver/rtc_io.h>
+void setup() {
+  gpio_pullup_en(GPIO_NUM_7);
+  gpio_hold_en(GPIO_NUM_7);
+  gpio_deep_sleep_hold_en();
 }
+void loop() {}
