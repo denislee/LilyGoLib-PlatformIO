@@ -319,7 +319,7 @@ lv_obj_t *create_button(lv_obj_t *parent, const char *icon, const char *txt, lv_
     if (cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
     }
-    return obj;
+    return btn;
 }
 
 lv_obj_t *create_label(lv_obj_t *parent, const char *icon, const char *txt, const char *default_text)

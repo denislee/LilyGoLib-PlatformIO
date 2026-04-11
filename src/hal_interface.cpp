@@ -746,24 +746,11 @@ void hw_init()
     user_setting.charger_enable = true;
 #endif
 
-    // #if  defined(USING_ST25R3916) && defined(ARDUINO)
-    //     beginNFC(nrf_notify_callback, ndef_event_callback);
-    // #endif
-
 }
 
 void hw_get_user_setting(user_setting_params_t &param)
 {
     param = user_setting;
-    printf("Get brightness_level    :%u\n", user_setting.brightness_level);
-    printf("Get keyboard_bl_level   :%u\n", user_setting.keyboard_bl_level);
-    printf("Get disp_timeout_second :%u\n", user_setting.disp_timeout_second);
-    printf("Get charger_current     :%u\n", user_setting.charger_current);
-    printf("Get charger_enable      :%u\n", user_setting.charger_enable);
-    printf("Get sleep_mode          :%u\n", user_setting.sleep_mode);
-    printf("Get editor_font_size    :%u\n", user_setting.editor_font_size);
-    printf("Get editor_font_index   :%u\n", user_setting.editor_font_index);
-    printf("Get charge_limit_en     :%u\n", user_setting.charge_limit_en);
 }
 
 void hw_set_user_setting(user_setting_params_t &param)
@@ -772,20 +759,12 @@ void hw_set_user_setting(user_setting_params_t &param)
 #ifdef ARDUINO
     prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
 #endif
-    printf("set brightness_level    :%u\n", param.brightness_level);
-    printf("set keyboard_bl_level   :%u\n", param.keyboard_bl_level);
-    printf("set disp_timeout_second :%u\n", param.disp_timeout_second);
-    printf("set charger_current     :%u\n", param.charger_current);
-    printf("set charger_enable      :%u\n", param.charger_enable);
-    printf("set sleep_mode          :%u\n", param.sleep_mode);
-    printf("set editor_font_size    :%u\n", param.editor_font_size);
-    printf("set editor_font_index   :%u\n", param.editor_font_index);
 }
 
 const uint32_t hw_get_disp_timeout_ms()
 {
     if (user_setting.disp_timeout_second == 0) {
-        return UINT32_MAX;
+        return 0xFFFFFFF0; // Nearly max, but avoid UINT32_MAX exactly
     }
     return user_setting.disp_timeout_second * 1000UL;
 }
@@ -2300,45 +2279,12 @@ static void buttonEventCallback(DeviceEvent_t event, void *params, void *user_da
 
 #endif
 
-void hw_set_trackball_callback(TrackballEventCallback callback)
+void hw_set_usb_rf_switch(bool to_usb)
 {
-#if defined(ARDUINO) && defined(USING_TRACKBALL)
-    // instance.setTrackballCallback(callback);
-    if (callback) {
-        instance.onEvent(trackballEventCallback, TRACKBALL_EVENT, NULL);
-        _trackball_cb = callback;
-    } else {
-        instance.removeEvent(trackballEventCallback, TRACKBALL_EVENT);
-        _trackball_cb = NULL;
-    }
+#ifdef ARDUINO
+#if defined(HAS_USB_RF_SWITCH)
+    instance.setRFSwitch(to_usb);
 #endif
-}
-
-void hw_set_button_callback(ButtonEventCallback callback)
-{
-#if defined(ARDUINO) && defined(USING_TRACKBALL)
-    if (callback) {
-        instance.onEvent(buttonEventCallback, BUTTON_EVENT, NULL);
-        _button_cb = callback;
-    } else {
-        instance.removeEvent(buttonEventCallback, BUTTON_EVENT);
-        _button_cb = NULL;
-    }
-#endif
-}
-
-const char *hw_get_device_power_tips_string()
-{
-#if defined(USING_PPM_MANAGE)
-    return "Select a shutdown method:\n"
-           "1. Sleep: Set to sleep mode and press the Boot button to wake up.\n"
-           "2. Shutdown: Turn off the device (requires removing the USB-C port to shut down).\n"
-           "After shutting down, press and hold the Power button or plug in a USB-C port to activate the device.";
-#else
-    return "Select a shutdown method:\n"
-           "1. Sleep: Set to sleep mode and press the Boot button to wake up.\n"
-           "2. Shutdown: Turn off the device. After shutting down, press and hold the Power button or plug in a\n"
-           "USB-C cable to activate the device.";
 #endif
 }
 
@@ -2365,32 +2311,4 @@ const char *hw_get_chip_id_string()
     return "DummyChipIDString";
 }
 
-
-void hw_set_usb_rf_switch(bool to_usb)
-{
-#ifdef ARDUINO
-#if defined(HAS_USB_RF_SWITCH)
-    instance.setRFSwitch(to_usb);
-#endif
-#endif
-}
-
-
-void hw_set_audio_effect_3d(bool enable)
-{
-#if defined(ARDUINO) && defined(ARDUINO_T_DECK_V2)
-    instance.setAudioEffect3D(enable);
-#endif
-}
-
-void hw_set_audio_effect_ab_class(bool enable)
-{
-#if defined(ARDUINO) && defined(ARDUINO_T_DECK_V2)
-    if (enable) {
-        instance.setAudioMode(AUDIO_CLASS_AB);
-    } else {
-        instance.setAudioMode(AUDIO_CLASS_D);
-    }
-#endif
-}
 

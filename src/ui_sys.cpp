@@ -651,6 +651,9 @@ static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
 static void settings_page_changed_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
+    // Ignore events bubbling from children (like dropdowns)
+    if (lv_event_get_target(e) != obj) return;
+
     lv_obj_t *page = lv_menu_get_cur_main_page(obj);
     if (page != settings_main_page) {
         activate_subpage_group(page);
@@ -682,6 +685,7 @@ static void editor_font_face_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     local_param.editor_font_index = lv_dropdown_get_selected(obj);
+    lv_event_stop_processing(e);
 }
 
 static void editor_font_size_cb(lv_event_t *e)
@@ -689,6 +693,7 @@ static void editor_font_size_cb(lv_event_t *e)
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     uint16_t index = lv_dropdown_get_selected(obj);
     local_param.editor_font_size = 10 + index * 2;
+    lv_event_stop_processing(e);
 }
 
 static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_page)

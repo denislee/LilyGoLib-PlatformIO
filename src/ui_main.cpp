@@ -16,7 +16,7 @@ static lv_group_t *menu_g;
 static lv_group_t *app_g;
 static lv_timer_t *disp_timer;
 static lv_timer_t *dev_timer;
-static bool low_power_mode_flag = true;
+static bool low_power_mode_flag = false;
 
 static lv_obj_t *status_bar = NULL;
 static lv_obj_t *stat_time_label = NULL;
@@ -26,10 +26,6 @@ void set_low_power_mode_flag(bool enable)
 {
     low_power_mode_flag = enable;
 }
-
-LV_IMG_DECLARE(img_configuration);
-LV_IMG_DECLARE(img_keyboard);
-LV_IMG_DECLARE(img_track);
 
 void menu_show()
 {
@@ -79,7 +75,9 @@ static void btn_event_cb(lv_event_t *e)
         if (app->setup_func_cb) {
             (*app->setup_func_cb)(app_panel);
         }
-        menu_hidden();
+        if (isinMenu()) {
+            menu_hidden();
+        }
     }
 }
 
@@ -89,15 +87,6 @@ static void shutdown_event_cb(lv_event_t *e)
         hw_feedback();
         lv_delay_ms(200); 
         hw_shutdown();
-    }
-}
-
-static void sleep_event_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        hw_feedback();
-        lv_delay_ms(200); 
-        hw_sleep();
     }
 }
 
@@ -144,8 +133,12 @@ static void ui_poll_timer_callback(lv_timer_t *t)
         lv_label_set_text_fmt(stat_batt_label, "%s %d%%", batt_sym, params.battery_percent);
     }
 
-    if (low_power_mode_flag) {
-        if (lv_display_get_inactive_time(NULL) > hw_get_disp_timeout_ms()) {
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+
+    if (low_power_mode_flag && settings.disp_timeout_second > 0) {
+        uint32_t timeout_ms = (uint32_t)settings.disp_timeout_second * 1000UL;
+        if (lv_display_get_inactive_time(NULL) > timeout_ms) {
             hw_low_power_loop();
         }
     }
@@ -221,11 +214,6 @@ void setupGui()
     style_list_btn_icon(shutdown_btn);
     lv_obj_add_event_cb(shutdown_btn, shutdown_event_cb, LV_EVENT_CLICKED, NULL);
     lv_group_add_obj(menu_g, shutdown_btn);
-
-    lv_obj_t *sleep_btn = lv_list_add_btn(home_list, LV_SYMBOL_CHARGE, "Deep Sleep");
-    style_list_btn_icon(sleep_btn);
-    lv_obj_add_event_cb(sleep_btn, sleep_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_group_add_obj(menu_g, sleep_btn);
 
     disp_timer = lv_timer_create(ui_poll_timer_callback, 1000, NULL);
     dev_timer = lv_timer_create(hw_device_poll, 5000, NULL);

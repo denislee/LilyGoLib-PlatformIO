@@ -46,7 +46,8 @@ static void new_theme_apply_cb(lv_theme_t * th, lv_obj_t * obj)
         lv_obj_add_style(obj, &focus_style, LV_STATE_FOCUS_KEY);
     }
 
-    if (lv_obj_check_type(obj, &lv_list_class)) {
+    if (lv_obj_check_type(obj, &lv_list_class) || 
+        lv_obj_check_type(obj, &lv_dropdownlist_class)) {
         lv_obj_add_style(obj, &black_bg_style, LV_PART_MAIN);
     }
 }
