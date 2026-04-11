@@ -14,6 +14,10 @@ static lv_obj_t *menu = NULL;
 static lv_obj_t *quit_btn = NULL;
 static lv_obj_t *parent_obj = NULL;
 static int target_focus_index = -1;
+static int current_page = 0;
+#define BLOG_PAGE_SIZE 5
+
+void ui_blog_enter(lv_obj_t *parent);
 
 static void do_exit()
 {
@@ -26,6 +30,35 @@ static void do_exit()
         quit_btn = NULL;
     }
     target_focus_index = -1;
+    current_page = 0;
+}
+
+static void next_page_cb(lv_event_t *e)
+{
+    current_page++;
+    lv_obj_clean(menu);
+    lv_obj_del(menu);
+    menu = NULL;
+    if (quit_btn) {
+        lv_obj_del_async(quit_btn);
+        quit_btn = NULL;
+    }
+    ui_blog_enter(parent_obj);
+}
+
+static void prev_page_cb(lv_event_t *e)
+{
+    if (current_page > 0) {
+        current_page--;
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        menu = NULL;
+        if (quit_btn) {
+            lv_obj_del_async(quit_btn);
+            quit_btn = NULL;
+        }
+        ui_blog_enter(parent_obj);
+    }
 }
 
 static void back_event_handler(lv_event_t *e)
@@ -202,10 +235,20 @@ void ui_blog_enter(lv_obj_t *parent)
     std::vector<std::string> txt_files;
     hw_get_txt_files(txt_files);
 
+    int total_files = txt_files.size();
+    int start_idx = current_page * BLOG_PAGE_SIZE;
+    int end_idx = std::min(start_idx + BLOG_PAGE_SIZE, total_files);
+
+    if (start_idx >= total_files && total_files > 0) {
+        current_page = (total_files - 1) / BLOG_PAGE_SIZE;
+        start_idx = current_page * BLOG_PAGE_SIZE;
+        end_idx = total_files;
+    }
+
     lv_obj_t *focus_target = exit_btn;
     int current_child_idx = 0; // index 0 is exit_cont
 
-    if (txt_files.empty()) {
+    if (total_files == 0) {
         lv_obj_t *empty_label = lv_label_create(main_page);
         lv_label_set_text(empty_label, "No blog posts yet.");
         lv_obj_set_style_text_align(empty_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -213,7 +256,20 @@ void ui_blog_enter(lv_obj_t *parent)
     } else {
         const lv_font_t *font = get_small_font();
 
-        for (const auto &filename : txt_files) {
+        // Prev Page Button
+        if (current_page > 0) {
+            lv_obj_t *prev_cont = lv_menu_cont_create(main_page);
+            lv_obj_t *prev_btn = lv_btn_create(prev_cont);
+            lv_obj_t *prev_label = lv_label_create(prev_btn);
+            lv_label_set_text(prev_label, LV_SYMBOL_UP " Previous Page");
+            lv_obj_add_event_cb(prev_btn, prev_page_cb, LV_EVENT_CLICKED, NULL);
+            lv_group_add_obj(lv_group_get_default(), prev_btn);
+            lv_obj_add_event_cb(prev_btn, post_focus_cb, LV_EVENT_FOCUSED, NULL);
+            current_child_idx++;
+        }
+
+        for (int i = start_idx; i < end_idx; ++i) {
+            const auto &filename = txt_files[i];
             current_child_idx++;
             // Container for each post
             lv_obj_t *post_cont = lv_obj_create(main_page);
@@ -273,6 +329,37 @@ void ui_blog_enter(lv_obj_t *parent)
                 lv_obj_set_style_text_color(label, lv_color_white(), 0);
             }
         }
+
+        // Footer container
+        lv_obj_t *footer_cont = lv_obj_create(main_page);
+        lv_obj_set_width(footer_cont, lv_pct(100));
+        lv_obj_set_height(footer_cont, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(footer_cont, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(footer_cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_all(footer_cont, 5, 0);
+        lv_obj_set_style_bg_opa(footer_cont, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(footer_cont, 0, 0);
+
+        // Next Page Button
+        if (end_idx < total_files) {
+            lv_obj_t *next_btn = lv_btn_create(footer_cont);
+            lv_obj_t *next_label = lv_label_create(next_btn);
+            lv_label_set_text(next_label, LV_SYMBOL_DOWN " Next");
+            lv_obj_add_event_cb(next_btn, next_page_cb, LV_EVENT_CLICKED, NULL);
+            lv_group_add_obj(lv_group_get_default(), next_btn);
+            lv_obj_add_event_cb(next_btn, post_focus_cb, LV_EVENT_FOCUSED, NULL);
+        }
+
+        // Page indicator
+        lv_obj_t *page_info = lv_label_create(footer_cont);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Page %d/%d", current_page + 1, (total_files + BLOG_PAGE_SIZE - 1) / BLOG_PAGE_SIZE);
+        lv_label_set_text(page_info, buf);
+        lv_obj_set_style_text_font(page_info, font, 0);
+        lv_obj_set_style_text_color(page_info, lv_palette_main(LV_PALETTE_GREY), 0);
+        lv_obj_set_flex_grow(page_info, 1);
+        lv_obj_set_style_text_align(page_info, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_style_pad_right(page_info, 10, 0);
     }
 
     lv_menu_set_page(menu, main_page);
