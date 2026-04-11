@@ -1553,7 +1553,7 @@ void hw_light_sleep()
 {
 #ifdef ARDUINO
     instance.decrementBrightness(0, 5, false);
-    instance.lightSleep((WakeupSource_t)(WAKEUP_SRC_ROTARY_BUTTON));
+    instance.lightSleep((WakeupSource_t)(WAKEUP_SRC_BOOT_BUTTON));
 #endif
 }
 
@@ -1571,7 +1571,7 @@ void hw_sleep()
 #endif
 
     instance.decrementBrightness(0, 5, false);
-    instance.sleep((WakeupSource_t)(WAKEUP_SRC_ROTARY_BUTTON));
+    instance.sleep((WakeupSource_t)(WAKEUP_SRC_BOOT_BUTTON));
 #endif
 }
 
@@ -2012,7 +2012,7 @@ void hw_low_power_loop()
     if (user_setting.sleep_mode == 1) {
         hw_sleep();
     } else {
-        instance.lightSleep((WakeupSource_t)(WAKEUP_SRC_ROTARY_BUTTON));
+        instance.lightSleep((WakeupSource_t)(WAKEUP_SRC_BOOT_BUTTON));
     }
 #endif
 }
