@@ -659,6 +659,42 @@ static void settings_exit_cb(lv_event_t *e)
     }
 }
 
+static void editor_font_face_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.editor_font_index = lv_dropdown_get_selected(obj);
+}
+
+static void editor_font_size_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    uint16_t index = lv_dropdown_get_selected(obj);
+    local_param.editor_font_size = 10 + index * 2;
+}
+
+static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_EDIT, "Editor Settings");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+
+    const char *font_options = "Montserrat\nUnscii 8\nUnscii 16";
+    lv_obj_t *dd_face = create_dropdown(sub_page, NULL, "Font Face", font_options, local_param.editor_font_index, editor_font_face_cb);
+    register_subpage_group_obj(sub_page, dd_face);
+
+    const char *size_options = "10\n12\n14\n16\n18\n20\n22\n24\n26\n28\n30\n32";
+    uint8_t size_idx = 2; // Default 14
+    if (local_param.editor_font_size >= 10 && local_param.editor_font_size <= 32) {
+        size_idx = (local_param.editor_font_size - 10) / 2;
+    }
+    lv_obj_t *dd_size = create_dropdown(sub_page, NULL, "Font Size", size_options, size_idx, editor_font_size_cb);
+    register_subpage_group_obj(sub_page, dd_size);
+
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
 void ui_sys_enter(lv_obj_t *parent)
 {
     menu_g = lv_group_get_default();
@@ -692,6 +728,10 @@ void ui_sys_enter(lv_obj_t *parent)
 
     // //! DATE & TIME SETTING
     cont = create_subpage_datetime(menu, main_page);
+    add_main_page_group_item(cont);
+
+    // //! EDITOR SETTINGS
+    cont = create_subpage_editor_settings(menu, main_page);
     add_main_page_group_item(cont);
 
     // //! SYSTEM INFO

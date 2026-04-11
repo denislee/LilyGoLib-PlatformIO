@@ -90,6 +90,32 @@ static void text_area_event_cb(lv_event_t *e)
     }
 }
 
+static const lv_font_t *get_editor_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+
+    if (settings.editor_font_index == 1) return &lv_font_unscii_8;
+    if (settings.editor_font_index == 2) return &lv_font_unscii_16;
+
+    // Default to Montserrat
+    switch (settings.editor_font_size) {
+    case 10: return &lv_font_montserrat_10;
+    case 12: return &lv_font_montserrat_12;
+    case 14: return &lv_font_montserrat_14;
+    case 16: return &lv_font_montserrat_16;
+    case 18: return &lv_font_montserrat_18;
+    case 20: return &lv_font_montserrat_20;
+    case 22: return &lv_font_montserrat_22;
+    case 24: return &lv_font_montserrat_24;
+    case 26: return &lv_font_montserrat_26;
+    case 28: return &lv_font_montserrat_28;
+    case 30: return &lv_font_montserrat_30;
+    case 32: return &lv_font_montserrat_32;
+    default: return &lv_font_montserrat_14;
+    }
+}
+
 void ui_text_editor_enter(lv_obj_t *parent)
 {
     enable_keyboard();
@@ -112,7 +138,7 @@ void ui_text_editor_enter(lv_obj_t *parent)
     lv_obj_set_width(text_area, LV_PCT(100));
     lv_obj_set_flex_grow(text_area, 1);
     lv_textarea_set_placeholder_text(text_area, "");
-    lv_obj_set_style_text_font(text_area, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(text_area, get_editor_font(), 0);
     lv_obj_set_style_border_width(text_area, 0, 0);
 
     lv_obj_add_event_cb(text_area, text_area_event_cb, LV_EVENT_ALL, NULL);

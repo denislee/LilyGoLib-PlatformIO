@@ -298,6 +298,10 @@ lv_obj_t *create_dropdown(lv_obj_t *parent, const char *icon, const char *txt, c
     lv_obj_t *dd = lv_dropdown_create(obj);
     lv_dropdown_set_options(dd, options);
     lv_dropdown_set_selected(dd, default_sel);
+
+    lv_obj_add_event_cb(dd, child_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(dd, child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+
     if (cb) {
         lv_obj_add_event_cb(dd, cb, LV_EVENT_VALUE_CHANGED, NULL);
     }

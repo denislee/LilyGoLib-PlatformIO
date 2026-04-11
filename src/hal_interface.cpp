@@ -704,6 +704,8 @@ void hw_init()
         user_setting.charger_current = DEVICE_CHARGE_CURRENT_RECOMMEND;
         user_setting.charger_enable = true;
         user_setting.sleep_mode = 0;
+        user_setting.editor_font_size = 14;
+        user_setting.editor_font_index = 0;
         prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
     }
 
@@ -743,6 +745,8 @@ void hw_get_user_setting(user_setting_params_t &param)
     printf("Get charger_current     :%u\n", user_setting.charger_current);
     printf("Get charger_enable      :%u\n", user_setting.charger_enable);
     printf("Get sleep_mode          :%u\n", user_setting.sleep_mode);
+    printf("Get editor_font_size    :%u\n", user_setting.editor_font_size);
+    printf("Get editor_font_index   :%u\n", user_setting.editor_font_index);
 }
 
 void hw_set_user_setting(user_setting_params_t &param)
@@ -757,6 +761,8 @@ void hw_set_user_setting(user_setting_params_t &param)
     printf("set charger_current     :%u\n", param.charger_current);
     printf("set charger_enable      :%u\n", param.charger_enable);
     printf("set sleep_mode          :%u\n", param.sleep_mode);
+    printf("set editor_font_size    :%u\n", param.editor_font_size);
+    printf("set editor_font_index   :%u\n", param.editor_font_index);
 }
 
 const uint32_t hw_get_disp_timeout_ms()

@@ -255,6 +255,8 @@ typedef struct {
     uint16_t charger_current;
     uint8_t charger_enable;
     uint8_t sleep_mode;
+    uint8_t editor_font_size;
+    uint8_t editor_font_index;
 } user_setting_params_t;
 
 /**
