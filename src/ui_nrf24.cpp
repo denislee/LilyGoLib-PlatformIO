@@ -53,11 +53,8 @@ static void back_event_handler(lv_event_t *e)
 static void _ui_nrf24_obj_event(lv_event_t *e)
 {
     uint16_t selected = 0;
-    string opt;
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     const char *flag = ( const char *)lv_event_get_user_data(e);
-    const char *prefix = "RX Mode";
-    char buf[64];
 
     if (*flag != 'b') {
         selected =  lv_dropdown_get_selected(obj);
@@ -77,12 +74,6 @@ static void _ui_nrf24_obj_event(lv_event_t *e)
         printf("set interval:%u\n", radio_params_copy.interval);
         break;
     case 'm':   //*mode
-        lv_dropdown_get_selected_str(obj, buf, 64);
-        if (strncmp(buf, prefix, lv_strlen(prefix)) == 0) {
-            // lv_obj_clear_flag(radio_msg_label, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            // lv_obj_add_flag(radio_msg_label, LV_OBJ_FLAG_HIDDEN);
-        }
         radio_params_copy.mode = selected;
         break;
     case 'c':   //*data rate
@@ -126,13 +117,11 @@ static lv_obj_t *create_frequency_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, RADIO_FREQUENCY_LIST);
     lv_obj_add_event_cb(dd, _ui_nrf24_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
-    for (auto i : radio_freq_args_list) {
-        if (i == radio_params_copy.freq) {
-            lv_dropdown_set_selected(dd, index);
+    for (int idx = 0; idx < (int)(sizeof(radio_freq_args_list) / sizeof(radio_freq_args_list[0])); idx++) {
+        if (radio_freq_args_list[idx] == radio_params_copy.freq) {
+            lv_dropdown_set_selected(dd, idx);
             break;
         }
-        index++;
     }
     return dd;
 }
@@ -146,13 +135,11 @@ static lv_obj_t *create_tx_power_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, RADIO_TX_POWER_LIST);
     lv_obj_add_event_cb(dd, _ui_nrf24_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
-    for (auto i : radio_power_args_list) {
-        if (i == radio_params_copy.power) {
-            lv_dropdown_set_selected(dd, index);
+    for (int idx = 0; idx < (int)(sizeof(radio_power_args_list) / sizeof(radio_power_args_list[0])); idx++) {
+        if (radio_power_args_list[idx] == radio_params_copy.power) {
+            lv_dropdown_set_selected(dd, idx);
             break;
         }
-        index++;
     }
     return dd;
 }
@@ -164,13 +151,11 @@ static lv_obj_t *create_tx_interval_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, RADIO_INTERVAL_LIST);
     lv_obj_add_event_cb(dd, _ui_nrf24_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
-    for (auto i : radio_interval_args_list) {
-        if (i == radio_params_copy.interval) {
-            lv_dropdown_set_selected(dd, index);
+    for (int idx = 0; idx < (int)(sizeof(radio_interval_args_list) / sizeof(radio_interval_args_list[0])); idx++) {
+        if (radio_interval_args_list[idx] == radio_params_copy.interval) {
+            lv_dropdown_set_selected(dd, idx);
             break;
         }
-        index++;
     }
     return dd;
 }
@@ -208,13 +193,11 @@ static lv_obj_t *create_dr_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, RADIO_CR_LIST);
     lv_obj_add_event_cb(dd, _ui_nrf24_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
-    for (auto i : radio_dr_args_list) {
-        if (i == radio_params_copy.cr) {
-            lv_dropdown_set_selected(dd, index);
+    for (int idx = 0; idx < (int)(sizeof(radio_dr_args_list) / sizeof(radio_dr_args_list[0])); idx++) {
+        if (radio_dr_args_list[idx] == radio_params_copy.cr) {
+            lv_dropdown_set_selected(dd, idx);
             break;
         }
-        index++;
     }
     return dd;
 }
@@ -293,36 +276,36 @@ static void radio_timer_task(lv_timer_t *t)
     static uint32_t tx_count = 0;
 
     uint8_t tmp_buffer[30] = {0};
-    String str;
+    char tx_buf[32];
 
     switch (radio_run_mode) {
     case RADIO_DISABLE:
         break;
-    case RADIO_TX:
+    case RADIO_TX: {
         // Discard the first byte
-        str = " Hello#" + String(tx_count++);
-        tx_params.data = (uint8_t*)str.c_str();
-        tx_params.length = str.length();
+        int tx_len = snprintf(tx_buf, sizeof(tx_buf), " Hello#%lu", (unsigned long)tx_count++);
+        tx_params.data = (uint8_t*)tx_buf;
+        tx_params.length = tx_len;
         rlst = hw_set_nrf24_tx(tx_params);
         if (!rlst && ((lv_tick_get() - last_sended) > radio_params_copy.interval)) {
-            printf("Clear ISR flag\n");
             hw_clear_nrf24_flag();
         }
         if (tx_params.state == 0) {
-            snprintf(msg, 128, "[%u]Tx PASS :%s", tick, str.c_str());
+            snprintf(msg, 128, "[%u]Tx PASS :%s", tick, tx_buf);
             ui_set_msg_label(msg);
             last_sended = lv_tick_get();
         }
         break;
+    }
     case RADIO_RX:
         rx_params.data = tmp_buffer;
         rx_params.length = sizeof(tmp_buffer);
         hw_get_nrf24_rx(rx_params);
         if (rx_params.state == 0) {
-            String str = String((const char *)rx_params.data);
             // Discard the last byte
-            str = str.substring(0, str.length() - 1);
-            snprintf(msg, 128, "[%u]Rx PASS :%s", tick, str.c_str());
+            int rx_len = rx_params.length > 0 ? rx_params.length - 1 : 0;
+            tmp_buffer[rx_len] = '\0';
+            snprintf(msg, 128, "[%u]Rx PASS :%s", tick, (const char *)tmp_buffer);
             ui_set_msg_label(msg);
         }
         break;

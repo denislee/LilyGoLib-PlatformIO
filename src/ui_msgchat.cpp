@@ -103,7 +103,7 @@ static void create_msg_label(const char *text, bool is_send, lv_color_t bg_color
     lv_obj_t *label = lv_label_create(msg_row);
     lv_label_set_text(label, text);
 
-    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_WRAP);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
     if (is_send) {
         lv_obj_set_style_bg_color(label, lv_color_hex(0x99ccff), LV_PART_MAIN);
     } else {

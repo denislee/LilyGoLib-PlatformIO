@@ -59,12 +59,8 @@ static void back_event_handler(lv_event_t *e)
 static void _ui_radio_obj_event(lv_event_t *e)
 {
     uint16_t selected = 0;
-    string opt;
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     const char *flag = ( const char *)lv_event_get_user_data(e);
-    const char *prefix = "RX Mode";
-    char buf[64];
-    int index = 0;
     if (*flag != 'b') {
         selected =  lv_dropdown_get_selected(obj);
     }
@@ -97,18 +93,15 @@ static void _ui_radio_obj_event(lv_event_t *e)
 
         for (int i = 0; i < radio_get_bandwidth_length(); ++i) {
             if (radio_get_bandwidth_from_index(i) == radio_params_copy.bandwidth) {
-                lv_dropdown_set_selected(bandwidth_dd, index);
+                lv_dropdown_set_selected(bandwidth_dd, i);
                 break;
             }
-            index++;
         }
-        index = 0;
         for (int i = 0; i < radio_get_tx_power_length(); ++i) {
             if (radio_get_tx_power_from_index(i) == radio_params_copy.power) {
-                lv_dropdown_set_selected(power_level_dd, index);
+                lv_dropdown_set_selected(power_level_dd, i);
                 break;
             }
-            index++;
         }
 
         break;
@@ -125,7 +118,6 @@ static void _ui_radio_obj_event(lv_event_t *e)
         printf("set interval:%u\n", radio_params_copy.interval);
         break;
     case 'm':   //*mode
-        lv_dropdown_get_selected_str(obj, buf, 64);
         radio_params_copy.mode = selected;
         break;
     case 'c':   //*coding rate
@@ -191,13 +183,11 @@ lv_obj_t *create_frequency_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, freq_list);
     lv_obj_add_event_cb(dd, _ui_radio_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
     for (int i = 0; i < radio_get_freq_length(); ++i) {
         if (radio_get_freq_from_index(i) == radio_params_copy.freq) {
-            lv_dropdown_set_selected(dd, index);
+            lv_dropdown_set_selected(dd, i);
             break;
         }
-        index++;
     }
 
     return dd;
@@ -210,13 +200,11 @@ lv_obj_t *create_bandwidth_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, radio_get_bandwidth_list());
     lv_obj_add_event_cb(dd, _ui_radio_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
     for (int i = 0; i < radio_get_bandwidth_length(); ++i) {
         if (radio_get_bandwidth_from_index(i) == radio_params_copy.bandwidth) {
-            lv_dropdown_set_selected(dd, index);
+            lv_dropdown_set_selected(dd, i);
             break;
         }
-        index++;
     }
     bandwidth_dd = dd;
     return dd;
@@ -229,13 +217,11 @@ lv_obj_t *create_tx_power_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, radio_get_tx_power_list());
     lv_obj_add_event_cb(dd, _ui_radio_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
     for (int i = 0; i < radio_get_tx_power_length(); ++i) {
         if (radio_get_tx_power_from_index(i) == radio_params_copy.power) {
-            lv_dropdown_set_selected(dd, index);
+            lv_dropdown_set_selected(dd, i);
             break;
         }
-        index++;
     }
     power_level_dd = dd;
     return dd;
@@ -250,13 +236,11 @@ static lv_obj_t *create_tx_interval_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, RADIO_INTERVAL_LIST);
     lv_obj_add_event_cb(dd, _ui_radio_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
-    for (auto i : radio_interval_args_list) {
-        if (i == radio_params_copy.interval) {
-            lv_dropdown_set_selected(dd, index);
+    for (int idx = 0; idx < (int)(sizeof(radio_interval_args_list) / sizeof(radio_interval_args_list[0])); idx++) {
+        if (radio_interval_args_list[idx] == radio_params_copy.interval) {
+            lv_dropdown_set_selected(dd, idx);
             break;
         }
-        index++;
     }
     return dd;
 }
@@ -294,13 +278,11 @@ lv_obj_t *create_cr_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, RADIO_CR_LIST);
     lv_obj_add_event_cb(dd, _ui_radio_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
-    for (auto i : radio_cr_args_list) {
-        if (i == radio_params_copy.cr) {
-            lv_dropdown_set_selected(dd, index);
+    for (int idx = 0; idx < (int)(sizeof(radio_cr_args_list) / sizeof(radio_cr_args_list[0])); idx++) {
+        if (radio_cr_args_list[idx] == radio_params_copy.cr) {
+            lv_dropdown_set_selected(dd, idx);
             break;
         }
-        index++;
     }
     return dd;
 }
@@ -313,13 +295,11 @@ lv_obj_t *create_sf_dropdown(lv_obj_t *parent)
     lv_dropdown_set_options(dd, RADIO_SF_LIST);
     lv_obj_add_event_cb(dd, _ui_radio_obj_event, LV_EVENT_VALUE_CHANGED, (void *)&flag);
 
-    int index = 0;
-    for (auto i : radio_sf_args_list) {
-        if (i == radio_params_copy.sf) {
-            lv_dropdown_set_selected(dd, index);
+    for (int idx = 0; idx < (int)(sizeof(radio_sf_args_list) / sizeof(radio_sf_args_list[0])); idx++) {
+        if (radio_sf_args_list[idx] == radio_params_copy.sf) {
+            lv_dropdown_set_selected(dd, idx);
             break;
         }
-        index++;
     }
     return dd;
 }
@@ -398,7 +378,7 @@ lv_obj_t *create_syncword_textarea(lv_obj_t *parent)
     lv_obj_set_scrollbar_mode(ta, LV_SCROLLBAR_MODE_OFF);
 
     char buf[16] = {0};
-    itoa(radio_params_copy.syncWord, buf, 10);
+    snprintf(buf, sizeof(buf), "%d", radio_params_copy.syncWord);
     lv_textarea_set_text(ta, buf);
     lv_obj_add_event_cb(ta, _msg_ta_cb, LV_EVENT_ALL, NULL);
     return ta;

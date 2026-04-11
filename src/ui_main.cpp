@@ -202,7 +202,7 @@ void setupGui()
     extern app_t ui_file_browser_main;
 
     create_app(home_list, "Editor", LV_SYMBOL_KEYBOARD, &ui_text_editor_main);
-    create_app(home_list, "Setting", LV_SYMBOL_SETTINGS, &ui_sys_main);
+    create_app(home_list, "Settings", LV_SYMBOL_SETTINGS, &ui_sys_main);
     create_app(home_list, "Files", LV_SYMBOL_FILE, &ui_file_browser_main);
 
     lv_obj_t *shutdown_btn = lv_list_add_btn(home_list, LV_SYMBOL_POWER, "Shutdown");

@@ -45,31 +45,14 @@ void hw_radio_begin()
 
 int16_t hw_set_radio_params(radio_params_t &params)
 {
-    printf("Set radio params:\n");
-    printf("Frequency:%.2f MHz\n", params.freq);
-    printf("Bandwidth:%.2f KHz\n", params.bandwidth);
-    printf("TxPower:%u dBm\n", params.power);
-    printf("Interval:%u ms\n", params.interval);
-    printf("CR:%u \n", params.cr);
-    printf("SF:%u \n", params.sf);
-    printf("SyncWord:%u \n", params.syncWord);
-    printf("Mode: ");
-    switch (params.mode) {
-    case RADIO_DISABLE:
-        printf("RADIO_DISABLE\n");
-        break;
-    case RADIO_TX:
-        printf("RADIO_TX\n");
-        break;
-    case RADIO_RX:
-        printf("RADIO_RX\n");
-        break;
-    case RADIO_CW:
-        printf("RADIO_CW\n");
-        break;
-    default:
-        break;
-    }
+    RADIO_LOG("Set radio params:\n");
+    RADIO_LOG("Frequency:%.2f MHz\n", params.freq);
+    RADIO_LOG("Bandwidth:%.2f KHz\n", params.bandwidth);
+    RADIO_LOG("TxPower:%u dBm\n", params.power);
+    RADIO_LOG("Interval:%u ms\n", params.interval);
+    RADIO_LOG("CR:%u \n", params.cr);
+    RADIO_LOG("SF:%u \n", params.sf);
+    RADIO_LOG("SyncWord:%u \n", params.syncWord);
 
 #ifdef ARDUINO
     int16_t state = 0;
@@ -103,22 +86,17 @@ int16_t hw_set_radio_params(radio_params_t &params)
         Serial.println(F("[CC1101] Selected frequency deviation is invalid for this module!"));
     }
 
-    printf("Mode: ");
     switch (params.mode) {
     case RADIO_DISABLE:
-        printf("RADIO_DISABLE\n");
         state =  radio.standby();
         break;
     case RADIO_TX:
-        printf("RADIO_TX\n");
         state =  radio.startTransmit("");
         break;
     case RADIO_RX:
-        printf("RADIO_RX\n");
         state =  radio.startReceive();
         break;
     case RADIO_CW:
-        printf("RADIO_CW\n");
         break;
     default:
         break;
@@ -173,30 +151,13 @@ void hw_set_radio_tx(radio_tx_params_t &params, bool continuous)
     }
 
     if (!params.data) {
-        printf("tx data buffer is empty");
         params.state = -1;
         return;
     }
 
-    Serial.print("[TX DATA:]");
-    for (int i = 0; i < params.length; ++i) {
-        Serial.printf("%02X,", params.data[i]);
-    }
-    Serial.println();
-    Serial.print("[TX LEN:]");
-    Serial.println(params.length);
-
     instance.lockSPI();
     params.state = radio.startTransmit(params.data, params.length);
     instance.unlockSPI();
-
-    if (params.state == RADIOLIB_ERR_NONE) {
-        // packet was successfully sent
-        Serial.println(F("transmission finished!"));
-    } else {
-        Serial.print(F("failed, code "));
-        Serial.println(params.state);
-    }
 #endif
 }
 
@@ -211,7 +172,6 @@ void hw_get_radio_rx(radio_rx_params_t &params)
 
     if (!params.data) {
         params.state = -1;
-        printf("rx data buffer is empty");
         return;
     }
 
@@ -224,7 +184,6 @@ void hw_get_radio_rx(radio_rx_params_t &params)
     radio.startReceive();
     instance.unlockSPI();
 
-
     if (last_send_millis + 200 > millis()) {
         // avoid showing own sent messages
         params.length = 0;
@@ -232,31 +191,6 @@ void hw_get_radio_rx(radio_rx_params_t &params)
     }
 
     params.data[params.length] = '\0';
-
-    Serial.print("[RX DATA:]");
-    for (int i = 0; i < params.length; ++i) {
-        Serial.printf("%02X,", params.data[i]);
-    }
-    Serial.println();
-    Serial.print("[RX LEN:]");
-    Serial.println(params.length);
-
-    if (params.state == RADIOLIB_ERR_NONE && params.length != 0) {
-        // packet was successfully received
-        Serial.println(F("[Radio] Received packet!"));
-        Serial.print("[LEN]:");
-        Serial.println(params.length);
-        Serial.print("[PAYLOAD]:");
-        Serial.println((char *)params.data);
-        // print RSSI (Received Signal Strength Indicator)
-        Serial.print(F("[Radio] RSSI:\t\t"));
-        Serial.print(params.rssi);
-        Serial.println(F(" dBm"));
-        // print SNR (Signal-to-Noise Ratio)
-        Serial.print(F("[Radio] SNR:\t\t"));
-        Serial.print(params.snr);
-        Serial.println(F(" dB"));
-    }
 #else
     params.length = 0;
 #endif

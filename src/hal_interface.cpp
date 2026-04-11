@@ -296,18 +296,18 @@ WAIT:
 
 static void hw_sd_play(audio_source_type_t source, const char *filename)
 {
-    bool isMP3 = String(filename).endsWith(".mp3");
+    size_t len = strlen(filename);
+    bool isMP3 = (len > 4 && strcasecmp(filename + len - 4, ".mp3") == 0);
     bool lock = false;
 
-    String str = "/" + String(filename);
+    char path[128];
+    snprintf(path, sizeof(path), "/%s", filename);
     File f;
 
-    // Serial.printf("Playing file: %s source:%d\n", str.c_str(), source);
     if (source == AUDIO_SOURCE_SDCARD) {
-        Serial.printf("Open from SD: %s\n", str.c_str());
         // T-Watch-S3-Ultra or T-LoRa-Pager is SPI bus-shared, lock the SPI bus before use
         instance.lockSPI();
-        f = SD.open(str);
+        f = SD.open(path);
         if (f) {
             lock = true;
         } else {
@@ -317,8 +317,7 @@ static void hw_sd_play(audio_source_type_t source, const char *filename)
             return;
         }
     } else {
-        Serial.printf("Open from FFat: %s\n", str.c_str());
-        f = FFat.open(str);
+        f = FFat.open(path);
         if (!f) {
             Serial.printf("FFat Open %s failed!\n", filename);
             return;
@@ -414,7 +413,7 @@ static void process_channel_fft(int16_t *channel_data, float *bands, float freq_
     dsps_bit_rev_fc32(fft_input, FFT_SIZE);
     dsps_cplx2reC_fc32(fft_input, FFT_SIZE);
 
-    float magnitudes[FFT_SIZE / 2];
+    static float magnitudes[FFT_SIZE / 2];
     for (int i = 0; i < FFT_SIZE / 2; i++) {
         float real = fft_input[2 * i];
         float imag = fft_input[2 * i + 1];
@@ -471,9 +470,6 @@ void hw_audio_get_fft_data(FFTData *fft_data)
 #endif
 
     read_count++;
-    if (read_count % 10 == 0) {
-        Serial.printf("Left: %d, Right: %d\n", i2s_buffer[0], i2s_buffer[1]);
-    }
 
     for (int i = 0; i < FFT_SIZE; i++) {
         left_channel[i] = i2s_buffer[2 * i];

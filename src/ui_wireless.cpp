@@ -14,8 +14,8 @@ static lv_obj_t *keyboard = NULL;
 #endif
 
 static lv_obj_t *menu = NULL;
-static char wifi_ssid[64];
-static char wifi_password[128];
+static char wifi_ssid[33];     // WiFi SSID max 32 chars + null
+static char wifi_password[64]; // WiFi password max 63 chars + null
 static lv_obj_t *wifi_dd;
 static bool scanning = false;
 

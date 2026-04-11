@@ -472,53 +472,6 @@ static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
     return cont;
 }
 
-static lv_obj_t *create_subpage_battery_history(lv_obj_t *menu, lv_obj_t *main_page)
-{
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    lv_obj_t *label = lv_label_create(cont);
-    lv_label_set_text(label, LV_SYMBOL_CHARGE " Battery Usage");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
-    lv_obj_set_style_pad_row(sub_page, 5, 0);
-
-    vector<int16_t> history;
-    hw_get_battery_history(history);
-
-    if (history.empty()) {
-        lv_obj_t *no_data = lv_label_create(sub_page);
-        lv_label_set_text(no_data, "No battery data recorded yet.\nPlease wait...");
-        lv_obj_set_style_text_align(no_data, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_center(no_data);
-    } else {
-        lv_obj_t *chart = lv_chart_create(sub_page);
-        lv_obj_set_size(chart, LV_PCT(85), LV_PCT(60));
-        lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, 20);
-        lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
-        lv_chart_set_point_count(chart, history.size());
-        lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
-
-        lv_chart_set_div_line_count(chart, 5, 6);
-
-        lv_chart_series_t *ser = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_GREEN), LV_CHART_AXIS_PRIMARY_Y);
-
-        for (size_t i = 0; i < history.size(); ++i) {
-            lv_chart_set_next_value(chart, ser, history[i]);
-        }
-
-        lv_chart_refresh(chart);
-
-        lv_obj_t *info_label = lv_label_create(sub_page);
-        lv_label_set_text_fmt(info_label, "%d min history\n%d%% - %d%%",
-                              (int)history.size(),
-                              (int)history.front(),
-                              (int)history.back());
-        lv_obj_set_style_text_align(info_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(info_label, LV_ALIGN_BOTTOM_MID, 0, -5);
-    }
-
-    lv_menu_set_load_page_event(menu, cont, sub_page);
-    return cont;
-}
-
 static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
@@ -738,10 +691,6 @@ void ui_sys_enter(lv_obj_t *parent)
 
     // //! SYSTEM INFO
     cont = create_subpage_info(menu, main_page);
-    add_main_page_group_item(cont);
-
-    // //! BATTERY USAGE
-    cont = create_subpage_battery_history(menu, main_page);
     add_main_page_group_item(cont);
 
     cont = create_device_probe(menu, main_page);

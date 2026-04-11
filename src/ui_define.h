@@ -16,13 +16,8 @@
 #endif
 #include <lvgl.h>
 #include <stdio.h>
-#include <iostream>
-#include <vector>
-#include <time.h>
 #include <string.h>
 #include "hal_interface.h"
-
-using namespace std;
 
 #define DEFAULT_OPA          100
 

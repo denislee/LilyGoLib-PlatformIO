@@ -10,12 +10,20 @@
 #pragma once
 #include <stdio.h>
 #include <stdint.h>
+#include <time.h>
 #include <string>
-#include <iostream>
 #include <vector>
 #include "event_define.h"
 
-using namespace std;
+using std::string;
+using std::vector;
+
+// Debug logging macro - define DEBUG_RADIO to enable verbose radio output
+#ifdef DEBUG_RADIO
+#define RADIO_LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#else
+#define RADIO_LOG(fmt, ...) ((void)0)
+#endif
 typedef enum {
     MEDIA_VOLUME_UP,
     MEDIA_VOLUME_DOWN,
