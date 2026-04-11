@@ -141,6 +141,12 @@ void ui_text_editor_enter(lv_obj_t *parent)
     lv_obj_set_style_text_font(text_area, get_editor_font(), 0);
     lv_obj_set_style_border_width(text_area, 0, 0);
 
+    /* Cursor style */
+    lv_obj_set_style_border_color(text_area, lv_color_white(), LV_PART_CURSOR | LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(text_area, 2, LV_PART_CURSOR | LV_STATE_FOCUSED);
+    lv_obj_set_style_border_side(text_area, LV_BORDER_SIDE_LEFT, LV_PART_CURSOR | LV_STATE_FOCUSED);
+    lv_obj_set_style_anim_duration(text_area, 500, LV_PART_CURSOR | LV_STATE_FOCUSED);
+
     lv_obj_add_event_cb(text_area, text_area_event_cb, LV_EVENT_ALL, NULL);
     lv_group_add_obj(lv_group_get_default(), text_area);
 
