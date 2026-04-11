@@ -8,6 +8,16 @@
  */
 #include "ui_define.h"
 
+static void style_menu_item_icon(lv_obj_t *cont, const char *icon, const char *text)
+{
+    lv_obj_t *icon_label = lv_label_create(cont);
+    lv_label_set_text(icon_label, icon);
+    lv_obj_set_style_min_width(icon_label, 20, 0);
+    lv_obj_set_style_text_align(icon_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_t *text_label = lv_label_create(cont);
+    lv_label_set_text(text_label, text);
+}
+
 static lv_obj_t *menu = NULL;
 static lv_timer_t *timer = NULL;
 static lv_group_t *menu_g;
@@ -274,8 +284,7 @@ static void save_datetime_cb(lv_event_t *e)
 static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
-    lv_obj_t *label = lv_label_create(cont);
-    lv_label_set_text(label, LV_SYMBOL_BELL " Date & Time");
+    style_menu_item_icon(cont, LV_SYMBOL_BELL, "Date & Time");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(sub_page, 5, 0);
@@ -362,8 +371,7 @@ static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
 static lv_obj_t *create_subpage_backlight(lv_obj_t *menu, lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
-    lv_obj_t *label = lv_label_create(cont);
-    lv_label_set_text(label, LV_SYMBOL_IMAGE " Display & Backlight");
+    style_menu_item_icon(cont, LV_SYMBOL_IMAGE, "Display & Backlight");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_row(sub_page, 2, 0);
 
@@ -430,8 +438,7 @@ static lv_obj_t *create_subpage_backlight(lv_obj_t *menu, lv_obj_t *main_page)
 static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
-    lv_obj_t *label = lv_label_create(cont);
-    lv_label_set_text(label, LV_SYMBOL_CHARGE " Charger");
+    style_menu_item_icon(cont, LV_SYMBOL_CHARGE, "Charger");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_row(sub_page, 2, 0);
 
@@ -475,8 +482,7 @@ static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
 static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
-    lv_obj_t *label = lv_label_create(cont);
-    lv_label_set_text(label, LV_SYMBOL_LIST " System Info");
+    style_menu_item_icon(cont, LV_SYMBOL_LIST, "System Info");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_add_flag(sub_page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
@@ -571,8 +577,7 @@ static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
 static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
-    lv_obj_t *label = lv_label_create(cont);
-    lv_label_set_text(label, LV_SYMBOL_USB " Devices");
+    style_menu_item_icon(cont, LV_SYMBOL_USB, "Devices");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_add_flag(sub_page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);

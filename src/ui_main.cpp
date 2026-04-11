@@ -101,9 +101,19 @@ static void sleep_event_cb(lv_event_t *e)
     }
 }
 
+static void style_list_btn_icon(lv_obj_t *btn)
+{
+    lv_obj_t *icon = lv_obj_get_child(btn, 0);
+    if (icon) {
+        lv_obj_set_style_min_width(icon, 20, 0);
+        lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
+    }
+}
+
 static void create_app(lv_obj_t *list, const char *name, const char *symbol, app_t *app_fun)
 {
     lv_obj_t *btn = lv_list_add_btn(list, symbol, name);
+    style_list_btn_icon(btn);
     lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, app_fun);
     lv_group_add_obj(menu_g, btn);
 }
@@ -206,10 +216,12 @@ void setupGui()
     create_app(home_list, "Files", LV_SYMBOL_FILE, &ui_file_browser_main);
 
     lv_obj_t *shutdown_btn = lv_list_add_btn(home_list, LV_SYMBOL_POWER, "Shutdown");
+    style_list_btn_icon(shutdown_btn);
     lv_obj_add_event_cb(shutdown_btn, shutdown_event_cb, LV_EVENT_CLICKED, NULL);
     lv_group_add_obj(menu_g, shutdown_btn);
 
     lv_obj_t *sleep_btn = lv_list_add_btn(home_list, LV_SYMBOL_CHARGE, "Deep Sleep");
+    style_list_btn_icon(sleep_btn);
     lv_obj_add_event_cb(sleep_btn, sleep_event_cb, LV_EVENT_CLICKED, NULL);
     lv_group_add_obj(menu_g, sleep_btn);
 
