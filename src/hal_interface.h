@@ -257,6 +257,7 @@ typedef struct {
     uint8_t sleep_mode;
     uint8_t editor_font_size;
     uint8_t editor_font_index;
+    uint8_t charge_limit_en;
 } user_setting_params_t;
 
 /**

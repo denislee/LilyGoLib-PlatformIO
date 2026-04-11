@@ -16,6 +16,8 @@ static lv_obj_t *parent_obj = NULL;
 static int target_focus_index = -1;
 static int current_page = 0;
 #define BLOG_PAGE_SIZE 5
+static std::vector<std::string> blog_files_cache;
+static bool cache_valid = false;
 
 void ui_blog_enter(lv_obj_t *parent);
 
@@ -31,6 +33,8 @@ static void do_exit()
     }
     target_focus_index = -1;
     current_page = 0;
+    cache_valid = false;
+    blog_files_cache.clear();
 }
 
 static void next_page_cb(lv_event_t *e)
@@ -116,6 +120,7 @@ static void delete_msgbox_cb(lv_event_t *e)
         if (hw_delete_file(path)) {
             printf("Deleted file: %s\n", path);
             deleted = true;
+            cache_valid = false;
         }
     } else {
         target_focus_index = -1;
@@ -232,10 +237,12 @@ void ui_blog_enter(lv_obj_t *parent)
     lv_obj_add_event_cb(exit_btn, post_focus_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(exit_btn, blog_key_event_cb, LV_EVENT_KEY, NULL);
 
-    std::vector<std::string> txt_files;
-    hw_get_txt_files(txt_files);
+    if (!cache_valid) {
+        hw_get_txt_files(blog_files_cache);
+        cache_valid = true;
+    }
 
-    int total_files = txt_files.size();
+    int total_files = blog_files_cache.size();
     int start_idx = current_page * BLOG_PAGE_SIZE;
     int end_idx = std::min(start_idx + BLOG_PAGE_SIZE, total_files);
 
@@ -269,7 +276,7 @@ void ui_blog_enter(lv_obj_t *parent)
         }
 
         for (int i = start_idx; i < end_idx; ++i) {
-            const auto &filename = txt_files[i];
+            const auto &filename = blog_files_cache[i];
             current_child_idx++;
             // Container for each post
             lv_obj_t *post_cont = lv_obj_create(main_page);

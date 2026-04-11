@@ -634,6 +634,21 @@ void hw_update_battery_history()
         }
         battery_history.push_back(percent);
         log_d("Recorded battery percent: %d%%", percent);
+
+        // Charge conservation logic: Stop charging if >= 80% and feature is enabled
+        if (user_setting.charge_limit_en && percent >= 80) {
+            if (hw_get_charge_enable()) {
+                log_i("Battery life conservation: Reached 80%%, stopping charger.");
+                hw_set_charger(false);
+            }
+        } else if (user_setting.charge_limit_en && percent < 75) {
+            // Optional: Re-enable charging if it drops below 75% while the limit feature is on
+            // This ensures we actually charge up to 80% if we were below it.
+            if (user_setting.charger_enable && !hw_get_charge_enable()) {
+                 log_i("Battery life conservation: Below 75%%, re-enabling charger.");
+                 hw_set_charger(true);
+            }
+        }
     }
 #else
     static int16_t sim_percent = 100;
@@ -706,6 +721,7 @@ void hw_init()
         user_setting.sleep_mode = 0;
         user_setting.editor_font_size = 14;
         user_setting.editor_font_index = 0;
+        user_setting.charge_limit_en = false;
         prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
     }
 
@@ -747,6 +763,7 @@ void hw_get_user_setting(user_setting_params_t &param)
     printf("Get sleep_mode          :%u\n", user_setting.sleep_mode);
     printf("Get editor_font_size    :%u\n", user_setting.editor_font_size);
     printf("Get editor_font_index   :%u\n", user_setting.editor_font_index);
+    printf("Get charge_limit_en     :%u\n", user_setting.charge_limit_en);
 }
 
 void hw_set_user_setting(user_setting_params_t &param)
@@ -1439,9 +1456,10 @@ bool hw_read_file(const char *path, string &content)
         if (lock) instance.unlockSPI();
         return false;
     }
-    content = "";
-    while (f.available()) {
-        content += (char)f.read();
+    size_t size = f.size();
+    content.resize(size);
+    if (size > 0) {
+        f.read((uint8_t *)&content[0], size);
     }
     f.close();
     if (lock) instance.unlockSPI();

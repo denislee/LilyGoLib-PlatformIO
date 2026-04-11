@@ -234,12 +234,22 @@ static void charger_enable_cb(lv_event_t *e)
 
 static void charger_current_cb(lv_event_t *e)
 {
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
-    uint16_t val =  lv_slider_get_value(obj) ;
+    lv_obj_t *slider = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(slider);
+    int32_t val = lv_slider_get_value(slider);
     local_param.charger_current = hw_set_charger_current_level(val );
     lv_label_set_text_fmt(slider_label, "%04umA", local_param.charger_current);
 }
+
+static void charge_limit_cb(lv_event_t *e)
+{
+    lv_obj_t *slider = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(slider);
+    int32_t val = lv_slider_get_value(slider);
+    local_param.charge_limit_en = val;
+    lv_label_set_text(slider_label, val ? " On " : " Off ");
+}
+
 
 static void spinbox_key_event_cb(lv_event_t *e)
 {
@@ -472,6 +482,15 @@ static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
     parent = lv_obj_get_parent(slider);
     slider_label = lv_label_create(parent);
     lv_label_set_text_fmt(slider_label, "%umA", local_param.charger_current);
+    lv_obj_set_user_data(slider, slider_label);
+    register_subpage_group_obj(sub_page, slider);
+
+    slider = create_slider(sub_page, NULL, "Limit 80%",
+                                     0, 1, local_param.charge_limit_en ? 1 : 0,
+                                     charge_limit_cb, LV_EVENT_VALUE_CHANGED);
+    parent = lv_obj_get_parent(slider);
+    slider_label = lv_label_create(parent);
+    lv_label_set_text(slider_label, local_param.charge_limit_en ? " On " : " Off ");
     lv_obj_set_user_data(slider, slider_label);
     register_subpage_group_obj(sub_page, slider);
 
