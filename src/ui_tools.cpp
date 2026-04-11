@@ -133,29 +133,53 @@ lv_obj_t *create_msgbox(lv_obj_t *parent, const char *title_txt,
 
     if (!msg_group) {
         msg_group = lv_group_create();
-        lv_group_set_wrap(msg_group, false);
+        lv_group_set_wrap(msg_group, true);
     }
+    lv_group_remove_all_objs(msg_group);
     set_default_group(msg_group);
 
     lv_obj_t *msgbox;
 
-#if LVGL_VERSION_MAJOR == 9
-    msgbox = lv_msgbox_create(NULL);
+    #if LVGL_VERSION_MAJOR == 9
+    msgbox = lv_msgbox_create(lv_layer_top());
     lv_msgbox_add_text(msgbox, msg_txt);
     lv_obj_set_size(msgbox, lv_pct(90), lv_pct(60));
+    lv_obj_set_style_bg_color(msgbox, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(msgbox, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(msgbox, lv_color_white(), 0);
+    lv_obj_set_style_border_width(msgbox, 2, 0);
+    lv_obj_set_style_text_color(msgbox, lv_color_white(), 0);
+
+    static lv_style_t msgbox_btn_focus_style;
+    static bool msgbox_btn_style_inited = false;
+    if (!msgbox_btn_style_inited) {
+        lv_style_init(&msgbox_btn_focus_style);
+        lv_style_set_border_width(&msgbox_btn_focus_style, 3);
+        lv_style_set_border_color(&msgbox_btn_focus_style, lv_color_white());
+        lv_style_set_border_side(&msgbox_btn_focus_style, LV_BORDER_SIDE_FULL);
+        lv_style_set_radius(&msgbox_btn_focus_style, 5);
+        msgbox_btn_style_inited = true;
+    }
+
     uint32_t btn_cnt = 0;
     lv_obj_t *btn;
+    lv_obj_t *first_btn = NULL;
     while (btns[btn_cnt] && btns[btn_cnt][0] != '\0') {
         btn = lv_msgbox_add_footer_button(msgbox, btns[btn_cnt]);
         lv_obj_add_event_cb(btn, btns_event_cb, LV_EVENT_CLICKED, user_data);
         lv_group_add_obj(msg_group, btn);
+        lv_obj_add_style(btn, &msgbox_btn_focus_style, LV_STATE_FOCUS_KEY);
+        lv_obj_add_style(btn, &msgbox_btn_focus_style, LV_STATE_FOCUSED);
+        if (btn_cnt == 0) first_btn = btn;
         btn_cnt++;
     }
-    lv_group_focus_obj(btn);
-    lv_obj_add_state(btn, LV_STATE_FOCUS_KEY);
+    if (first_btn) {
+        lv_group_focus_obj(first_btn);
+        lv_obj_add_state(first_btn, LV_STATE_FOCUS_KEY);
+    }
 
 #else
-    msgbox = lv_msgbox_create(NULL, title_txt, " ", btns, false);
+    msgbox = lv_msgbox_create(lv_layer_top(), title_txt, " ", btns, false);
     lv_msgbox_t *mbox = (lv_msgbox_t *)msgbox;
     lv_label_set_text_fmt(mbox->text, msg_txt);
     lv_label_set_long_mode(mbox->text, LV_LABEL_LONG_WRAP);
@@ -167,14 +191,31 @@ lv_obj_t *create_msgbox(lv_obj_t *parent, const char *title_txt,
 
     lv_obj_t *msg_btns = lv_msgbox_get_btns(msgbox);
     lv_btnmatrix_set_btn_ctrl(msg_btns, 0, LV_BTNMATRIX_CTRL_CHECKED);
+    lv_obj_set_style_text_color(msg_btns, lv_color_white(), 0);
 
+    static lv_style_t msgbox_btn_focus_style_v8;
+    static bool msgbox_btn_style_v8_inited = false;
+    if (!msgbox_btn_style_v8_inited) {
+        lv_style_init(&msgbox_btn_focus_style_v8);
+        lv_style_set_border_width(&msgbox_btn_focus_style_v8, 3);
+        lv_style_set_border_color(&msgbox_btn_focus_style_v8, lv_color_white());
+        lv_style_set_border_side(&msgbox_btn_focus_style_v8, LV_BORDER_SIDE_FULL);
+        lv_style_set_radius(&msgbox_btn_focus_style_v8, 5);
+        msgbox_btn_style_v8_inited = true;
+    }
+    lv_obj_add_style(msg_btns, &msgbox_btn_focus_style_v8, LV_PART_ITEMS | LV_STATE_FOCUS_KEY);
+    lv_obj_add_style(msg_btns, &msgbox_btn_focus_style_v8, LV_PART_ITEMS | LV_STATE_FOCUSED);
+
+    lv_group_add_obj(msg_group, msg_btns);
     lv_group_focus_obj(msg_btns);
 
     lv_obj_set_size(msgbox, lv_pct(90), lv_pct(60));
     lv_obj_set_style_radius(msgbox, 30, LV_PART_MAIN);
 
     lv_obj_set_style_bg_color(msgbox, lv_color_black(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(msgbox, LV_OPA_60, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(msgbox, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(msgbox, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(msgbox, 2, LV_PART_MAIN);
 
     lv_obj_t *title = lv_msgbox_get_title(msgbox);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_18, LV_PART_MAIN);
@@ -430,4 +471,73 @@ bool is_screen_small()
         return true;
     }
     return false;
+}
+LV_FONT_DECLARE(lv_font_montserrat_10);
+LV_FONT_DECLARE(lv_font_montserrat_12);
+LV_FONT_DECLARE(lv_font_montserrat_14);
+LV_FONT_DECLARE(lv_font_montserrat_16);
+LV_FONT_DECLARE(lv_font_montserrat_18);
+LV_FONT_DECLARE(lv_font_montserrat_20);
+LV_FONT_DECLARE(lv_font_montserrat_22);
+LV_FONT_DECLARE(lv_font_montserrat_24);
+LV_FONT_DECLARE(lv_font_montserrat_26);
+LV_FONT_DECLARE(lv_font_montserrat_28);
+LV_FONT_DECLARE(lv_font_montserrat_30);
+LV_FONT_DECLARE(lv_font_montserrat_32);
+LV_FONT_DECLARE(lv_font_unscii_8);
+LV_FONT_DECLARE(lv_font_unscii_16);
+
+const lv_font_t *get_editor_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+
+    if (settings.editor_font_index == 1) return &lv_font_unscii_8;
+    if (settings.editor_font_index == 2) return &lv_font_unscii_16;
+
+    // Default to Montserrat
+    switch (settings.editor_font_size) {
+    case 10: return &lv_font_montserrat_10;
+    case 12: return &lv_font_montserrat_12;
+    case 14: return &lv_font_montserrat_14;
+    case 16: return &lv_font_montserrat_16;
+    case 18: return &lv_font_montserrat_18;
+    case 20: return &lv_font_montserrat_20;
+    case 22: return &lv_font_montserrat_22;
+    case 24: return &lv_font_montserrat_24;
+    case 26: return &lv_font_montserrat_26;
+    case 28: return &lv_font_montserrat_28;
+    case 30: return &lv_font_montserrat_30;
+    case 32: return &lv_font_montserrat_32;
+    default: return &lv_font_montserrat_14;
+    }
+}
+
+const lv_font_t *get_small_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+
+    if (settings.editor_font_index == 1) return &lv_font_unscii_8;
+    if (settings.editor_font_index == 2) return &lv_font_unscii_8; // Unscii 16 -> 8
+
+    // For Montserrat, go 2 sizes smaller, min 10
+    int size = settings.editor_font_size - 2;
+    if (size < 10) size = 10;
+
+    switch (size) {
+    case 10: return &lv_font_montserrat_10;
+    case 12: return &lv_font_montserrat_12;
+    case 14: return &lv_font_montserrat_14;
+    case 16: return &lv_font_montserrat_16;
+    case 18: return &lv_font_montserrat_18;
+    case 20: return &lv_font_montserrat_20;
+    case 22: return &lv_font_montserrat_22;
+    case 24: return &lv_font_montserrat_24;
+    case 26: return &lv_font_montserrat_26;
+    case 28: return &lv_font_montserrat_28;
+    case 30: return &lv_font_montserrat_30;
+    case 32: return &lv_font_montserrat_32;
+    default: return &lv_font_montserrat_12;
+    }
 }

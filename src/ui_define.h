@@ -82,6 +82,11 @@ void enable_keyboard();
 
 void ui_text_editor_open_file(const char *path);
 
+extern app_t ui_blog_main;
+
+const lv_font_t *get_editor_font();
+const lv_font_t *get_small_font();
+
 lv_obj_t *create_floating_button(lv_event_cb_t event_cb, void* user_data);
 lv_obj_t *create_menu(lv_obj_t *parent, lv_event_cb_t event_cb);
 lv_obj_t *create_radius_button(lv_obj_t *parent, const void *image, lv_event_cb_t event_cb, void* user_data);

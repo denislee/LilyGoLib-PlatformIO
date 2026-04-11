@@ -1379,7 +1379,6 @@ bool hw_save_file(const char *path, const char *content)
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     File f;
     bool lock = false;
-
     if (HW_SD_ONLINE & hw_get_device_online()) {
         instance.lockSPI();
         f = SD.open(str, FILE_WRITE);
@@ -1398,6 +1397,25 @@ bool hw_save_file(const char *path, const char *content)
     return true;
 #else
     printf("Save to file: %s, content: %s\n", path, content);
+    return true;
+#endif
+}
+
+bool hw_delete_file(const char *path)
+{
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    bool res = false;
+    if (HW_SD_ONLINE & hw_get_device_online()) {
+        instance.lockSPI();
+        res = SD.remove(str);
+        instance.unlockSPI();
+    } else {
+        res = FFat.remove(str);
+    }
+    return res;
+#else
+    printf("Delete file: %s\n", path);
     return true;
 #endif
 }

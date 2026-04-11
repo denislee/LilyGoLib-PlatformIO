@@ -631,6 +631,13 @@ void hw_set_volume(uint8_t volume);
 bool hw_save_file(const char *path, const char *content);
 
 /**
+ * @brief Delete a file.
+ * @param path The path of the file to delete.
+ * @return True if successful, false otherwise.
+ */
+bool hw_delete_file(const char *path);
+
+/**
  * @brief Read content from a file.
  * @param path The path of the file to read.
  * @param content Reference to a string to store the content.
