@@ -91,6 +91,11 @@ typedef struct {
     lv_obj_t *wifi_rssi_label;
     lv_obj_t *batt_voltage_label;
 
+    lv_obj_t *wifi_ssid_label;
+    lv_obj_t *ip_info_label;
+    lv_obj_t *sd_size_label;
+    bool info_loaded;
+
 } sys_label_t;
 
 static sys_label_t sys_label;
@@ -106,6 +111,32 @@ static void sys_timer_event_cb(lv_timer_t*t)
         lv_label_set_text_fmt(sys_label.wifi_rssi_label, "%d", hw_get_wifi_rssi());
     }
     lv_label_set_text_fmt(sys_label.batt_voltage_label, "%d mV", hw_get_battery_voltage());
+
+    if (!sys_label.info_loaded) {
+        string wifi_ssid = "N/A";
+        hw_get_wifi_ssid(wifi_ssid);
+        if (sys_label.wifi_ssid_label) lv_label_set_text(sys_label.wifi_ssid_label, wifi_ssid.c_str());
+
+        string ip_info = "N/A";
+        hw_get_ip_address(ip_info);
+        if (sys_label.ip_info_label) lv_label_set_text(sys_label.ip_info_label, ip_info.c_str());
+
+        float size = hw_get_sd_size();
+        char buffer[64];
+#if defined(HAS_SD_CARD_SOCKET)
+        const char *unit = "GB";
+#else
+        const char *unit = "MB";
+#endif
+        if (size > 0) {
+            snprintf(buffer, sizeof(buffer), "%.2f %s", size, unit);
+        } else {
+            snprintf(buffer, sizeof(buffer), "N/A");
+        }
+        if (sys_label.sd_size_label) lv_label_set_text(sys_label.sd_size_label, buffer);
+
+        sys_label.info_loaded = true;
+    }
 }
 
 static long map_r(long x, long in_min, long in_max, long out_min, long out_max)
@@ -252,20 +283,39 @@ static void charge_limit_cb(lv_event_t *e)
     lv_label_set_text(slider_label, val ? " On " : " Off ");
 }
 
-
-static void spinbox_key_event_cb(lv_event_t *e)
+static void spinbox_event_cb(lv_event_t *e)
 {
-    uint32_t key = lv_event_get_key(e);
+    lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *sb = (lv_obj_t *)lv_event_get_target(e);
-    if (key == 'a' || key == 'A') lv_spinbox_step_prev(sb);
-    else if (key == 'd' || key == 'D') lv_spinbox_step_next(sb);
-    else if (key == 'w' || key == 'W' || key == '+') lv_spinbox_increment(sb);
-    else if (key == 's' || key == 'S' || key == '-') lv_spinbox_decrement(sb);
-    else if (key == 'q' || key == 'Q' || key == LV_KEY_UP) {
-        lv_group_focus_prev(lv_obj_get_group(sb));
-    }
-    else if (key == 'e' || key == 'E' || key == LV_KEY_DOWN || key == LV_KEY_ENTER) {
-        lv_group_focus_next(lv_obj_get_group(sb));
+    lv_group_t *g = lv_obj_get_group(sb);
+
+    if (code == LV_EVENT_CLICKED) {
+        lv_indev_t *indev = lv_indev_get_act();
+        if (indev && lv_indev_get_type(indev) != LV_INDEV_TYPE_ENCODER) {
+            bool editing = lv_group_get_editing(g);
+            lv_group_set_editing(g, !editing);
+        }
+    } else if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        lv_indev_t *indev = lv_indev_get_act();
+        bool editing = lv_group_get_editing(g);
+
+        if (indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER && key == LV_KEY_ENTER) {
+            lv_group_set_editing(g, !editing);
+            lv_event_stop_processing(e);
+            return;
+        }
+
+        if (key == 'a' || key == 'A') lv_spinbox_step_prev(sb);
+        else if (key == 'd' || key == 'D') lv_spinbox_step_next(sb);
+        else if (key == 'w' || key == 'W' || key == '+') lv_spinbox_increment(sb);
+        else if (key == 's' || key == 'S' || key == '-') lv_spinbox_decrement(sb);
+        else if (key == 'q' || key == 'Q' || key == LV_KEY_UP) {
+            lv_group_focus_prev(g);
+        }
+        else if (key == 'e' || key == 'E' || key == LV_KEY_DOWN || key == LV_KEY_ENTER) {
+            lv_group_focus_next(g);
+        }
     }
 }
 
@@ -334,7 +384,7 @@ static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
         lv_spinbox_set_digit_format(sb, digits, 0);
         lv_spinbox_set_value(sb, val);
         lv_obj_set_width(sb, digits == 4 ? 70 : 50);
-        lv_obj_add_event_cb(sb, spinbox_key_event_cb, LV_EVENT_KEY, NULL);
+        lv_obj_add_event_cb(sb, spinbox_event_cb, LV_EVENT_ALL, NULL);
         register_subpage_group_obj(sub_page, sb);
         return sb;
     };
@@ -502,6 +552,7 @@ static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
 
 static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
 {
+    sys_label.info_loaded = false;
     lv_obj_t *cont = lv_menu_cont_create(main_page);
     style_menu_item_icon(cont, LV_SYMBOL_LIST, "System Info");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
@@ -547,35 +598,20 @@ static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
     }
     add_info_row("MAC", has_mac ? buffer : "N/A");
 
-    string wifi_ssid = "N/A";
-    hw_get_wifi_ssid(wifi_ssid);
-    add_info_row("WiFi", wifi_ssid.c_str());
-
+    sys_label.wifi_ssid_label = add_info_row("WiFi", "Loading...");
     sys_label.datetime_label = add_info_row("RTC", "00:00:00");
-
-    static string ip_info = "N/A";
-    hw_get_ip_address(ip_info);
-    add_info_row("IP", ip_info.c_str());
-
+    sys_label.ip_info_label = add_info_row("IP", "Loading...");
     sys_label.wifi_rssi_label = add_info_row("RSSI", "N/A");
 
     snprintf(buffer, sizeof(buffer), "%d mV", hw_get_battery_voltage());
     sys_label.batt_voltage_label = add_info_row("Battery", buffer);
 
-    float size = hw_get_sd_size();
 #if defined(HAS_SD_CARD_SOCKET)
     const char *storage_name = "SD Card";
-    const char *unit = "GB";
 #else
     const char *storage_name = "Storage";
-    const char *unit = "MB";
 #endif
-    if (size > 0) {
-        snprintf(buffer, sizeof(buffer), "%.2f %s", size, unit);
-    } else {
-        snprintf(buffer, sizeof(buffer), "N/A");
-    }
-    add_info_row(storage_name, buffer);
+    sys_label.sd_size_label = add_info_row(storage_name, "Loading...");
 
     snprintf(buffer, sizeof(buffer), "%d.%d.%d", lv_version_major(), lv_version_minor(), lv_version_patch());
     add_info_row("LVGL", buffer);
@@ -672,6 +708,11 @@ static void settings_exit_cb(lv_event_t *e)
     }
     
     ui_sys_exit(NULL);
+    
+    if (menu) {
+        lv_obj_remove_event_cb(menu, settings_page_changed_cb);
+    }
+
     menu_show();
     lv_refr_now(NULL); // Force refresh to show menu first
 

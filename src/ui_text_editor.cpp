@@ -143,16 +143,33 @@ static void text_area_event_cb(lv_event_t *e)
         content_dirty = true;
         update_word_count();
     } else if (code == LV_EVENT_CLICKED) {
-        bool editing = lv_group_get_editing(g);
-        lv_group_set_editing(g, !editing);
+        lv_indev_t *indev = lv_indev_get_act();
+        if (indev && lv_indev_get_type(indev) != LV_INDEV_TYPE_ENCODER) {
+            // Only toggle on click if it's NOT the encoder (e.g., touchscreen)
+            // Encoder toggle is handled in LV_EVENT_KEY to prevent newline insertion
+            bool editing = lv_group_get_editing(g);
+            lv_group_set_editing(g, !editing);
+        }
     } else if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
+        lv_indev_t *indev = lv_indev_get_act();
+        bool editing = lv_group_get_editing(g);
+
+        if (indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER && key == LV_KEY_ENTER) {
+            lv_group_set_editing(g, !editing);
+            if (editing) {
+                // Remove the newline character inserted by the default textarea handler
+                lv_textarea_delete_char((lv_obj_t *)lv_event_get_target(e));
+            }
+            lv_event_stop_processing(e);
+            return;
+        }
+
         if (key == 0x1E) {
             lv_event_stop_processing(e);
             return;
         }
         if (key == LV_KEY_ESC) {
-            bool editing = lv_group_get_editing(g);
             if (editing) {
                 lv_group_set_editing(g, false);
             } else {
