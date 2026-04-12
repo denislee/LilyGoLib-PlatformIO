@@ -710,7 +710,7 @@ static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_p
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_row(sub_page, 2, 0);
 
-    const char *font_options = "Montserrat\nUnscii 8\nUnscii 16";
+    const char *font_options = "Montserrat\nUnscii 8\nUnscii 16\nCourier";
     lv_obj_t *dd_face = create_dropdown(sub_page, NULL, "Font Face", font_options, local_param.editor_font_index, editor_font_face_cb);
     register_subpage_group_obj(sub_page, dd_face);
 

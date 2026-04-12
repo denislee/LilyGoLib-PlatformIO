@@ -486,6 +486,9 @@ LV_FONT_DECLARE(lv_font_montserrat_30);
 LV_FONT_DECLARE(lv_font_montserrat_32);
 LV_FONT_DECLARE(lv_font_unscii_8);
 LV_FONT_DECLARE(lv_font_unscii_16);
+LV_FONT_DECLARE(ui_font_courier_16);
+LV_FONT_DECLARE(ui_font_courier_20);
+LV_FONT_DECLARE(ui_font_courier_24);
 
 const lv_font_t *get_editor_font()
 {
@@ -494,6 +497,11 @@ const lv_font_t *get_editor_font()
 
     if (settings.editor_font_index == 1) return &lv_font_unscii_8;
     if (settings.editor_font_index == 2) return &lv_font_unscii_16;
+    if (settings.editor_font_index == 3) {
+        if (settings.editor_font_size <= 16) return &ui_font_courier_16;
+        if (settings.editor_font_size <= 20) return &ui_font_courier_20;
+        return &ui_font_courier_24;
+    }
 
     // Default to Montserrat
     switch (settings.editor_font_size) {
@@ -520,6 +528,10 @@ const lv_font_t *get_small_font()
 
     if (settings.editor_font_index == 1) return &lv_font_unscii_8;
     if (settings.editor_font_index == 2) return &lv_font_unscii_8; // Unscii 16 -> 8
+    if (settings.editor_font_index == 3) {
+        if (settings.editor_font_size <= 20) return &ui_font_courier_16;
+        return &ui_font_courier_20;
+    }
 
     // For Montserrat, go 2 sizes smaller, min 10
     int size = settings.editor_font_size - 2;
