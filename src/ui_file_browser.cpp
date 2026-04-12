@@ -73,6 +73,7 @@ void ui_file_browser_refresh()
 
 void ui_file_browser_enter(lv_obj_t *parent)
 {
+    if (menu != NULL) return;
     parent_obj = parent;
 
     menu = create_menu(parent, back_event_handler);
@@ -95,7 +96,19 @@ void ui_file_browser_enter(lv_obj_t *parent)
 
 #ifdef USING_TOUCHPAD
     quit_btn = create_floating_button([](lv_event_t *e) {
-        lv_obj_send_event(lv_menu_get_main_header_back_button(menu), LV_EVENT_CLICKED, NULL);
+        lv_obj_t *page = lv_menu_get_cur_main_page(menu);
+        if (lv_menu_back_button_is_root(menu, page)) {
+             // If we are at root, trigger back event which handles cleanup
+             lv_obj_send_event(lv_menu_get_main_header_back_button(menu), LV_EVENT_CLICKED, NULL);
+        } else {
+             // Otherwise go back to root page
+             lv_menu_set_page(menu, NULL); // In lv_menu NULL usually means root/previous depending on setup
+             // Actually, the back_event_handler checks for root.
+             // For simplicity in this specific browser (which only has one page), 
+             // we just trigger the back button.
+             lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
+             if (bb) lv_obj_send_event(bb, LV_EVENT_CLICKED, NULL);
+        }
     }, NULL);
 #endif
 }

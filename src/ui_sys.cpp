@@ -27,6 +27,8 @@ static lv_obj_t *quit_btn = NULL;
 static lv_obj_t *settings_main_page = NULL;
 static lv_obj_t *settings_exit_btn = NULL;
 
+void ui_sys_exit(lv_obj_t *parent);
+
 #define MAX_MAIN_PAGE_ITEMS 8
 static lv_obj_t *main_page_group_items[MAX_MAIN_PAGE_ITEMS];
 static uint8_t main_page_group_count = 0;
@@ -288,7 +290,7 @@ static void save_datetime_cb(lv_event_t *e)
     timeinfo.tm_sec = 0;
 
     hw_set_date_time(timeinfo);
-    lv_obj_send_event(lv_menu_get_main_header_back_button(menu), LV_EVENT_CLICKED, NULL);
+    lv_menu_set_page(menu, settings_main_page);
 }
 
 static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
@@ -669,15 +671,20 @@ static void settings_exit_cb(lv_event_t *e)
         timer = NULL;
     }
     
+    ui_sys_exit(NULL);
     menu_show();
     lv_refr_now(NULL); // Force refresh to show menu first
 
     lv_obj_clean(menu);
     lv_obj_del(menu);
+    menu = NULL;
+    settings_main_page = NULL;
+    settings_exit_btn = NULL;
     hw_set_user_setting(local_param);
 
     if (quit_btn) {
         lv_obj_del_async(quit_btn);
+        quit_btn = NULL;
     }
 }
 
@@ -721,6 +728,7 @@ static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_p
 
 void ui_sys_enter(lv_obj_t *parent)
 {
+    if (menu != NULL) return;
     menu_g = lv_group_get_default();
 
     enable_keyboard();
@@ -728,6 +736,11 @@ void ui_sys_enter(lv_obj_t *parent)
     hw_get_user_setting(local_param);
 
     menu = lv_menu_create(parent);
+#if LVGL_VERSION_MAJOR == 9
+    lv_menu_set_mode_root_back_button(menu, LV_MENU_ROOT_BACK_BUTTON_DISABLED);
+#else
+    lv_menu_set_mode_root_back_btn(menu, LV_MENU_ROOT_BACK_BTN_DISABLED);
+#endif
     lv_obj_set_size(menu, LV_PCT(100), LV_PCT(100));
     lv_obj_center(menu);
 
@@ -774,7 +787,12 @@ void ui_sys_enter(lv_obj_t *parent)
 
 #ifdef USING_TOUCHPAD
     quit_btn  = create_floating_button([](lv_event_t*e) {
-        lv_obj_send_event(lv_menu_get_main_header_back_button(menu), LV_EVENT_CLICKED, lv_event_get_target_obj(e));
+        lv_obj_t *page = lv_menu_get_cur_main_page(menu);
+        if (page == settings_main_page) {
+             settings_exit_cb(NULL);
+        } else {
+             lv_menu_set_page(menu, settings_main_page);
+        }
     }, NULL);
 #endif
 }

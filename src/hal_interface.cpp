@@ -674,6 +674,16 @@ static void battery_history_timer_cb(lv_timer_t *timer)
 void hw_init()
 {
 #ifdef ARDUINO
+    if (instance.getDeviceProbe() & HW_RTC_ONLINE) {
+        struct tm timeinfo;
+        instance.rtc.getDateTime(&timeinfo);
+        struct timeval tv;
+        tv.tv_sec = mktime(&timeinfo);
+        tv.tv_usec = 0;
+        settimeofday(&tv, NULL);
+        log_i("System time synchronized with RTC");
+    }
+
     playerQueue =  xQueueCreate(2, sizeof(audio_params_t));
     playerEvent =  xEventGroupCreate();
 
@@ -1375,22 +1385,30 @@ bool hw_save_file(const char *path, const char *content)
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     File f;
     bool lock = false;
-    if (HW_SD_ONLINE & hw_get_device_online()) {
+    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
+    
+    printf("Attempting to save to %s (SD: %s)\n", str.c_str(), is_sd ? "Yes" : "No");
+
+    if (is_sd) {
         instance.lockSPI();
-        f = SD.open(str, FILE_WRITE);
+        f = SD.open(str, "w"); // Use "w" for overwrite
         lock = true;
     } else {
-        f = FFat.open(str, FILE_WRITE);
+        f = FFat.open(str, "w"); // Use "w" for overwrite
     }
 
     if (!f) {
+        printf("Failed to open file for writing: %s\n", str.c_str());
         if (lock) instance.unlockSPI();
         return false;
     }
-    f.print(content);
+    
+    size_t written = f.print(content);
     f.close();
     if (lock) instance.unlockSPI();
-    return true;
+    
+    printf("Saved %u bytes to %s\n", (unsigned int)written, str.c_str());
+    return (written > 0 || strlen(content) == 0);
 #else
     printf("Save to file: %s, content: %s\n", path, content);
     return true;
@@ -1422,8 +1440,11 @@ bool hw_read_file(const char *path, string &content)
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     File f;
     bool lock = false;
+    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
 
-    if (HW_SD_ONLINE & hw_get_device_online()) {
+    printf("Attempting to read %s (SD: %s)\n", str.c_str(), is_sd ? "Yes" : "No");
+
+    if (is_sd) {
         instance.lockSPI();
         f = SD.open(str, FILE_READ);
         lock = true;
@@ -1432,6 +1453,7 @@ bool hw_read_file(const char *path, string &content)
     }
 
     if (!f) {
+        printf("Failed to open file for reading: %s\n", str.c_str());
         if (lock) instance.unlockSPI();
         return false;
     }
@@ -1442,6 +1464,7 @@ bool hw_read_file(const char *path, string &content)
     }
     f.close();
     if (lock) instance.unlockSPI();
+    printf("Read %u bytes from %s\n", (unsigned int)size, str.c_str());
     return true;
 #else
     printf("Read from file: %s\n", path);
@@ -1491,7 +1514,12 @@ void hw_get_txt_files(vector<string> &list)
     list_files(file_infos, FFat, "/", ".txt");
 
     std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo& a, const FileInfo& b) {
-        return a.time > b.time;
+        if (a.time != b.time) {
+            return a.time > b.time;
+        }
+        // If timestamps are identical or both 0, fall back to sorting by filename
+        // descending (since our filenames start with YYYYMMDD_HHMMSS)
+        return a.name > b.name;
     });
 
     for (const auto& fi : file_infos) {

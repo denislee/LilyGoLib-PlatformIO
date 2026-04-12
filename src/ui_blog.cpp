@@ -20,9 +20,11 @@ static std::vector<std::string> blog_files_cache;
 static bool cache_valid = false;
 
 void ui_blog_enter(lv_obj_t *parent);
+void ui_blog_exit(lv_obj_t *parent);
 
 static void do_exit()
 {
+    ui_blog_exit(NULL);
     lv_obj_clean(menu);
     lv_obj_del(menu);
     menu = NULL;
@@ -131,6 +133,7 @@ static void delete_msgbox_cb(lv_event_t *e)
 
     if (deleted && ui_blog_main.setup_func_cb) {
         // Now refresh the UI
+        ui_blog_exit(NULL);
         lv_obj_clean(menu);
         lv_obj_del(menu);
         menu = NULL;
@@ -215,6 +218,7 @@ static std::string parse_filename_to_human(const std::string &filename)
 
 void ui_blog_enter(lv_obj_t *parent)
 {
+    if (menu != NULL) return;
     enable_keyboard();
     parent_obj = parent;
     menu = create_menu(parent, back_event_handler);
@@ -239,6 +243,8 @@ void ui_blog_enter(lv_obj_t *parent)
 
     if (!cache_valid) {
         hw_get_txt_files(blog_files_cache);
+        // Ensure newest (latest YYYYMMDD_HHMMSS) are on top
+        std::sort(blog_files_cache.begin(), blog_files_cache.end(), std::greater<std::string>());
         cache_valid = true;
     }
 

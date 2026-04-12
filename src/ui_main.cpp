@@ -113,8 +113,8 @@ static void ui_poll_timer_callback(lv_timer_t *t)
         // Update Time & Date
         struct tm timeinfo;
         hw_get_date_time(timeinfo);
-        lv_label_set_text_fmt(stat_time_label, "%02d/%02d %02d:%02d", 
-                            timeinfo.tm_mon + 1, timeinfo.tm_mday,
+        lv_label_set_text_fmt(stat_time_label, "%02d/%02d/%04d %02d:%02d", 
+                            timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900,
                             timeinfo.tm_hour, timeinfo.tm_min);
 
         // Update Battery
