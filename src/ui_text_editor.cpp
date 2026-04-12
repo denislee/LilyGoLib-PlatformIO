@@ -13,6 +13,8 @@ static lv_obj_t *quit_btn = NULL;
 static lv_obj_t *exit_cont = NULL;
 static lv_obj_t *word_count_label = NULL;
 static string current_file_path = "";
+static lv_timer_t *autosave_timer = NULL;
+static bool content_dirty = false;
 
 static void update_word_count()
 {
@@ -32,12 +34,17 @@ static void update_word_count()
         }
     }
     
-    lv_label_set_text_fmt(word_count_label, "%zu words | %zu chars", words, chars);
+    lv_label_set_text_fmt(word_count_label, "%zu words | %zu chars%s", words, chars, content_dirty ? " *" : "");
 }
 
-static void save_content()
+static void save_content(bool is_autosave = false)
 {
     if (!text_area) return;
+    
+    if (is_autosave && !content_dirty) {
+        return; // Nothing to save
+    }
+
     const char *txt = lv_textarea_get_text(text_area);
     
     // Check if content is empty or only whitespace
@@ -73,15 +80,31 @@ static void save_content()
     
     if (success) {
         printf("Save successful\n");
+        content_dirty = false;
+        if (current_file_path.empty()) {
+            current_file_path = target_path;
+        }
+        update_word_count(); // to clear the asterisk
     } else {
         printf("Save failed!\n");
-        ui_msg_pop_up("Save", "Failed to save file!");
+        if (!is_autosave) {
+            ui_msg_pop_up("Save", "Failed to save file!");
+        }
     }
+}
+
+static void autosave_timer_cb(lv_timer_t *t)
+{
+    save_content(true);
 }
 
 static void do_exit()
 {
-    save_content();
+    if (autosave_timer) {
+        lv_timer_del(autosave_timer);
+        autosave_timer = NULL;
+    }
+    save_content(false);
     lv_obj_clean(menu);
     lv_obj_del(menu);
     menu = NULL;
@@ -117,6 +140,7 @@ static void text_area_event_cb(lv_event_t *e)
     lv_group_t *g = (lv_group_t *)lv_obj_get_group(obj);
 
     if (code == LV_EVENT_VALUE_CHANGED) {
+        content_dirty = true;
         update_word_count();
     } else if (code == LV_EVENT_CLICKED) {
         bool editing = lv_group_get_editing(g);
@@ -144,6 +168,9 @@ void ui_text_editor_enter(lv_obj_t *parent)
 {
     if (menu != NULL) return;
     enable_keyboard();
+
+    content_dirty = false;
+    autosave_timer = lv_timer_create(autosave_timer_cb, 60000, NULL);
 
     menu = create_menu(parent, back_event_handler);
 
@@ -203,6 +230,7 @@ void ui_text_editor_open_file(const char *path)
     string content;
     if (hw_read_file(path, content)) {
         lv_textarea_set_text(text_area, content.c_str());
+        content_dirty = false;
         update_word_count();
     }
 }
