@@ -85,6 +85,8 @@ static void activate_subpage_group(lv_obj_t *page)
     }
 }
 
+static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool initial_state, lv_event_cb_t cb);
+
 typedef struct {
 
     lv_obj_t *datetime_label;
@@ -278,11 +280,11 @@ static void otg_output_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (code == LV_EVENT_VALUE_CHANGED) {
-        bool turnOn = lv_slider_get_value(obj) == 1;
+        bool turnOn = lv_obj_has_state(obj, LV_STATE_CHECKED);
         lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
         printf("State: %s\n", turnOn ? "On" : "Off");
         if (hw_set_otg(turnOn) == false) {
-            lv_slider_set_value(obj, 0, LV_ANIM_OFF);
+            lv_obj_remove_state(obj, LV_STATE_CHECKED);
             if (slider_label) lv_label_set_text(slider_label, " Off ");
         } else {
             if (slider_label) lv_label_set_text(slider_label, turnOn ? " On " : " Off ");
@@ -295,7 +297,7 @@ static void charger_enable_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (code == LV_EVENT_VALUE_CHANGED) {
-        bool turnOn = lv_slider_get_value(obj) == 1;
+        bool turnOn = lv_obj_has_state(obj, LV_STATE_CHECKED);
         lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
         local_param.charger_enable = turnOn;
         printf("State: %s\n", turnOn ? "On" : "Off");
@@ -317,9 +319,9 @@ static void charge_limit_cb(lv_event_t *e)
 {
     lv_obj_t *slider = (lv_obj_t *)lv_event_get_target(e);
     lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(slider);
-    int32_t val = lv_slider_get_value(slider);
-    local_param.charge_limit_en = val;
-    lv_label_set_text(slider_label, val ? " On " : " Off ");
+    bool turnOn = lv_obj_has_state(slider, LV_STATE_CHECKED);
+    local_param.charge_limit_en = turnOn;
+    if (slider_label) lv_label_set_text(slider_label, turnOn ? " On " : " Off ");
 }
 
 static void spinbox_event_cb(lv_event_t *e)
@@ -547,43 +549,27 @@ static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
     uint8_t total_charge_level = hw_get_charge_level_nums();
     uint8_t curr_charge_level = hw_get_charger_current_level();
 
+    lv_obj_t *btn;
+
     if (hw_has_otg_function()) {
-        lv_obj_t *slider = create_slider(sub_page, NULL, "OTG Output",
-                                         0, 1, enableOtg ? 1 : 0,
-                                         otg_output_cb, LV_EVENT_VALUE_CHANGED);
-        lv_obj_t *parent = lv_obj_get_parent(slider);
-        lv_obj_t *slider_label = lv_label_create(parent);
-        lv_label_set_text(slider_label, enableOtg ? " On " : " Off ");
-        lv_obj_set_user_data(slider, slider_label);
-        register_subpage_group_obj(sub_page, slider);
+        btn = create_toggle_btn_row(sub_page, "OTG Output", enableOtg, otg_output_cb);
+        register_subpage_group_obj(sub_page, btn);
     }
 
-    lv_obj_t *slider = create_slider(sub_page, NULL, "Charging",
-                                     0, 1, local_param.charger_enable ? 1 : 0,
-                                     charger_enable_cb, LV_EVENT_VALUE_CHANGED);
-    lv_obj_t *parent = lv_obj_get_parent(slider);
-    lv_obj_t *slider_label = lv_label_create(parent);
-    lv_label_set_text(slider_label, local_param.charger_enable ? " On " : " Off ");
-    lv_obj_set_user_data(slider, slider_label);
-    register_subpage_group_obj(sub_page, slider);
+    btn = create_toggle_btn_row(sub_page, "Charging", local_param.charger_enable, charger_enable_cb);
+    register_subpage_group_obj(sub_page, btn);
 
-    slider = create_slider(sub_page, NULL, "Current",
+    lv_obj_t *slider = create_slider(sub_page, NULL, "Current",
                                      1, total_charge_level, curr_charge_level,
                                      charger_current_cb, LV_EVENT_VALUE_CHANGED);
-    parent = lv_obj_get_parent(slider);
-    slider_label = lv_label_create(parent);
+    lv_obj_t *parent = lv_obj_get_parent(slider);
+    lv_obj_t *slider_label = lv_label_create(parent);
     lv_label_set_text_fmt(slider_label, "%umA", local_param.charger_current);
     lv_obj_set_user_data(slider, slider_label);
     register_subpage_group_obj(sub_page, slider);
 
-    slider = create_slider(sub_page, NULL, "Limit 80%",
-                                     0, 1, local_param.charge_limit_en ? 1 : 0,
-                                     charge_limit_cb, LV_EVENT_VALUE_CHANGED);
-    parent = lv_obj_get_parent(slider);
-    slider_label = lv_label_create(parent);
-    lv_label_set_text(slider_label, local_param.charge_limit_en ? " On " : " Off ");
-    lv_obj_set_user_data(slider, slider_label);
-    register_subpage_group_obj(sub_page, slider);
+    btn = create_toggle_btn_row(sub_page, "Limit 80%", local_param.charge_limit_en, charge_limit_cb);
+    register_subpage_group_obj(sub_page, btn);
 
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
@@ -812,6 +798,95 @@ static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_p
     return cont;
 }
 
+static void toggle_child_focus_cb(lv_event_t * e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t * obj = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t * parent = lv_obj_get_parent(obj);
+    if(code == LV_EVENT_FOCUSED) {
+        lv_obj_add_state(parent, LV_STATE_FOCUSED);
+        lv_obj_add_state(parent, LV_STATE_FOCUS_KEY);
+    } else if(code == LV_EVENT_DEFOCUSED) {
+        lv_obj_remove_state(parent, LV_STATE_FOCUSED);
+        lv_obj_remove_state(parent, LV_STATE_FOCUS_KEY);
+    }
+}
+
+static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool initial_state, lv_event_cb_t cb)
+{
+    lv_obj_t *obj = create_text(parent, NULL, txt, LV_MENU_ITEM_BUILDER_VARIANT_2);
+
+    lv_obj_t *btn = lv_btn_create(obj);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE); 
+    if (initial_state) lv_obj_add_state(btn, LV_STATE_CHECKED);
+    
+    lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
+    lv_obj_set_flex_grow(btn, 1);
+    
+    // Fix width to align "On/Off" texts to the right, like the standard labels
+    lv_obj_set_width(btn, 60);
+    lv_obj_set_flex_grow(btn, 0);
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, initial_state ? " On " : " Off ");
+    lv_obj_center(label);
+    
+    lv_obj_set_user_data(btn, label);
+    
+    lv_obj_add_event_cb(btn, toggle_child_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(btn, toggle_child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    return btn;
+}
+
+static void wifi_enable_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    hw_set_wifi_enable(en);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " On " : " Off ");
+}
+
+static void bt_enable_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    hw_set_bt_enable(en);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " On " : " Off ");
+}
+
+static void radio_enable_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    hw_set_radio_enable(en);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " On " : " Off ");
+}
+
+static lv_obj_t *create_subpage_connectivity(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_WIFI, "Connectivity");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+
+    lv_obj_t *btn;
+
+    btn = create_toggle_btn_row(sub_page, "WiFi", hw_get_wifi_enable(), wifi_enable_cb);
+    register_subpage_group_obj(sub_page, btn);
+
+    btn = create_toggle_btn_row(sub_page, "Bluetooth", hw_get_bt_enable(), bt_enable_cb);
+    register_subpage_group_obj(sub_page, btn);
+
+    btn = create_toggle_btn_row(sub_page, "Radio", hw_get_radio_enable(), radio_enable_cb);
+    register_subpage_group_obj(sub_page, btn);
+
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
 void ui_sys_enter(lv_obj_t *parent)
 {
     if (menu != NULL) return;
@@ -865,6 +940,9 @@ void ui_sys_enter(lv_obj_t *parent)
     add_main_page_group_item(cont);
 
     cont = create_subpage_otg(menu, main_page);
+    add_main_page_group_item(cont);
+
+    cont = create_subpage_connectivity(menu, main_page);
     add_main_page_group_item(cont);
 
     settings_main_page = main_page;

@@ -258,6 +258,9 @@ typedef struct {
     uint8_t editor_font_size;
     uint8_t editor_font_index;
     uint8_t charge_limit_en;
+    uint8_t wifi_enable;
+    uint8_t bt_enable;
+    uint8_t radio_enable;
 } user_setting_params_t;
 
 /**
@@ -675,6 +678,13 @@ void hw_get_txt_files(vector<string> &list);
  * @retval Current volume level
  */
 uint8_t hw_get_volume();
+
+bool hw_get_wifi_enable();
+void hw_set_wifi_enable(bool en);
+bool hw_get_bt_enable();
+void hw_set_bt_enable(bool en);
+bool hw_get_radio_enable();
+void hw_set_radio_enable(bool en);
 
 /**
  * @brief Stop the music playback.

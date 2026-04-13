@@ -662,9 +662,7 @@ void LilyGoLoRaPager::lightSleep(WakeupSource_t wakeup_src)
     powerControl(POWER_KEYBOARD, false);
 
     uninstallSD();
-    if (io.digitalRead(EXPANDS_SD_DET)) {
-        powerControl(POWER_SD_CARD, false);
-    }
+    powerControl(POWER_SD_CARD, false);
 
 
 #ifdef EXPANDS_GPS_RST
@@ -677,7 +675,8 @@ void LilyGoLoRaPager::lightSleep(WakeupSource_t wakeup_src)
     gpio_reset_pin((gpio_num_t )GPS_TX);
     gpio_reset_pin((gpio_num_t )GPS_PPS);
     pinMode(GPS_RX, OPEN_DRAIN);
-    pinMode(GPS_RX, OPEN_DRAIN);
+    pinMode(GPS_TX, OPEN_DRAIN);
+    pinMode(GPS_PPS, OPEN_DRAIN);
 
     sleepDisplay();
 

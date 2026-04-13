@@ -84,7 +84,11 @@ void setup()
 
     // Defer WiFi init until after GUI is showing
     sntp_set_time_sync_notification_cb(time_available);
-    WiFi.mode(WIFI_STA);
+    if (hw_get_wifi_enable()) {
+        WiFi.mode(WIFI_STA);
+    } else {
+        WiFi.mode(WIFI_OFF);
+    }
     WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
     WiFi.setAutoReconnect(false);
 

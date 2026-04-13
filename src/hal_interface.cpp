@@ -771,6 +771,45 @@ void hw_set_user_setting(user_setting_params_t &param)
 #endif
 }
 
+bool hw_get_wifi_enable() { return user_setting.wifi_enable; }
+void hw_set_wifi_enable(bool en) {
+    user_setting.wifi_enable = en;
+    hw_set_user_setting(user_setting);
+#ifdef ARDUINO
+    if (en) {
+        WiFi.mode(WIFI_STA);
+    } else {
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+    }
+#endif
+}
+
+bool hw_get_bt_enable() { return user_setting.bt_enable; }
+void hw_set_bt_enable(bool en) {
+    user_setting.bt_enable = en;
+    hw_set_user_setting(user_setting);
+    if (en) {
+        hw_set_ble_kb_enable();
+    } else {
+        hw_set_ble_kb_disable();
+    }
+}
+
+bool hw_get_radio_enable() { return user_setting.radio_enable; }
+void hw_set_radio_enable(bool en) {
+    user_setting.radio_enable = en;
+    hw_set_user_setting(user_setting);
+    if (en) {
+        hw_set_radio_default();
+    } else {
+        radio_params_t params;
+        hw_get_radio_params(params);
+        params.mode = RADIO_DISABLE;
+        hw_set_radio_params(params);
+    }
+}
+
 const uint32_t hw_get_disp_timeout_ms()
 {
     if (user_setting.disp_timeout_second == 0) {
