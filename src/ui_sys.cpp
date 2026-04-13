@@ -94,6 +94,11 @@ typedef struct {
     lv_obj_t *wifi_ssid_label;
     lv_obj_t *ip_info_label;
     lv_obj_t *sd_size_label;
+    lv_obj_t *storage_used_label;
+    lv_obj_t *storage_free_label;
+    lv_obj_t *local_storage_total_label;
+    lv_obj_t *local_storage_used_label;
+    lv_obj_t *local_storage_free_label;
     bool info_loaded;
 
 } sys_label_t;
@@ -121,19 +126,53 @@ static void sys_timer_event_cb(lv_timer_t*t)
         hw_get_ip_address(ip_info);
         if (sys_label.ip_info_label) lv_label_set_text(sys_label.ip_info_label, ip_info.c_str());
 
-        float size = hw_get_sd_size();
+        uint64_t total = 0, used = 0, free = 0;
+        hw_get_storage_info(total, used, free);
         char buffer[64];
-#if defined(HAS_SD_CARD_SOCKET)
-        const char *unit = "GB";
-#else
-        const char *unit = "MB";
-#endif
-        if (size > 0) {
-            snprintf(buffer, sizeof(buffer), "%.2f %s", size, unit);
+        
+        auto format_size = [](char *buf, size_t len, uint64_t bytes) {
+            if (bytes > 1024ULL * 1024 * 1024) {
+                snprintf(buf, len, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0);
+            } else if (bytes > 1024 * 1024) {
+                snprintf(buf, len, "%.2f MB", bytes / 1024.0 / 1024.0);
+            } else if (bytes > 1024) {
+                snprintf(buf, len, "%.2f KB", bytes / 1024.0);
+            } else {
+                snprintf(buf, len, "%llu B", bytes);
+            }
+        };
+
+        if (total > 0) {
+            format_size(buffer, sizeof(buffer), total);
+            if (sys_label.sd_size_label) lv_label_set_text(sys_label.sd_size_label, buffer);
+
+            format_size(buffer, sizeof(buffer), used);
+            if (sys_label.storage_used_label) lv_label_set_text(sys_label.storage_used_label, buffer);
+
+            format_size(buffer, sizeof(buffer), free);
+            if (sys_label.storage_free_label) lv_label_set_text(sys_label.storage_free_label, buffer);
         } else {
-            snprintf(buffer, sizeof(buffer), "N/A");
+            if (sys_label.sd_size_label) lv_label_set_text(sys_label.sd_size_label, "N/A");
+            if (sys_label.storage_used_label) lv_label_set_text(sys_label.storage_used_label, "N/A");
+            if (sys_label.storage_free_label) lv_label_set_text(sys_label.storage_free_label, "N/A");
         }
-        if (sys_label.sd_size_label) lv_label_set_text(sys_label.sd_size_label, buffer);
+
+        uint64_t l_total = 0, l_used = 0, l_free = 0;
+        hw_get_local_storage_info(l_total, l_used, l_free);
+        if (l_total > 0) {
+            format_size(buffer, sizeof(buffer), l_total);
+            if (sys_label.local_storage_total_label) lv_label_set_text(sys_label.local_storage_total_label, buffer);
+
+            format_size(buffer, sizeof(buffer), l_used);
+            if (sys_label.local_storage_used_label) lv_label_set_text(sys_label.local_storage_used_label, buffer);
+
+            format_size(buffer, sizeof(buffer), l_free);
+            if (sys_label.local_storage_free_label) lv_label_set_text(sys_label.local_storage_free_label, buffer);
+        } else {
+            if (sys_label.local_storage_total_label) lv_label_set_text(sys_label.local_storage_total_label, "N/A");
+            if (sys_label.local_storage_used_label) lv_label_set_text(sys_label.local_storage_used_label, "N/A");
+            if (sys_label.local_storage_free_label) lv_label_set_text(sys_label.local_storage_free_label, "N/A");
+        }
 
         sys_label.info_loaded = true;
     }
@@ -607,11 +646,17 @@ static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
     sys_label.batt_voltage_label = add_info_row("Battery", buffer);
 
 #if defined(HAS_SD_CARD_SOCKET)
-    const char *storage_name = "SD Card";
+    const char *storage_name = "SD Total";
 #else
-    const char *storage_name = "Storage";
+    const char *storage_name = "Storage Total";
 #endif
     sys_label.sd_size_label = add_info_row(storage_name, "Loading...");
+    sys_label.storage_used_label = add_info_row("Storage Used", "Loading...");
+    sys_label.storage_free_label = add_info_row("Storage Free", "Loading...");
+
+    sys_label.local_storage_total_label = add_info_row("Internal Total", "Loading...");
+    sys_label.local_storage_used_label = add_info_row("Internal Used", "Loading...");
+    sys_label.local_storage_free_label = add_info_row("Internal Free", "Loading...");
 
     snprintf(buffer, sizeof(buffer), "%d.%d.%d", lv_version_major(), lv_version_minor(), lv_version_patch());
     add_info_row("LVGL", buffer);

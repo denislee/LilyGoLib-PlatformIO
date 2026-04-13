@@ -18,6 +18,7 @@ static void back_event_handler(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (lv_menu_back_btn_is_root(menu, obj)) {
+        disable_keyboard();
         lv_obj_clean(menu);
         lv_obj_del(menu);
         menu = NULL;
@@ -60,13 +61,17 @@ void ui_file_browser_refresh()
     vector<string> txt_files;
     hw_get_txt_files(txt_files);
 
+    int count = 0;
     for (const auto &file : txt_files) {
+        if (file == "tasks.txt") continue;
+
         lv_obj_t *btn = lv_list_add_btn(file_list, LV_SYMBOL_FILE, file.c_str());
         lv_obj_add_event_cb(btn, file_click_cb, LV_EVENT_CLICKED, NULL);
         lv_group_add_obj(lv_group_get_default(), btn);
+        count++;
     }
 
-    if (txt_files.empty()) {
+    if (count == 0) {
         lv_list_add_text(file_list, "No .txt files found");
     }
 }
@@ -75,6 +80,7 @@ void ui_file_browser_enter(lv_obj_t *parent)
 {
     if (menu != NULL) return;
     parent_obj = parent;
+    enable_keyboard();
 
     menu = create_menu(parent, back_event_handler);
     lv_menu_set_mode_root_back_btn(menu, LV_MENU_ROOT_BACK_BTN_ENABLED);
@@ -98,14 +104,8 @@ void ui_file_browser_enter(lv_obj_t *parent)
     quit_btn = create_floating_button([](lv_event_t *e) {
         lv_obj_t *page = lv_menu_get_cur_main_page(menu);
         if (lv_menu_back_button_is_root(menu, page)) {
-             // If we are at root, trigger back event which handles cleanup
              lv_obj_send_event(lv_menu_get_main_header_back_button(menu), LV_EVENT_CLICKED, NULL);
         } else {
-             // Otherwise go back to root page
-             lv_menu_set_page(menu, NULL); // In lv_menu NULL usually means root/previous depending on setup
-             // Actually, the back_event_handler checks for root.
-             // For simplicity in this specific browser (which only has one page), 
-             // we just trigger the back button.
              lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
              if (bb) lv_obj_send_event(bb, LV_EVENT_CLICKED, NULL);
         }
@@ -115,6 +115,7 @@ void ui_file_browser_enter(lv_obj_t *parent)
 
 void ui_file_browser_exit(lv_obj_t *parent)
 {
+    disable_keyboard();
 }
 
 app_t ui_file_browser_main = {

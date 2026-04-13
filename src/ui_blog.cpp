@@ -267,6 +267,13 @@ void ui_blog_enter(lv_obj_t *parent)
 
     if (!cache_valid) {
         hw_get_txt_files(blog_files_cache);
+        
+        // Remove tasks.txt so it doesn't show up as a blog post
+        blog_files_cache.erase(
+            std::remove(blog_files_cache.begin(), blog_files_cache.end(), "tasks.txt"),
+            blog_files_cache.end()
+        );
+
         // Ensure newest (latest YYYYMMDD_HHMMSS) are on top
         std::sort(blog_files_cache.begin(), blog_files_cache.end(), std::greater<std::string>());
         cache_valid = true;

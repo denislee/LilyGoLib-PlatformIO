@@ -204,8 +204,10 @@ void setupGui()
     extern app_t ui_text_editor_main;
     extern app_t ui_file_browser_main;
     extern app_t ui_blog_main;
+    extern app_t ui_tasks_main;
 
     create_app(home_list, "Editor", LV_SYMBOL_KEYBOARD, &ui_text_editor_main);
+    create_app(home_list, "Tasks", LV_SYMBOL_OK, &ui_tasks_main);
     create_app(home_list, "Blog", LV_SYMBOL_LIST, &ui_blog_main);
     create_app(home_list, "Settings", LV_SYMBOL_SETTINGS, &ui_sys_main);
     create_app(home_list, "Files", LV_SYMBOL_FILE, &ui_file_browser_main);

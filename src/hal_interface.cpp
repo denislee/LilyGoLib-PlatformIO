@@ -958,6 +958,42 @@ float hw_get_sd_size()
     return size;
 }
 
+void hw_get_storage_info(uint64_t &total, uint64_t &used, uint64_t &free)
+{
+    total = 0;
+    used = 0;
+    free = 0;
+#if defined(ARDUINO)
+#if defined(HAS_SD_CARD_SOCKET)
+    if (HW_SD_ONLINE & hw_get_device_online()) {
+        instance.lockSPI();
+        total = SD.totalBytes();
+        used = SD.usedBytes();
+        free = total - used;
+        instance.unlockSPI();
+    }
+#elif defined(USING_FATFS)
+    total = FFat.totalBytes();
+    used = FFat.usedBytes();
+    free = FFat.freeBytes();
+#endif
+#endif
+}
+
+void hw_get_local_storage_info(uint64_t &total, uint64_t &used, uint64_t &free)
+{
+    total = 0;
+    used = 0;
+    free = 0;
+#if defined(ARDUINO)
+#if defined(USING_FATFS)
+    total = FFat.totalBytes();
+    used = FFat.usedBytes();
+    free = FFat.freeBytes();
+#endif
+#endif
+}
+
 void hw_get_arduino_version(string &param)
 {
 #ifdef ARDUINO

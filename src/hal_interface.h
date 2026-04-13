@@ -433,6 +433,24 @@ int16_t hw_get_battery_voltage();
 float hw_get_sd_size();
 
 /**
+ * @brief Get storage information in bytes.
+ *
+ * @param total Total storage bytes.
+ * @param used Used storage bytes.
+ * @param free Free storage bytes.
+ */
+void hw_get_storage_info(uint64_t &total, uint64_t &used, uint64_t &free);
+
+/**
+ * @brief Get internal local storage (FFat) information in bytes.
+ *
+ * @param total Total storage bytes.
+ * @param used Used storage bytes.
+ * @param free Free storage bytes.
+ */
+void hw_get_local_storage_info(uint64_t &total, uint64_t &used, uint64_t &free);
+
+/**
  * @brief Get the Arduino version.
  *
  * @param param A reference to a string where the Arduino version will be stored.
