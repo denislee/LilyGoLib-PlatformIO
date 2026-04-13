@@ -90,6 +90,24 @@ static void shutdown_event_cb(lv_event_t *e)
     }
 }
 
+static void sleep_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        hw_feedback();
+        lv_delay_ms(200); 
+        
+        static uint8_t last_brightness = 127;
+        uint8_t current_brightness = hw_get_disp_backlight();
+        
+        if (current_brightness > 0) {
+            last_brightness = current_brightness;
+            hw_set_disp_backlight(0);
+        } else {
+            hw_set_disp_backlight(last_brightness);
+        }
+    }
+}
+
 static void style_list_btn_icon(lv_obj_t *btn)
 {
     lv_obj_t *icon = lv_obj_get_child(btn, 0);

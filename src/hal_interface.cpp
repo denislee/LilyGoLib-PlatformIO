@@ -742,8 +742,12 @@ void hw_init()
     hw_set_kb_backlight(user_setting.keyboard_bl_level);
 
     instance.onEvent([](DeviceEvent_t event, void *params, void *user_data) {
-        if (instance.getPMUEventType(params) == PMU_EVENT_KEY_CLICKED) {
+        int pmu_event = instance.getPMUEventType(params);
+        if (pmu_event == PMU_EVENT_KEY_CLICKED) {
             log_d("ON EVENT PMU CLICK");
+        } else if (pmu_event == PMU_EVENT_KEY_LONG_PRESSED) {
+            log_d("ON EVENT PMU LONG CLICK -> Sleep");
+            hw_low_power_loop();
         }
     }, POWER_EVENT, NULL);
 
