@@ -91,10 +91,9 @@ static void post_click_cb(lv_event_t *e)
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     lv_group_t *g = (lv_group_t *)lv_obj_get_group(obj);
     if (g) {
-        // Prevent getting "stuck" in editing mode if the user clicks the scrollwheel
-        lv_group_set_editing(g, false);
+        bool editing = lv_group_get_editing(g);
+        lv_group_set_editing(g, !editing);
     }
-    lv_event_stop_processing(e);
 }
 
 static void delete_msgbox_cb(lv_event_t *e)
@@ -165,6 +164,7 @@ static void blog_key_event_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
+        lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
         if (key == 'd' || key == 'D') {
             lv_group_t *g = lv_group_get_default();
             lv_obj_t *focused = lv_group_get_focused(g);
@@ -185,6 +185,17 @@ static void blog_key_event_cb(lv_event_t *e)
                     }
                     show_delete_confirm(filename);
                 }
+            }
+        } else if (key == LV_KEY_LEFT || key == LV_KEY_RIGHT || key == LV_KEY_UP || key == LV_KEY_DOWN) {
+            lv_group_t *g = lv_obj_get_group(obj);
+            if (g && lv_group_get_editing(g)) {
+                lv_coord_t y = lv_obj_get_scroll_y(obj);
+                if (key == LV_KEY_RIGHT || key == LV_KEY_DOWN) {
+                    y += 40;
+                } else if (key == LV_KEY_LEFT || key == LV_KEY_UP) {
+                    y -= 40;
+                }
+                lv_obj_scroll_to_y(obj, y, LV_ANIM_ON);
             }
         }
     }
@@ -214,6 +225,19 @@ static std::string parse_filename_to_human(const std::string &filename)
     snprintf(buffer, sizeof(buffer), "%s %s, %s - %s:%s:%s", 
              months[month_idx], d.c_str(), y.c_str(), hh.c_str(), mm.c_str(), ss.c_str());
     return std::string(buffer);
+}
+
+static void post_scroll_indicator_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *indicator = (lv_obj_t *)lv_event_get_user_data(e);
+    if (!indicator) return;
+    
+    if (lv_obj_get_scroll_bottom(obj) <= 0) {
+        lv_obj_add_flag(indicator, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(indicator, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void ui_blog_enter(lv_obj_t *parent)
@@ -288,6 +312,7 @@ void ui_blog_enter(lv_obj_t *parent)
             lv_obj_t *post_cont = lv_obj_create(main_page);
             lv_obj_set_width(post_cont, lv_pct(100));
             lv_obj_set_height(post_cont, LV_SIZE_CONTENT);
+            lv_obj_set_style_max_height(post_cont, 150, 0);
             lv_obj_set_flex_flow(post_cont, LV_FLEX_FLOW_COLUMN);
             lv_obj_set_style_pad_all(post_cont, 5, 0);
             lv_obj_set_style_border_width(post_cont, 0, 0);
@@ -301,6 +326,7 @@ void ui_blog_enter(lv_obj_t *parent)
             // Standard focus style for visual feedback
             lv_obj_set_style_border_width(post_cont, 2, LV_STATE_FOCUSED);
             lv_obj_set_style_border_color(post_cont, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+            lv_obj_set_style_border_color(post_cont, lv_palette_main(LV_PALETTE_ORANGE), LV_STATE_FOCUSED | LV_STATE_EDITED);
             lv_obj_set_style_radius(post_cont, 5, 0);
 
             // Add to group for encoder scrolling
@@ -340,6 +366,14 @@ void ui_blog_enter(lv_obj_t *parent)
                 lv_obj_set_width(label, lv_pct(100));
                 lv_obj_set_style_text_font(label, font, 0);
                 lv_obj_set_style_text_color(label, lv_color_white(), 0);
+                
+                lv_obj_t *indicator = lv_label_create(post_cont);
+                lv_label_set_text(indicator, LV_SYMBOL_DOWN);
+                lv_obj_add_flag(indicator, LV_OBJ_FLAG_FLOATING);
+                lv_obj_add_flag(indicator, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_align(indicator, LV_ALIGN_BOTTOM_RIGHT, -5, -5);
+                lv_obj_set_style_text_color(indicator, lv_palette_main(LV_PALETTE_ORANGE), 0);
+                lv_obj_add_event_cb(post_cont, post_scroll_indicator_cb, LV_EVENT_SCROLL, indicator);
             }
         }
 
@@ -376,6 +410,12 @@ void ui_blog_enter(lv_obj_t *parent)
     }
 
     lv_menu_set_page(menu, main_page);
+
+    // Force layout computation so scroll limits are accurate
+    lv_obj_update_layout(menu);
+    for (uint32_t i = 0; i < lv_obj_get_child_count(main_page); i++) {
+        lv_obj_send_event(lv_obj_get_child(main_page, i), LV_EVENT_SCROLL, NULL);
+    }
 
     if (focus_target) {
         lv_group_focus_obj(focus_target);
