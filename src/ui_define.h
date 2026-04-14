@@ -84,7 +84,12 @@ void ui_text_editor_open_file(const char *path);
 void ui_text_editor_new_document();
 void ui_request_editor_switch();
 void ui_resume_timers();
+void ui_pause_timers();
+bool ui_is_fake_sleep();
+void ui_lock();
+void ui_unlock();
 
+extern bool editor_auto_edit;
 extern app_t ui_blog_main;
 
 const lv_font_t *get_editor_font();

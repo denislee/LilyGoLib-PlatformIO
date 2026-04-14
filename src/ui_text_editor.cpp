@@ -16,6 +16,8 @@ static string current_file_path = "";
 static lv_timer_t *autosave_timer = NULL;
 static bool content_dirty = false;
 
+void ui_text_editor_exit(lv_obj_t *parent);
+
 static void update_word_count()
 {
     if (!text_area || !word_count_label) return;
@@ -100,24 +102,9 @@ static void autosave_timer_cb(lv_timer_t *t)
 
 static void do_exit()
 {
-    if (autosave_timer) {
-        lv_timer_del(autosave_timer);
-        autosave_timer = NULL;
-    }
     save_content(false);
-    lv_obj_clean(menu);
-    lv_obj_del(menu);
-    menu = NULL;
-    text_area = NULL;
-    exit_cont = NULL;
-    word_count_label = NULL;
-    disable_keyboard();
+    ui_text_editor_exit(NULL);
     menu_show();
-    if (quit_btn) {
-        lv_obj_del_async(quit_btn);
-        quit_btn = NULL;
-    }
-    current_file_path = "";
 }
 
 static void back_event_handler(lv_event_t *e)
@@ -239,7 +226,12 @@ void ui_text_editor_enter(lv_obj_t *parent)
 
     lv_menu_set_page(menu, main_page);
 
-    lv_group_focus_obj(text_area);
+    lv_group_t *g = lv_obj_get_group(text_area);
+    if (g) {
+        lv_group_focus_obj(text_area);
+        lv_group_set_editing(g, editor_auto_edit);
+        editor_auto_edit = false;
+    }
     update_word_count();
 
 #ifdef USING_TOUCHPAD
@@ -268,6 +260,14 @@ void ui_text_editor_new_document()
     lv_textarea_set_text(text_area, "");
     current_file_path = "";
     content_dirty = false;
+    
+    lv_group_t *g = lv_obj_get_group(text_area);
+    if (g) {
+        lv_group_focus_obj(text_area);
+        lv_group_set_editing(g, editor_auto_edit);
+        editor_auto_edit = false;
+    }
+    
     update_word_count();
 }
 
@@ -277,14 +277,21 @@ void ui_text_editor_exit(lv_obj_t *parent)
         lv_timer_del(autosave_timer);
         autosave_timer = NULL;
     }
-    // We don't call save_content here as it might be called during a force switch
-    // and we want to control when saving happens.
     
-    menu = NULL;
+    if (menu) {
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        menu = NULL;
+    }
+    if (quit_btn) {
+        lv_obj_del_async(quit_btn);
+        quit_btn = NULL;
+    }
     text_area = NULL;
     exit_cont = NULL;
     word_count_label = NULL;
     disable_keyboard();
+    current_file_path = "";
 }
 
 app_t ui_text_editor_main = {

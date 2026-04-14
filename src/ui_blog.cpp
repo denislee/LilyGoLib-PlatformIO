@@ -25,18 +25,7 @@ void ui_blog_exit(lv_obj_t *parent);
 static void do_exit()
 {
     ui_blog_exit(NULL);
-    lv_obj_clean(menu);
-    lv_obj_del(menu);
-    menu = NULL;
     menu_show();
-    if (quit_btn) {
-        lv_obj_del_async(quit_btn);
-        quit_btn = NULL;
-    }
-    target_focus_index = -1;
-    current_page = 0;
-    cache_valid = false;
-    blog_files_cache.clear();
 }
 
 static void next_page_cb(lv_event_t *e)
@@ -131,15 +120,8 @@ static void delete_msgbox_cb(lv_event_t *e)
     destroy_msgbox(mbox_to_del);
 
     if (deleted && ui_blog_main.setup_func_cb) {
-        // Now refresh the UI
+        // Now refresh the UI using our stable exit/enter pattern
         ui_blog_exit(NULL);
-        lv_obj_clean(menu);
-        lv_obj_del(menu);
-        menu = NULL;
-        if (quit_btn) {
-            lv_obj_del_async(quit_btn);
-            quit_btn = NULL;
-        }
         (*ui_blog_main.setup_func_cb)(parent_obj);
     }
 
@@ -457,7 +439,11 @@ void ui_blog_exit(lv_obj_t *parent)
         quit_btn = NULL;
     }
     
-    menu = NULL;
+    if (menu) {
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        menu = NULL;
+    }
     target_focus_index = -1;
     current_page = 0;
     cache_valid = false;

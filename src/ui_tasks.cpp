@@ -29,6 +29,8 @@ static vector<TaskItem> tasks;
 
 static const char *tasks_file_path = "/tasks.txt";
 
+void ui_tasks_exit(lv_obj_t *parent);
+
 static void save_tasks() {
     string content = "";
     for (auto &t : tasks) {
@@ -132,19 +134,8 @@ static void add_ta_event_cb(lv_event_t *e) {
 static void back_event_handler(lv_event_t *e) {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (lv_menu_back_btn_is_root(menu, obj)) {
-        disable_keyboard();
-        lv_obj_clean(menu);
-        lv_obj_del(menu);
-        menu = NULL;
-        main_page = NULL;
-        add_ta = NULL;
-        task_container = NULL;
-        tasks.clear();
+        ui_tasks_exit(NULL);
         menu_show();
-        if (quit_btn) {
-            lv_obj_del_async(quit_btn);
-            quit_btn = NULL;
-        }
     }
 }
 
@@ -316,13 +307,19 @@ void ui_tasks_enter(lv_obj_t *parent) {
 
 void ui_tasks_exit(lv_obj_t *parent) {
     disable_keyboard();
+    if (menu) {
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        menu = NULL;
+    }
     if (quit_btn) {
         lv_obj_del_async(quit_btn);
         quit_btn = NULL;
     }
-    menu = NULL;
     main_page = NULL;
     add_ta = NULL;
+    task_container = NULL;
+    tasks.clear();
 }
 
 app_t ui_tasks_main = {

@@ -747,26 +747,9 @@ static void settings_exit_cb(lv_event_t *e)
         timer = NULL;
     }
     
-    ui_sys_exit(NULL);
-    
-    if (menu) {
-        lv_obj_remove_event_cb(menu, settings_page_changed_cb);
-    }
-
-    menu_show();
-    lv_refr_now(NULL); // Force refresh to show menu first
-
-    lv_obj_clean(menu);
-    lv_obj_del(menu);
-    menu = NULL;
-    settings_main_page = NULL;
-    settings_exit_btn = NULL;
     hw_set_user_setting(local_param);
-
-    if (quit_btn) {
-        lv_obj_del_async(quit_btn);
-        quit_btn = NULL;
-    }
+    ui_sys_exit(NULL);
+    menu_show();
 }
 
 static void editor_font_face_cb(lv_event_t *e)
@@ -974,11 +957,15 @@ void ui_sys_enter(lv_obj_t *parent)
 void ui_sys_exit(lv_obj_t *parent)
 {
     disable_keyboard();
+    if (menu) {
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        menu = NULL;
+    }
     if (quit_btn) {
         lv_obj_del_async(quit_btn);
         quit_btn = NULL;
     }
-    menu = NULL;
     settings_main_page = NULL;
     settings_exit_btn = NULL;
     main_page_group_count = 0;

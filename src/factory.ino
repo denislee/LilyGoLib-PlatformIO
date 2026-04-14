@@ -99,6 +99,8 @@ void setup()
 extern void loopNFCReader();
 #endif
 
+extern bool ui_is_fake_sleep();
+
 void loop()
 {
     instanceLockTake();
@@ -108,7 +110,11 @@ void loop()
     loopNFCReader();
 #endif
 #endif
-    lv_timer_handler();
+    
+    // Only process UI timers and refresh if we are NOT in fake sleep
+    if (!ui_is_fake_sleep()) {
+        lv_timer_handler();
+    }
 
     // Dynamic CPU Frequency Scaling for Power Saving
     static uint32_t last_freq = 240;

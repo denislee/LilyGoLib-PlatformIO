@@ -10,6 +10,8 @@
 
 static lv_obj_t *menu = NULL;
 
+void ui_power_exit(lv_obj_t *parent);
+
 static void event_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
@@ -61,8 +63,7 @@ static void event_cb(lv_event_t *e)
     } else if (strcmp(text, "Sleep") == 0) {
         hw_light_sleep();
     } else if (strcmp(text, "Close") == 0) {
-        lv_obj_clean(menu);
-        lv_obj_del(menu);
+        ui_power_exit(NULL);
         menu_show();
     }
 }
@@ -71,8 +72,7 @@ static void back_event_handler(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (lv_menu_back_btn_is_root(menu, obj)) {
-        lv_obj_clean(menu);
-        lv_obj_del(menu);
+        ui_power_exit(NULL);
         menu_show();
     }
 }
@@ -164,7 +164,11 @@ void ui_power_enter(lv_obj_t *parent)
 
 void ui_power_exit(lv_obj_t *parent)
 {
-
+    if (menu) {
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        menu = NULL;
+    }
 }
 
 app_t ui_power_main = {

@@ -17,13 +17,17 @@ static lv_group_t *app_g;
 static lv_timer_t *disp_timer;
 static lv_timer_t *dev_timer;
 static bool low_power_mode_flag = false;
-static bool force_editor_switch = false;
 static app_t *current_app_ptr = NULL;
+bool editor_auto_edit = false;
+static bool fake_sleep_active = false;
 
 static void deferred_switch_timer_cb(lv_timer_t *t)
 {
     extern app_t ui_text_editor_main;
     
+    // Set flag so editor knows to enter edit mode
+    editor_auto_edit = true;
+
     // Always call exit on current app before cleaning up
     if (current_app_ptr && current_app_ptr->exit_func_cb) {
         (*current_app_ptr->exit_func_cb)(app_panel);
@@ -34,22 +38,6 @@ static void deferred_switch_timer_cb(lv_timer_t *t)
         lv_group_remove_all_objs(app_g);
     }
     
-    // CRITICAL: menu_g might contain objects from subpages of the app being force-closed
-    // We MUST clear it and re-add the home_list objects
-    if (menu_g) {
-        lv_group_remove_all_objs(menu_g);
-        // Re-add the menu buttons (Shutdown and app icons)
-        if (home_list) {
-            uint32_t i;
-            for(i = 0; i < lv_obj_get_child_count(home_list); i++) {
-                lv_obj_t *child = lv_obj_get_child(home_list, i);
-                if (child) {
-                    lv_group_add_obj(menu_g, child);
-                }
-            }
-        }
-    }
-
     lv_obj_clean(app_panel);
     
     current_app_ptr = &ui_text_editor_main;
@@ -62,19 +50,56 @@ static void deferred_switch_timer_cb(lv_timer_t *t)
     }
     lv_display_trigger_activity(NULL);
     
+    // Switch is done, now we can go back to "quiet" sleep mode
+    ui_pause_timers();
+
     lv_timer_del(t);
 }
 
 void ui_request_editor_switch()
 {
-    force_editor_switch = true;
+    // Make sure timers are active to process this request
+    fake_sleep_active = false;
+    if (disp_timer) {
+        lv_timer_resume(disp_timer);
+    }
+    // Start a one-shot timer to perform the switch in the next safe loop cycle
+    lv_timer_create(deferred_switch_timer_cb, 10, NULL);
 }
 
 void ui_resume_timers()
 {
+    fake_sleep_active = false;
     if (disp_timer) {
         lv_timer_resume(disp_timer);
     }
+    lv_display_trigger_activity(NULL);
+}
+
+void ui_pause_timers()
+{
+    fake_sleep_active = true;
+    if (disp_timer) {
+        lv_timer_pause(disp_timer);
+    }
+}
+
+bool ui_is_fake_sleep()
+{
+    return fake_sleep_active;
+}
+
+extern void instanceLockTake();
+extern void instanceLockGive();
+
+void ui_lock()
+{
+    instanceLockTake();
+}
+
+void ui_unlock()
+{
+    instanceLockGive();
 }
 
 static lv_obj_t *status_bar = NULL;
@@ -88,6 +113,7 @@ void set_low_power_mode_flag(bool enable)
 
 void menu_show()
 {
+    current_app_ptr = NULL;
     set_default_group(menu_g);
     if (app_g) {
         lv_group_remove_all_objs(app_g);
@@ -192,12 +218,6 @@ static void create_app(lv_obj_t *list, const char *name, const char *symbol, app
 
 static void ui_poll_timer_callback(lv_timer_t *t)
 {
-    if (force_editor_switch) {
-        force_editor_switch = false;
-        // Start a one-shot timer to perform the switch in the next loop
-        lv_timer_create(deferred_switch_timer_cb, 10, NULL);
-    }
-
     if (stat_time_label && stat_batt_label) {
         // Update Time & Date
         struct tm timeinfo;

@@ -12,22 +12,16 @@ static lv_obj_t *menu = NULL;
 static lv_obj_t *file_list = NULL;
 static lv_obj_t *quit_btn = NULL;
 
+void ui_file_browser_exit(lv_obj_t *parent);
+
 extern app_t ui_text_editor_main;
 
 static void back_event_handler(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (lv_menu_back_btn_is_root(menu, obj)) {
-        disable_keyboard();
-        lv_obj_clean(menu);
-        lv_obj_del(menu);
-        menu = NULL;
-        file_list = NULL;
+        ui_file_browser_exit(NULL);
         menu_show();
-        if (quit_btn) {
-            lv_obj_del_async(quit_btn);
-            quit_btn = NULL;
-        }
     }
 }
 
@@ -116,11 +110,15 @@ void ui_file_browser_enter(lv_obj_t *parent)
 void ui_file_browser_exit(lv_obj_t *parent)
 {
     disable_keyboard();
+    if (menu) {
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        menu = NULL;
+    }
     if (quit_btn) {
         lv_obj_del_async(quit_btn);
         quit_btn = NULL;
     }
-    menu = NULL;
     file_list = NULL;
 }
 

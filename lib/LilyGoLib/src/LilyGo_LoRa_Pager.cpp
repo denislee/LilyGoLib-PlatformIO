@@ -24,6 +24,9 @@ extern void setGroupBitsFromISR(EventGroupHandle_t xEventGroup,
                                 const EventBits_t uxBitsToSet);
 extern void ui_request_editor_switch();
 extern void ui_resume_timers();
+extern void ui_pause_timers();
+extern void ui_lock();
+extern void ui_unlock();
 
 #if    defined(ARDUINO_LILYGO_LORA_SX1262)
 SX1262 radio = newModule();
@@ -1294,8 +1297,10 @@ static void rotaryTask(void *p)
                         instance.powerControl(POWER_KEYBOARD, false);
                     }
                     display_off = true;
-                    ui_resume_timers();
+                    ui_lock();
+                    ui_pause_timers();
                     ui_request_editor_switch();
+                    ui_unlock();
                 } else {
                     instance.wakeupDisplay();
                     if (instance.getDeviceProbe() & HW_KEYBOARD_ONLINE) {
@@ -1305,6 +1310,9 @@ static void rotaryTask(void *p)
                     }
                     instance.setBrightness(last_brightness);
                     display_off = false;
+                    ui_lock();
+                    ui_resume_timers();
+                    ui_unlock();
                 }
                 long_press_triggered = true;
             }
