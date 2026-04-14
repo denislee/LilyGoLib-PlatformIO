@@ -81,6 +81,9 @@ void disable_keyboard();
 void enable_keyboard();
 
 void ui_text_editor_open_file(const char *path);
+void ui_text_editor_new_document();
+void ui_request_editor_switch();
+void ui_resume_timers();
 
 extern app_t ui_blog_main;
 

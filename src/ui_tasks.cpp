@@ -316,6 +316,13 @@ void ui_tasks_enter(lv_obj_t *parent) {
 
 void ui_tasks_exit(lv_obj_t *parent) {
     disable_keyboard();
+    if (quit_btn) {
+        lv_obj_del_async(quit_btn);
+        quit_btn = NULL;
+    }
+    menu = NULL;
+    main_page = NULL;
+    add_ta = NULL;
 }
 
 app_t ui_tasks_main = {

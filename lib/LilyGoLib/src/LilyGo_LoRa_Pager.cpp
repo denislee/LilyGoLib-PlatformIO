@@ -22,6 +22,8 @@
 extern void esp_enable_slow_crystal();
 extern void setGroupBitsFromISR(EventGroupHandle_t xEventGroup,
                                 const EventBits_t uxBitsToSet);
+extern void ui_request_editor_switch();
+extern void ui_resume_timers();
 
 #if    defined(ARDUINO_LILYGO_LORA_SX1262)
 SX1262 radio = newModule();
@@ -1292,6 +1294,8 @@ static void rotaryTask(void *p)
                         instance.powerControl(POWER_KEYBOARD, false);
                     }
                     display_off = true;
+                    ui_resume_timers();
+                    ui_request_editor_switch();
                 } else {
                     instance.wakeupDisplay();
                     if (instance.getDeviceProbe() & HW_KEYBOARD_ONLINE) {

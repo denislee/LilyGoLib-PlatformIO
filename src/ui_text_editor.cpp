@@ -183,7 +183,16 @@ static void text_area_event_cb(lv_event_t *e)
 
 void ui_text_editor_enter(lv_obj_t *parent)
 {
-    if (menu != NULL) return;
+    // If it was already partially active or pointers are stale, clean up
+    if (menu != NULL) {
+        // If it's still a valid object, it will be cleaned by the parent clean
+        // but we need to reset our pointers.
+        // Actually, if we're here and menu != NULL, we might have been called
+        // while the app is already showing. 
+        // If we want a CLEAN document every time we wake up:
+        ui_text_editor_new_document();
+        return;
+    }
     enable_keyboard();
 
     content_dirty = false;
@@ -252,8 +261,29 @@ void ui_text_editor_open_file(const char *path)
     }
 }
 
+void ui_text_editor_new_document()
+{
+    if (text_area == NULL) return;
+    save_content(false);
+    lv_textarea_set_text(text_area, "");
+    current_file_path = "";
+    content_dirty = false;
+    update_word_count();
+}
+
 void ui_text_editor_exit(lv_obj_t *parent)
 {
+    if (autosave_timer) {
+        lv_timer_del(autosave_timer);
+        autosave_timer = NULL;
+    }
+    // We don't call save_content here as it might be called during a force switch
+    // and we want to control when saving happens.
+    
+    menu = NULL;
+    text_area = NULL;
+    exit_cont = NULL;
+    word_count_label = NULL;
     disable_keyboard();
 }
 

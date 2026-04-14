@@ -116,6 +116,12 @@ void ui_file_browser_enter(lv_obj_t *parent)
 void ui_file_browser_exit(lv_obj_t *parent)
 {
     disable_keyboard();
+    if (quit_btn) {
+        lv_obj_del_async(quit_btn);
+        quit_btn = NULL;
+    }
+    menu = NULL;
+    file_list = NULL;
 }
 
 app_t ui_file_browser_main = {

@@ -17,6 +17,65 @@ static lv_group_t *app_g;
 static lv_timer_t *disp_timer;
 static lv_timer_t *dev_timer;
 static bool low_power_mode_flag = false;
+static bool force_editor_switch = false;
+static app_t *current_app_ptr = NULL;
+
+static void deferred_switch_timer_cb(lv_timer_t *t)
+{
+    extern app_t ui_text_editor_main;
+    
+    // Always call exit on current app before cleaning up
+    if (current_app_ptr && current_app_ptr->exit_func_cb) {
+        (*current_app_ptr->exit_func_cb)(app_panel);
+    }
+
+    // Always clean app panel and groups before forcing the editor
+    if (app_g) {
+        lv_group_remove_all_objs(app_g);
+    }
+    
+    // CRITICAL: menu_g might contain objects from subpages of the app being force-closed
+    // We MUST clear it and re-add the home_list objects
+    if (menu_g) {
+        lv_group_remove_all_objs(menu_g);
+        // Re-add the menu buttons (Shutdown and app icons)
+        if (home_list) {
+            uint32_t i;
+            for(i = 0; i < lv_obj_get_child_count(home_list); i++) {
+                lv_obj_t *child = lv_obj_get_child(home_list, i);
+                if (child) {
+                    lv_group_add_obj(menu_g, child);
+                }
+            }
+        }
+    }
+
+    lv_obj_clean(app_panel);
+    
+    current_app_ptr = &ui_text_editor_main;
+    set_default_group(app_g);
+    if (ui_text_editor_main.setup_func_cb) {
+        (*ui_text_editor_main.setup_func_cb)(app_panel);
+    }
+    if (isinMenu()) {
+        menu_hidden();
+    }
+    lv_display_trigger_activity(NULL);
+    
+    lv_timer_del(t);
+}
+
+void ui_request_editor_switch()
+{
+    force_editor_switch = true;
+}
+
+void ui_resume_timers()
+{
+    if (disp_timer) {
+        lv_timer_resume(disp_timer);
+    }
+}
 
 static lv_obj_t *status_bar = NULL;
 static lv_obj_t *stat_time_label = NULL;
@@ -70,6 +129,12 @@ static void btn_event_cb(lv_event_t *e)
     lv_event_code_t c = lv_event_get_code(e);
     app_t *app = (app_t *)lv_event_get_user_data(e);
     if (c == LV_EVENT_CLICKED) {
+        if (current_app_ptr && current_app_ptr->exit_func_cb) {
+            (*current_app_ptr->exit_func_cb)(app_panel);
+        }
+        lv_obj_clean(app_panel);
+
+        current_app_ptr = app;
         set_default_group(app_g);
         hw_feedback();
         if (app->setup_func_cb) {
@@ -127,6 +192,12 @@ static void create_app(lv_obj_t *list, const char *name, const char *symbol, app
 
 static void ui_poll_timer_callback(lv_timer_t *t)
 {
+    if (force_editor_switch) {
+        force_editor_switch = false;
+        // Start a one-shot timer to perform the switch in the next loop
+        lv_timer_create(deferred_switch_timer_cb, 10, NULL);
+    }
+
     if (stat_time_label && stat_batt_label) {
         // Update Time & Date
         struct tm timeinfo;
@@ -235,7 +306,7 @@ void setupGui()
     lv_obj_add_event_cb(shutdown_btn, shutdown_event_cb, LV_EVENT_CLICKED, NULL);
     lv_group_add_obj(menu_g, shutdown_btn);
 
-    disp_timer = lv_timer_create(ui_poll_timer_callback, 1000, NULL);
+    disp_timer = lv_timer_create(ui_poll_timer_callback, 200, NULL);
     dev_timer = lv_timer_create(hw_device_poll, 5000, NULL);
 
     // Initial update so it's not blank for the first second
@@ -247,6 +318,7 @@ void setupGui()
     menu_show();
 
     // Boot directly to Editor
+    current_app_ptr = &ui_text_editor_main;
     set_default_group(app_g);
     if (ui_text_editor_main.setup_func_cb) {
         (*ui_text_editor_main.setup_func_cb)(app_panel);

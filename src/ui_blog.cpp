@@ -451,7 +451,17 @@ void ui_blog_exit(lv_obj_t *parent)
             }
         }
     }
+    
+    if (quit_btn) {
+        lv_obj_del_async(quit_btn);
+        quit_btn = NULL;
+    }
+    
+    menu = NULL;
     target_focus_index = -1;
+    current_page = 0;
+    cache_valid = false;
+    blog_files_cache.clear();
 }
 
 app_t ui_blog_main = {

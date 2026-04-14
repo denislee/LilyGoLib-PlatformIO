@@ -974,6 +974,17 @@ void ui_sys_enter(lv_obj_t *parent)
 void ui_sys_exit(lv_obj_t *parent)
 {
     disable_keyboard();
+    if (quit_btn) {
+        lv_obj_del_async(quit_btn);
+        quit_btn = NULL;
+    }
+    menu = NULL;
+    settings_main_page = NULL;
+    settings_exit_btn = NULL;
+    main_page_group_count = 0;
+    subpage_item_count = 0;
+    memset(main_page_group_items, 0, sizeof(main_page_group_items));
+    memset(subpage_items, 0, sizeof(subpage_items));
 }
 
 app_t ui_sys_main = {
