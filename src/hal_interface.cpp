@@ -720,25 +720,9 @@ void hw_init()
     xTaskCreate(playerTask, "app/play", 8 * 1024, NULL, 12, &playerTaskHandler);
 #endif
 
-#ifdef ARDUINO
-    prefs.begin(NVS_NAME);
-    if (prefs.getBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t)) != sizeof(user_setting_params_t)) {  // simple check that data fits
-        log_e("Data is not correct size!,set default setting");
-        user_setting.brightness_level = 50;
-        user_setting.keyboard_bl_level = 80;
-        user_setting.disp_timeout_second = 0;
-        user_setting.charger_current = DEVICE_CHARGE_CURRENT_RECOMMEND;
-        user_setting.charger_enable = true;
-        user_setting.sleep_mode = 0;
-        user_setting.editor_font_size = 14;
-        user_setting.editor_font_index = 0;
-        user_setting.charge_limit_en = false;
-        user_setting.wifi_enable = 0;
-        user_setting.bt_enable = 0;
-        user_setting.radio_enable = 0;
-        prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
-    }
+    hw_load_setting();
 
+#ifdef ARDUINO
     hw_set_charger(user_setting.charger_enable);
     hw_set_charger_current(user_setting.charger_current);
     
@@ -746,6 +730,10 @@ void hw_init()
     hw_set_wifi_enable(user_setting.wifi_enable);
     hw_set_bt_enable(user_setting.bt_enable);
     hw_set_radio_enable(user_setting.radio_enable);
+    hw_set_nfc_enable(user_setting.nfc_enable);
+    hw_set_gps_enable(user_setting.gps_enable);
+    hw_set_speaker_enable(user_setting.speaker_enable);
+    hw_set_haptic_enable(user_setting.haptic_enable);
 #endif
 
     // Battery history recording every 1 minute (60,000 ms)
@@ -767,16 +755,60 @@ void hw_init()
             hw_low_power_loop();
         }
     }, POWER_EVENT, NULL);
+#endif
 
+}
 
+void hw_load_setting()
+{
+#ifdef ARDUINO
+    prefs.begin(NVS_NAME);
+    size_t stored_size = prefs.getBytesLength(NVS_NAME);
+    if (stored_size > 0 && stored_size <= sizeof(user_setting_params_t)) {
+        // Clear the struct first to ensure new fields have defaults if not read
+        user_setting.nfc_enable = 0;
+        user_setting.gps_enable = 0;
+        user_setting.speaker_enable = 0;
+        user_setting.haptic_enable = 1;
+        
+        prefs.getBytes(NVS_NAME, &user_setting, stored_size);
+        
+        if (stored_size != sizeof(user_setting_params_t)) {
+            log_i("Settings size mismatch (%d vs %d), migrated and saving new version", stored_size, sizeof(user_setting_params_t));
+            prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+        }
+    } else {
+        log_e("No valid settings found or size too large, set default setting");
+        user_setting.brightness_level = 50;
+        user_setting.keyboard_bl_level = 80;
+        user_setting.disp_timeout_second = 0;
+        user_setting.charger_current = DEVICE_CHARGE_CURRENT_RECOMMEND;
+        user_setting.charger_enable = true;
+        user_setting.sleep_mode = 0;
+        user_setting.editor_font_size = 14;
+        user_setting.editor_font_index = 0;
+        user_setting.charge_limit_en = false;
+        user_setting.wifi_enable = 0;
+        user_setting.bt_enable = 0;
+        user_setting.radio_enable = 0;
+        user_setting.nfc_enable = 0;
+        user_setting.gps_enable = 0;
+        user_setting.speaker_enable = 0;
+        user_setting.haptic_enable = 1;
+        user_setting.show_mem_usage = 0;
+        prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+    }
 #else
     user_setting.brightness_level = 10;
     user_setting.keyboard_bl_level = 255;
     user_setting.disp_timeout_second = 0;
     user_setting.charger_current = 1000;
     user_setting.charger_enable = true;
+    user_setting.nfc_enable = 0;
+    user_setting.gps_enable = 0;
+    user_setting.speaker_enable = 0;
+    user_setting.haptic_enable = 1;
 #endif
-
 }
 
 void hw_get_user_setting(user_setting_params_t &param)
@@ -795,7 +827,6 @@ void hw_set_user_setting(user_setting_params_t &param)
 bool hw_get_wifi_enable() { return user_setting.wifi_enable; }
 void hw_set_wifi_enable(bool en) {
     user_setting.wifi_enable = en;
-    hw_set_user_setting(user_setting);
 #ifdef ARDUINO
     if (en) {
         WiFi.mode(WIFI_STA);
@@ -803,24 +834,26 @@ void hw_set_wifi_enable(bool en) {
         WiFi.disconnect(true);
         WiFi.mode(WIFI_OFF);
     }
+    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
 #endif
 }
 
 bool hw_get_bt_enable() { return user_setting.bt_enable; }
 void hw_set_bt_enable(bool en) {
     user_setting.bt_enable = en;
-    hw_set_user_setting(user_setting);
     if (en) {
         hw_set_ble_kb_enable();
     } else {
         hw_set_ble_kb_disable();
     }
+#ifdef ARDUINO
+    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+#endif
 }
 
 bool hw_get_radio_enable() { return user_setting.radio_enable; }
 void hw_set_radio_enable(bool en) {
     user_setting.radio_enable = en;
-    hw_set_user_setting(user_setting);
     if (en) {
         hw_set_radio_default();
     } else {
@@ -829,6 +862,54 @@ void hw_set_radio_enable(bool en) {
         params.mode = RADIO_DISABLE;
         hw_set_radio_params(params);
     }
+#ifdef ARDUINO
+    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+#endif
+}
+
+bool hw_get_nfc_enable() { return user_setting.nfc_enable; }
+void hw_set_nfc_enable(bool en) {
+    user_setting.nfc_enable = en;
+#ifdef ARDUINO
+    instance.powerControl(POWER_NFC, en);
+    delay(10);
+    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+#endif
+}
+
+bool hw_get_gps_enable() { return user_setting.gps_enable; }
+void hw_set_gps_enable(bool en) {
+    user_setting.gps_enable = en;
+#ifdef ARDUINO
+    instance.powerControl(POWER_GPS, en);
+    delay(10);
+    if (!en) {
+        Serial1.end();
+    } else {
+        Serial1.begin(38400, SERIAL_8N1, GPS_RX, GPS_TX);
+    }
+    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+#endif
+}
+
+bool hw_get_speaker_enable() { return user_setting.speaker_enable; }
+void hw_set_speaker_enable(bool en) {
+    user_setting.speaker_enable = en;
+#ifdef ARDUINO
+    instance.powerControl(POWER_SPEAK, en);
+    delay(10);
+    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+#endif
+}
+
+bool hw_get_haptic_enable() { return user_setting.haptic_enable; }
+void hw_set_haptic_enable(bool en) {
+    user_setting.haptic_enable = en;
+#ifdef ARDUINO
+    instance.powerControl(POWER_HAPTIC_DRIVER, en);
+    delay(10);
+    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+#endif
 }
 
 const uint32_t hw_get_disp_timeout_ms()
@@ -1660,6 +1741,27 @@ void hw_light_sleep()
 #endif
 }
 
+void hw_power_down_all()
+{
+#ifdef ARDUINO
+    instance.powerControl(POWER_GPS, false);
+    instance.powerControl(POWER_NFC, false);
+    instance.powerControl(POWER_HAPTIC_DRIVER, false);
+    instance.powerControl(POWER_SPEAK, false);
+    // SD Card is left on to avoid mount/unmount overhead and potential filesystem issues
+#endif
+}
+
+void hw_power_up_all()
+{
+#ifdef ARDUINO
+    if (user_setting.gps_enable) instance.powerControl(POWER_GPS, true);
+    if (user_setting.nfc_enable) instance.powerControl(POWER_NFC, true);
+    if (user_setting.haptic_enable) instance.powerControl(POWER_HAPTIC_DRIVER, true);
+    // Speaker is only powered on when needed by playback routines and if enabled
+#endif
+}
+
 void hw_sleep()
 {
 #ifdef ARDUINO
@@ -2259,6 +2361,17 @@ void hw_print_mem_info()
     printf("  Minimum Free Bytes:  %u B (%.1f KB)\n", ESP.getMinFreePsram(), ESP.getMinFreePsram() / 1024.0);
     printf("  Largest Free Block:  %u B (%.1f KB)\n", ESP.getMaxAllocPsram(), ESP.getMaxAllocPsram() / 1024.0);
     printf("------------------------------------------\n");
+#endif
+}
+
+void hw_get_heap_info(uint32_t &total, uint32_t &free)
+{
+#if defined(ARDUINO)
+    total = ESP.getHeapSize();
+    free = ESP.getFreeHeap();
+#else
+    total = 512 * 1024;
+    free = 256 * 1024;
 #endif
 }
 

@@ -333,6 +333,20 @@ static void charge_limit_cb(lv_event_t *e)
     if (slider_label) lv_label_set_text(slider_label, turnOn ? " On " : " Off ");
 }
 
+static void show_mem_usage_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        bool turnOn = lv_obj_has_state(obj, LV_STATE_CHECKED);
+        lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+        local_param.show_mem_usage = turnOn;
+        // Save immediately for status bar to update
+        hw_set_user_setting(local_param);
+        if (label) lv_label_set_text(label, turnOn ? " On " : " Off ");
+    }
+}
+
 static void spinbox_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -543,6 +557,9 @@ static lv_obj_t *create_subpage_backlight(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_set_user_data(slider, slider_label);
     register_subpage_group_obj(sub_page, slider);
 
+    lv_obj_t *btn = create_toggle_btn_row(sub_page, "Show Memory", local_param.show_mem_usage, show_mem_usage_cb);
+    register_subpage_group_obj(sub_page, btn);
+
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
@@ -746,12 +763,10 @@ static void settings_exit_cb(lv_event_t *e)
         lv_timer_del(timer);
         timer = NULL;
     }
-    
-    hw_set_user_setting(local_param);
+
     ui_sys_exit(NULL);
     menu_show();
 }
-
 static void editor_font_face_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
@@ -836,6 +851,7 @@ static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool i
 static void wifi_enable_cb(lv_event_t *e) {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.wifi_enable = en;
     hw_set_wifi_enable(en);
     lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
     if (label) lv_label_set_text(label, en ? " On " : " Off ");
@@ -844,6 +860,7 @@ static void wifi_enable_cb(lv_event_t *e) {
 static void bt_enable_cb(lv_event_t *e) {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.bt_enable = en;
     hw_set_bt_enable(en);
     lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
     if (label) lv_label_set_text(label, en ? " On " : " Off ");
@@ -852,7 +869,44 @@ static void bt_enable_cb(lv_event_t *e) {
 static void radio_enable_cb(lv_event_t *e) {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.radio_enable = en;
     hw_set_radio_enable(en);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " On " : " Off ");
+}
+
+static void nfc_enable_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.nfc_enable = en;
+    hw_set_nfc_enable(en);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " On " : " Off ");
+}
+
+static void gps_enable_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.gps_enable = en;
+    hw_set_gps_enable(en);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " On " : " Off ");
+}
+
+static void speaker_enable_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.speaker_enable = en;
+    hw_set_speaker_enable(en);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " On " : " Off ");
+}
+
+static void haptic_enable_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.haptic_enable = en;
+    hw_set_haptic_enable(en);
     lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
     if (label) lv_label_set_text(label, en ? " On " : " Off ");
 }
@@ -873,6 +927,18 @@ static lv_obj_t *create_subpage_connectivity(lv_obj_t *menu, lv_obj_t *main_page
     register_subpage_group_obj(sub_page, btn);
 
     btn = create_toggle_btn_row(sub_page, "Radio", hw_get_radio_enable(), radio_enable_cb);
+    register_subpage_group_obj(sub_page, btn);
+
+    btn = create_toggle_btn_row(sub_page, "NFC", hw_get_nfc_enable(), nfc_enable_cb);
+    register_subpage_group_obj(sub_page, btn);
+
+    btn = create_toggle_btn_row(sub_page, "GPS", hw_get_gps_enable(), gps_enable_cb);
+    register_subpage_group_obj(sub_page, btn);
+
+    btn = create_toggle_btn_row(sub_page, "Speaker", hw_get_speaker_enable(), speaker_enable_cb);
+    register_subpage_group_obj(sub_page, btn);
+
+    btn = create_toggle_btn_row(sub_page, "Haptic", hw_get_haptic_enable(), haptic_enable_cb);
     register_subpage_group_obj(sub_page, btn);
 
     lv_menu_set_load_page_event(menu, cont, sub_page);

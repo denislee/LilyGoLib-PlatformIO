@@ -73,6 +73,7 @@ void ui_resume_timers()
     if (disp_timer) {
         lv_timer_resume(disp_timer);
     }
+    hw_power_up_all();
     lv_display_trigger_activity(NULL);
 }
 
@@ -82,6 +83,7 @@ void ui_pause_timers()
     if (disp_timer) {
         lv_timer_pause(disp_timer);
     }
+    hw_power_down_all();
 }
 
 bool ui_is_fake_sleep()
@@ -105,6 +107,7 @@ void ui_unlock()
 static lv_obj_t *status_bar = NULL;
 static lv_obj_t *stat_time_label = NULL;
 static lv_obj_t *stat_batt_label = NULL;
+static lv_obj_t *stat_mem_label = NULL;
 
 void set_low_power_mode_flag(bool enable)
 {
@@ -240,6 +243,21 @@ static void ui_poll_timer_callback(lv_timer_t *t)
         }
         
         lv_label_set_text_fmt(stat_batt_label, "%s %d%%", batt_sym, params.battery_percent);
+        
+        // Update Memory
+        user_setting_params_t settings;
+        hw_get_user_setting(settings);
+        if (stat_mem_label) {
+            if (settings.show_mem_usage) {
+                uint32_t total, free;
+                hw_get_heap_info(total, free);
+                uint32_t used_pct = (total - free) * 100 / total;
+                lv_label_set_text_fmt(stat_mem_label, "M:%d%%", used_pct);
+                lv_obj_remove_flag(stat_mem_label, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(stat_mem_label, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
 
     user_setting_params_t settings;
@@ -286,22 +304,29 @@ void setupGui()
     app_panel = lv_tileview_add_tile(main_screen, 0, 1, LV_DIR_NONE);
 
     // 2. Create Status Bar LAST so it stays on top of the main_screen
-    status_bar = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(status_bar, LV_PCT(100), 30);
-    lv_obj_align(status_bar, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(status_bar, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(status_bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(status_bar, 0, 0);
-    lv_obj_set_style_radius(status_bar, 0, 0);
-    lv_obj_remove_flag(status_bar, LV_OBJ_FLAG_SCROLLABLE);
+    if (!status_bar) {
+        status_bar = lv_obj_create(lv_screen_active());
+        lv_obj_set_size(status_bar, LV_PCT(100), 30);
+        lv_obj_align(status_bar, LV_ALIGN_TOP_MID, 0, 0);
+        lv_obj_set_style_bg_color(status_bar, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(status_bar, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(status_bar, 0, 0);
+        lv_obj_set_style_radius(status_bar, 0, 0);
+        lv_obj_remove_flag(status_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    stat_time_label = lv_label_create(status_bar);
-    lv_obj_center(stat_time_label);
-    lv_obj_set_style_text_color(stat_time_label, lv_color_white(), 0);
+        stat_time_label = lv_label_create(status_bar);
+        lv_obj_center(stat_time_label);
+        lv_obj_set_style_text_color(stat_time_label, lv_color_white(), 0);
 
-    stat_batt_label = lv_label_create(status_bar);
-    lv_obj_align(stat_batt_label, LV_ALIGN_RIGHT_MID, -5, 0);
-    lv_obj_set_style_text_color(stat_batt_label, lv_color_white(), 0);
+        stat_batt_label = lv_label_create(status_bar);
+        lv_obj_align(stat_batt_label, LV_ALIGN_RIGHT_MID, -5, 0);
+        lv_obj_set_style_text_color(stat_batt_label, lv_color_white(), 0);
+
+        stat_mem_label = lv_label_create(status_bar);
+        lv_obj_align(stat_mem_label, LV_ALIGN_LEFT_MID, 5, 0);
+        lv_obj_set_style_text_color(stat_mem_label, lv_color_white(), 0);
+        lv_obj_add_flag(stat_mem_label, LV_OBJ_FLAG_HIDDEN);
+    }
 
     home_list = lv_list_create(menu_panel);
     lv_obj_set_size(home_list, LV_PCT(100), LV_PCT(100));

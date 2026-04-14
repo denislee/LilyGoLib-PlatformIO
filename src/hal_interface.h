@@ -261,6 +261,11 @@ typedef struct {
     uint8_t wifi_enable;
     uint8_t bt_enable;
     uint8_t radio_enable;
+    uint8_t nfc_enable;
+    uint8_t gps_enable;
+    uint8_t speaker_enable;
+    uint8_t haptic_enable;
+    uint8_t show_mem_usage;
 } user_setting_params_t;
 
 /**
@@ -686,6 +691,18 @@ void hw_set_bt_enable(bool en);
 bool hw_get_radio_enable();
 void hw_set_radio_enable(bool en);
 
+bool hw_get_nfc_enable();
+void hw_set_nfc_enable(bool en);
+
+bool hw_get_gps_enable();
+void hw_set_gps_enable(bool en);
+
+bool hw_get_speaker_enable();
+void hw_set_speaker_enable(bool en);
+
+bool hw_get_haptic_enable();
+void hw_set_haptic_enable(bool en);
+
 /**
  * @brief Stop the music playback.
  */
@@ -705,6 +722,16 @@ void hw_sleep();
  * @brief Put the hardware into light sleep mode.
  */
 void hw_light_sleep();
+
+/**
+ * @brief Power down non-essential modules for power saving.
+ */
+void hw_power_down_all();
+
+/**
+ * @brief Power up modules after sleep.
+ */
+void hw_power_up_all();
 
 /**
  * @brief Get the battery voltage history.
@@ -915,6 +942,11 @@ bool isinMenu();
  * @param param A reference to a user_setting_params_t structure where the settings will be stored.
  */
 void hw_get_user_setting(user_setting_params_t &param);
+
+/**
+ * @brief Load settings from NVS.
+ */
+void hw_load_setting();
 
 /**
  * @brief Set the user settings.
@@ -1132,6 +1164,13 @@ uint8_t hw_get_charger_current_level();
  * This function prints the current memory usage information to the console.
  */
 void hw_print_mem_info();
+
+/**
+ * @brief Get heap memory information.
+ * @param total Total heap size.
+ * @param free Free heap size.
+ */
+void hw_get_heap_info(uint32_t &total, uint32_t &free);
 
 /**
  * @brief Get the NRF24 parameters.
