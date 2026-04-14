@@ -321,6 +321,15 @@ static void charge_limit_cb(lv_event_t *e)
     lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(slider);
     bool turnOn = lv_obj_has_state(slider, LV_STATE_CHECKED);
     local_param.charge_limit_en = turnOn;
+    
+    // Immediately save the setting so the background loop picks it up
+    hw_set_user_setting(local_param);
+
+    // If we turned off the limit, restore the default charger state
+    if (!turnOn) {
+        hw_set_charger(local_param.charger_enable);
+    }
+    
     if (slider_label) lv_label_set_text(slider_label, turnOn ? " On " : " Off ");
 }
 

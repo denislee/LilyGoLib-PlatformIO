@@ -636,17 +636,23 @@ void hw_update_battery_history()
         log_d("Recorded battery percent: %d%%", percent);
 
         // Charge conservation logic: Stop charging if >= 80% and feature is enabled
-        if (user_setting.charge_limit_en && percent >= 80) {
-            if (hw_get_charge_enable()) {
-                log_i("Battery life conservation: Reached 80%%, stopping charger.");
-                hw_set_charger(false);
+        if (user_setting.charge_limit_en) {
+            if (percent >= 80) {
+                if (hw_get_charge_enable()) {
+                    log_i("Battery life conservation: Reached %d%%, stopping charger.", percent);
+                    hw_set_charger(false);
+                }
+            } else if (percent < 75) {
+                // Re-enable charging if it drops below 75% while the limit feature is on
+                if (user_setting.charger_enable && !hw_get_charge_enable()) {
+                    log_i("Battery life conservation: Below 75%% (%d%%), re-enabling charger.", percent);
+                    hw_set_charger(true);
+                }
             }
-        } else if (user_setting.charge_limit_en && percent < 75) {
-            // Optional: Re-enable charging if it drops below 75% while the limit feature is on
-            // This ensures we actually charge up to 80% if we were below it.
-            if (user_setting.charger_enable && !hw_get_charge_enable()) {
-                 log_i("Battery life conservation: Below 75%%, re-enabling charger.");
-                 hw_set_charger(true);
+        } else {
+            // Limit disabled: Ensure charger follows the main charger_enable setting
+            if (user_setting.charger_enable != hw_get_charge_enable()) {
+                hw_set_charger(user_setting.charger_enable);
             }
         }
     }
@@ -714,11 +720,6 @@ void hw_init()
     xTaskCreate(playerTask, "app/play", 8 * 1024, NULL, 12, &playerTaskHandler);
 #endif
 
-    // Battery history recording every 1 minute (60,000 ms)
-    lv_timer_create(battery_history_timer_cb, 60000, NULL);
-    // Record first point immediately
-    hw_update_battery_history();
-
 #ifdef ARDUINO
     prefs.begin(NVS_NAME);
     if (prefs.getBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t)) != sizeof(user_setting_params_t)) {  // simple check that data fits
@@ -732,11 +733,27 @@ void hw_init()
         user_setting.editor_font_size = 14;
         user_setting.editor_font_index = 0;
         user_setting.charge_limit_en = false;
+        user_setting.wifi_enable = 0;
+        user_setting.bt_enable = 0;
+        user_setting.radio_enable = 0;
         prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
     }
 
-    user_setting.charger_current = hw_get_charger_current();
+    hw_set_charger(user_setting.charger_enable);
+    hw_set_charger_current(user_setting.charger_current);
+    
+    // Ensure WiFi, BT and Radio match settings on boot
+    hw_set_wifi_enable(user_setting.wifi_enable);
+    hw_set_bt_enable(user_setting.bt_enable);
+    hw_set_radio_enable(user_setting.radio_enable);
+#endif
 
+    // Battery history recording every 1 minute (60,000 ms)
+    lv_timer_create(battery_history_timer_cb, 60000, NULL);
+    // Record first point immediately - This also triggers the 80% charge limit check
+    hw_update_battery_history();
+
+#ifdef ARDUINO
     hw_set_disp_backlight(user_setting.brightness_level);
 
     hw_set_kb_backlight(user_setting.keyboard_bl_level);
@@ -1869,6 +1886,16 @@ void hw_get_monitor_params(monitor_params_t &params)
                 params.timeToEmpty = 0;
                 params.timeToFull = instance.gauge.getTimeToFull();
             }
+        }
+    } else {
+        // Gauge not online: Fallback to voltage-based percentage calculation
+        params.battery_voltage = hw_get_battery_voltage();
+        if (params.battery_voltage > 0) {
+            // Simple linear mapping: 3200mV (0%) to 4200mV (100%)
+            int16_t mv = params.battery_voltage;
+            if (mv >= 4200) params.battery_percent = 100;
+            else if (mv <= 3200) params.battery_percent = 0;
+            else params.battery_percent = (mv - 3200) / 10;
         }
     }
 #endif
