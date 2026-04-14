@@ -190,27 +190,6 @@ static long map_r(long x, long in_min, long in_max, long out_min, long out_max)
     return ((x - in_min) * (out_max - out_min)) / (in_max - in_min) + out_min;
 }
 
-static void back_event_handler(lv_event_t *e)
-{
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    if (lv_menu_back_btn_is_root(menu, obj)) {
-        if (timer) {
-            lv_timer_del(timer);
-            timer = NULL;
-        }
-        
-        menu_show();
-
-        lv_obj_clean(menu);
-        lv_obj_del(menu);
-        hw_set_user_setting(local_param);
-
-        if (quit_btn) {
-            lv_obj_del_async(quit_btn);
-        }
-    }
-}
-
 
 static void display_brightness_cb(lv_event_t *e)
 {
@@ -1032,6 +1011,7 @@ void ui_sys_exit(lv_obj_t *parent)
         lv_obj_del_async(quit_btn);
         quit_btn = NULL;
     }
+    hw_set_user_setting(local_param);
     settings_main_page = NULL;
     settings_exit_btn = NULL;
     main_page_group_count = 0;

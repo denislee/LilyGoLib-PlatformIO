@@ -765,11 +765,24 @@ void hw_load_setting()
     prefs.begin(NVS_NAME);
     size_t stored_size = prefs.getBytesLength(NVS_NAME);
     if (stored_size > 0 && stored_size <= sizeof(user_setting_params_t)) {
-        // Clear the struct first to ensure new fields have defaults if not read
+        // Initialize with defaults first to ensure any new fields have sane values
+        user_setting.brightness_level = 50;
+        user_setting.keyboard_bl_level = 80;
+        user_setting.disp_timeout_second = 0;
+        user_setting.charger_current = DEVICE_CHARGE_CURRENT_RECOMMEND;
+        user_setting.charger_enable = true;
+        user_setting.sleep_mode = 0;
+        user_setting.editor_font_size = 14;
+        user_setting.editor_font_index = 0;
+        user_setting.charge_limit_en = false;
+        user_setting.wifi_enable = 0;
+        user_setting.bt_enable = 0;
+        user_setting.radio_enable = 0;
         user_setting.nfc_enable = 0;
         user_setting.gps_enable = 0;
         user_setting.speaker_enable = 0;
         user_setting.haptic_enable = 1;
+        user_setting.show_mem_usage = 0;
         
         prefs.getBytes(NVS_NAME, &user_setting, stored_size);
         
@@ -834,7 +847,6 @@ void hw_set_wifi_enable(bool en) {
         WiFi.disconnect(true);
         WiFi.mode(WIFI_OFF);
     }
-    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
 #endif
 }
 
@@ -846,9 +858,6 @@ void hw_set_bt_enable(bool en) {
     } else {
         hw_set_ble_kb_disable();
     }
-#ifdef ARDUINO
-    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
-#endif
 }
 
 bool hw_get_radio_enable() { return user_setting.radio_enable; }
@@ -862,9 +871,6 @@ void hw_set_radio_enable(bool en) {
         params.mode = RADIO_DISABLE;
         hw_set_radio_params(params);
     }
-#ifdef ARDUINO
-    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
-#endif
 }
 
 bool hw_get_nfc_enable() { return user_setting.nfc_enable; }
@@ -873,7 +879,6 @@ void hw_set_nfc_enable(bool en) {
 #ifdef ARDUINO
     instance.powerControl(POWER_NFC, en);
     delay(10);
-    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
 #endif
 }
 
@@ -888,7 +893,6 @@ void hw_set_gps_enable(bool en) {
     } else {
         Serial1.begin(38400, SERIAL_8N1, GPS_RX, GPS_TX);
     }
-    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
 #endif
 }
 
@@ -898,7 +902,6 @@ void hw_set_speaker_enable(bool en) {
 #ifdef ARDUINO
     instance.powerControl(POWER_SPEAK, en);
     delay(10);
-    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
 #endif
 }
 
@@ -908,7 +911,6 @@ void hw_set_haptic_enable(bool en) {
 #ifdef ARDUINO
     instance.powerControl(POWER_HAPTIC_DRIVER, en);
     delay(10);
-    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
 #endif
 }
 
