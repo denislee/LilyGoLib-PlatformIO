@@ -1265,37 +1265,43 @@ static void rotaryTask(void *p)
     uint32_t press_time = 0;
     bool btn_prev_state = HIGH;
     bool long_press_triggered = false;
+    bool long_press_active = false;
     static bool display_off = false;
 
     instance.rotary.begin();
     pinMode(ROTARY_C, INPUT_PULLUP);
     while (1) {
-        msg.centerBtnPressed = getButtonState();
-
+        // We handle the button manually here to support long-press
         bool btn_curr_state = digitalRead(ROTARY_C);
+        msg.centerBtnPressed = false; // Reset every loop
         
         // Falling edge (Pressed)
         if (btn_curr_state == LOW && btn_prev_state == HIGH) {
             press_time = millis();
             long_press_triggered = false;
+            long_press_active = true;
         }
         
+        // Rising edge (Released)
+        if (btn_curr_state == HIGH && btn_prev_state == LOW) {
+            if (!long_press_triggered && !display_off) {
+                // It was a short press/click, only allow if display is ON
+                msg.centerBtnPressed = true;
+            }
+            long_press_active = false;
+            long_press_triggered = false;
+        }
+
         // Held
         if (btn_curr_state == LOW && !long_press_triggered) {
             if (millis() - press_time > 1000) {
                 // Long press detected
                 static uint8_t last_brightness = 127;
-                static uint8_t last_kb_brightness = 255;
                 if (!display_off) {
                     last_brightness = instance.getBrightness();
                     if (last_brightness == 0) last_brightness = 127;
                     instance.setBrightness(0);
                     instance.sleepDisplay();
-                    if (instance.getDeviceProbe() & HW_KEYBOARD_ONLINE) {
-                        last_kb_brightness = instance.kb.getBrightness();
-                        instance.kb.end();
-                        instance.powerControl(POWER_KEYBOARD, false);
-                    }
                     display_off = true;
                     ui_lock();
                     ui_pause_timers();
@@ -1303,11 +1309,6 @@ static void rotaryTask(void *p)
                     ui_unlock();
                 } else {
                     instance.wakeupDisplay();
-                    if (instance.getDeviceProbe() & HW_KEYBOARD_ONLINE) {
-                        instance.powerControl(POWER_KEYBOARD, true);
-                        instance.initKeyboard();
-                        instance.kb.setBrightness(last_kb_brightness);
-                    }
                     instance.setBrightness(last_brightness);
                     display_off = false;
                     ui_lock();
@@ -1325,7 +1326,7 @@ static void rotaryTask(void *p)
             result = 0; // Ignore rotary scroll events when display is off
         }
         
-        if (result || msg.centerBtnPressed != last_btn_state) {
+        if (result || msg.centerBtnPressed) {
             switch (result) {
             case DIR_CW:
                 msg.dir = ROTARY_DIR_UP;
@@ -1337,7 +1338,6 @@ static void rotaryTask(void *p)
                 msg.dir = ROTARY_DIR_NONE;
                 break;
             }
-            last_btn_state = msg.centerBtnPressed;
             xQueueSend(rotaryMsg, (void *)&msg, portMAX_DELAY);
         }
         delay(2);

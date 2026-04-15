@@ -20,7 +20,6 @@ static void style_menu_item_icon(lv_obj_t *cont, const char *icon, const char *t
 
 static lv_obj_t *menu = NULL;
 static lv_timer_t *timer = NULL;
-static lv_group_t *menu_g;
 static  user_setting_params_t local_param;
 static uint32_t get_ip_id = 0;
 static lv_obj_t *quit_btn = NULL;
@@ -356,7 +355,7 @@ static void spinbox_event_cb(lv_event_t *e)
         else if (key == 'q' || key == 'Q' || key == LV_KEY_UP) {
             lv_group_focus_prev(g);
         }
-        else if (key == 'e' || key == 'E' || key == LV_KEY_DOWN || key == LV_KEY_ENTER) {
+        else if (key == 'e' || key == 'E' || key == LV_KEY_DOWN) {
             lv_group_focus_next(g);
         }
     }
@@ -738,12 +737,7 @@ static void settings_page_changed_cb(lv_event_t *e)
 
 static void settings_exit_cb(lv_event_t *e)
 {
-    if (timer) {
-        lv_timer_del(timer);
-        timer = NULL;
-    }
-
-    ui_sys_exit(NULL);
+    // menu_show will trigger AppManager::switchApp which calls ui_sys_exit
     menu_show();
 }
 static void editor_font_face_cb(lv_event_t *e)
@@ -1001,6 +995,10 @@ void ui_sys_enter(lv_obj_t *parent)
 
 void ui_sys_exit(lv_obj_t *parent)
 {
+    if (timer) {
+        lv_timer_del(timer);
+        timer = NULL;
+    }
     disable_keyboard();
     if (menu) {
         lv_obj_clean(menu);

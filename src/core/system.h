@@ -1,0 +1,50 @@
+/**
+ * @file      system.h
+ * @author    Gemini CLI
+ * @license   MIT
+ * @copyright Copyright (c) 2026
+ */
+#pragma once
+
+#include "app_manager.h"
+#include <lvgl.h>
+
+namespace core {
+
+/**
+ * @brief Singleton class that orchestrates the entire system.
+ */
+class System {
+public:
+    static System& getInstance();
+
+    void init();
+    void loop();
+
+    lv_obj_t* getMainScreen() { return _mainScreen; }
+    lv_obj_t* getAppPanel() { return _appPanel; }
+    lv_obj_t* getMenuPanel() { return _menuPanel; }
+    
+    void showMenu();
+    void hideMenu();
+    bool isInMenu() const;
+
+private:
+    System() = default;
+    
+    lv_obj_t* _mainScreen = nullptr;
+    lv_obj_t* _menuPanel = nullptr;
+    lv_obj_t* _appPanel = nullptr;
+    lv_obj_t* _statusBar = nullptr;
+    
+    lv_obj_t* _statTimeLabel = nullptr;
+    lv_obj_t* _statBattLabel = nullptr;
+    lv_obj_t* _statMemLabel = nullptr;
+    
+    lv_group_t* _menuGroup = nullptr;
+    lv_group_t* _appGroup = nullptr;
+    
+    void setupGlobalUI();
+};
+
+} // namespace core

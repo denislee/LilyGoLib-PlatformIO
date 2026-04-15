@@ -47,6 +47,11 @@ typedef uint8_t lv_menu_builder_variant_t;
 #define MSG_FFT_ID               400
 
 extern lv_obj_t *main_screen;
+extern lv_obj_t *menu_panel;
+extern lv_obj_t *app_panel;
+extern lv_group_t *menu_g;
+extern lv_group_t *app_g;
+extern app_t *current_app_ptr;
 
 lv_obj_t *ui_create_option(lv_obj_t *parent, const char *title, const char *symbol_txt, lv_obj_t *(*widget_create)(lv_obj_t *parent), lv_event_cb_t btn_event_cb);
 lv_obj_t *create_text(lv_obj_t *parent, const char *icon, const char *txt,

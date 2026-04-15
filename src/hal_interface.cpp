@@ -1751,6 +1751,8 @@ void hw_power_down_all()
     instance.powerControl(POWER_NFC, false);
     instance.powerControl(POWER_HAPTIC_DRIVER, false);
     instance.powerControl(POWER_SPEAK, false);
+    instance.powerControl(POWER_KEYBOARD, false);
+    hw_disable_keyboard();
     // SD Card is left on to avoid mount/unmount overhead and potential filesystem issues
 #endif
 }
@@ -1761,6 +1763,8 @@ void hw_power_up_all()
     if (user_setting.gps_enable) instance.powerControl(POWER_GPS, true);
     if (user_setting.nfc_enable) instance.powerControl(POWER_NFC, true);
     if (user_setting.haptic_enable) instance.powerControl(POWER_HAPTIC_DRIVER, true);
+    instance.powerControl(POWER_KEYBOARD, true);
+    hw_enable_keyboard();
     // Speaker is only powered on when needed by playback routines and if enabled
 #endif
 }
@@ -2313,15 +2317,23 @@ void hw_enable_input_devices()
 
 void hw_enable_keyboard()
 {
-#if defined(ARDUINO) && defined(ARDUINO_T_DECK_V2)
+#if defined(ARDUINO)
+#if defined(ARDUINO_T_DECK_V2)
     instance.enableKeyboard();
+#elif defined(ARDUINO_T_LORA_PAGER)
+    instance.initKeyboard();
+#endif
 #endif
 }
 
 void hw_disable_keyboard()
 {
-#if defined(ARDUINO) && defined(ARDUINO_T_DECK_V2)
+#if defined(ARDUINO)
+#if defined(ARDUINO_T_DECK_V2)
     instance.disableKeyboard();
+#elif defined(ARDUINO_T_LORA_PAGER)
+    instance.kb.end();
+#endif
 #endif
 }
 

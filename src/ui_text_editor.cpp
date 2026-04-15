@@ -103,7 +103,7 @@ static void autosave_timer_cb(lv_timer_t *t)
 static void do_exit()
 {
     save_content(false);
-    ui_text_editor_exit(NULL);
+    // menu_show will trigger AppManager::switchApp which calls ui_text_editor_exit
     menu_show();
 }
 
@@ -172,17 +172,18 @@ void ui_text_editor_enter(lv_obj_t *parent)
 {
     // If it was already partially active or pointers are stale, clean up
     if (menu != NULL) {
-        // If it's still a valid object, it will be cleaned by the parent clean
-        // but we need to reset our pointers.
-        // Actually, if we're here and menu != NULL, we might have been called
-        // while the app is already showing. 
-        // If we want a CLEAN document every time we wake up:
-        ui_text_editor_new_document();
-        return;
+        // If we are already here, don't do anything
+        if (lv_obj_get_parent(menu) == parent) {
+            return;
+        }
+        ui_text_editor_exit(NULL);
     }
     enable_keyboard();
 
     content_dirty = false;
+    if (autosave_timer) {
+        lv_timer_del(autosave_timer);
+    }
     autosave_timer = lv_timer_create(autosave_timer_cb, 60000, NULL);
 
     menu = create_menu(parent, back_event_handler);

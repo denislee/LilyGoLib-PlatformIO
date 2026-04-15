@@ -62,6 +62,15 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
 }
 
+#include "core/system.h"
+#include "core/app_adapter.h"
+
+extern app_t ui_sys_main;
+extern app_t ui_text_editor_main;
+extern app_t ui_file_browser_main;
+extern app_t ui_blog_main;
+extern app_t ui_tasks_main;
+
 void setup()
 {
     setCpuFrequencyMhz(240);
@@ -82,7 +91,6 @@ void setup()
     if (!settings.gps_enable) disable_flags |= NO_HW_GPS;
     if (!settings.nfc_enable) disable_flags |= NO_HW_NFC;
     if (!settings.haptic_enable) disable_flags |= NO_HW_DRV;
-    // Speaker doesn't have a NO_HW flag in begin() but is handled in hw_init()
 
     instance.begin(disable_flags);
 
@@ -90,7 +98,16 @@ void setup()
 
     hw_init();
 
-    setupGui();
+    // Register legacy apps via adapters
+    core::AppManager& am = core::AppManager::getInstance();
+    am.registerApp(std::make_shared<core::AppAdapter>("Editor", &ui_text_editor_main));
+    am.registerApp(std::make_shared<core::AppAdapter>("Tasks", &ui_tasks_main));
+    am.registerApp(std::make_shared<core::AppAdapter>("Blog", &ui_blog_main));
+    am.registerApp(std::make_shared<core::AppAdapter>("Settings", &ui_sys_main));
+    am.registerApp(std::make_shared<core::AppAdapter>("Files", &ui_file_browser_main));
+
+    // Initialize the new System
+    core::System::getInstance().init();
 
     // Defer WiFi init until after GUI is showing
     sntp_set_time_sync_notification_cb(time_available);
@@ -128,6 +145,7 @@ void loop()
     uint32_t time_to_next = 5;
     if (!ui_is_fake_sleep()) {
         time_to_next = lv_timer_handler();
+        core::System::getInstance().loop();
     }
 
     // Dynamic CPU Frequency Scaling for Power Saving

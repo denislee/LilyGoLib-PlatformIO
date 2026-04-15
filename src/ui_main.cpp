@@ -7,44 +7,25 @@
  *
  */
 #include "ui_define.h"
+#include "core/system.h"
 
-lv_obj_t *main_screen;
-static lv_obj_t *menu_panel;
-static lv_obj_t *app_panel;
+// Globals are now defined in core/system.cpp
 static lv_obj_t *home_list;
-static lv_group_t *menu_g;
-static lv_group_t *app_g;
 static lv_timer_t *disp_timer;
 static lv_timer_t *dev_timer;
 static bool low_power_mode_flag = false;
-static app_t *current_app_ptr = NULL;
 bool editor_auto_edit = false;
 static bool fake_sleep_active = false;
 
 static void deferred_switch_timer_cb(lv_timer_t *t)
 {
-    extern app_t ui_text_editor_main;
-    
-    // Set flag so editor knows to enter edit mode
-    editor_auto_edit = true;
+    // Set flag so editor knows whether to enter edit mode or not
+    editor_auto_edit = false;
 
-    // Always call exit on current app before cleaning up
-    if (current_app_ptr && current_app_ptr->exit_func_cb) {
-        (*current_app_ptr->exit_func_cb)(app_panel);
-    }
+    // Use the AppManager to handle the switch safely. 
+    // This will call onStop() on the current app and onStart() on the Editor.
+    core::AppManager::getInstance().switchApp("Editor", app_panel);
 
-    // Always clean app panel and groups before forcing the editor
-    if (app_g) {
-        lv_group_remove_all_objs(app_g);
-    }
-    
-    lv_obj_clean(app_panel);
-    
-    current_app_ptr = &ui_text_editor_main;
-    set_default_group(app_g);
-    if (ui_text_editor_main.setup_func_cb) {
-        (*ui_text_editor_main.setup_func_cb)(app_panel);
-    }
     if (isinMenu()) {
         menu_hidden();
     }
@@ -74,6 +55,7 @@ void ui_resume_timers()
         lv_timer_resume(disp_timer);
     }
     hw_power_up_all();
+    enable_keyboard();
     lv_display_trigger_activity(NULL);
 }
 
@@ -83,6 +65,7 @@ void ui_pause_timers()
     if (disp_timer) {
         lv_timer_pause(disp_timer);
     }
+    disable_keyboard();
     hw_power_down_all();
 }
 
@@ -116,25 +99,16 @@ void set_low_power_mode_flag(bool enable)
 
 void menu_show()
 {
-    current_app_ptr = NULL;
-    set_default_group(menu_g);
-    if (app_g) {
-        lv_group_remove_all_objs(app_g);
+    core::System::getInstance().showMenu();
+    if (disp_timer) {
+        lv_timer_resume(disp_timer);
     }
-    lv_tileview_set_tile_by_index(main_screen, 0, 0, LV_ANIM_OFF);
-    lv_timer_resume(disp_timer);
-    lv_display_trigger_activity(NULL);
     hw_feedback();
-    
-    if (home_list && lv_obj_get_child_count(home_list) > 0) {
-        lv_group_focus_obj(lv_obj_get_child(home_list, 0));
-    }
 }
 
 void menu_hidden()
 {
-    lv_tileview_set_tile_by_index(main_screen, 0, 1, LV_ANIM_OFF);
-    // Do NOT pause disp_timer, it's needed for the status bar
+    core::System::getInstance().hideMenu();
 }
 
 bool isinMenu()
