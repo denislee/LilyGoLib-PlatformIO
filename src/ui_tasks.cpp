@@ -83,22 +83,13 @@ static void add_ta_event_cb(lv_event_t *e) {
     lv_group_t *g = (lv_group_t *)lv_obj_get_group(ta);
 
     if (code == LV_EVENT_CLICKED) {
-        lv_indev_t *indev = lv_indev_get_act();
-        if (indev && lv_indev_get_type(indev) != LV_INDEV_TYPE_ENCODER) {
-            bool editing = lv_group_get_editing(g);
-            lv_group_set_editing(g, !editing);
-        }
+        // Ensure focus but explicitly stay out of editing mode
+        lv_group_focus_obj(ta);
+        lv_group_set_editing(g, false);
     } else if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
-        bool editing = lv_group_get_editing(g);
 
         if (key == LV_KEY_ENTER) {
-            if (!editing) {
-                lv_group_set_editing(g, true);
-                lv_event_stop_processing(e);
-                return;
-            }
-            
             const char *txt = lv_textarea_get_text(ta);
             if (strlen(txt) > 0) {
                 // Add new task
@@ -112,22 +103,24 @@ static void add_ta_event_cb(lv_event_t *e) {
                 lv_textarea_set_text(ta, "");
                 ui_tasks_refresh();
             }
-            lv_group_set_editing(g, false);
+            // Always stop Enter from reaching the default handler to prevent "entering" editing mode
             lv_event_stop_processing(e);
             return;
         }
 
         if (key == LV_KEY_ESC) {
-            if (editing) {
-                lv_group_set_editing(g, false);
-                lv_event_stop_processing(e);
-            } else {
-                if (menu) {
-                    lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
-                    if (bb) lv_obj_send_event(bb, LV_EVENT_CLICKED, NULL);
-                }
+            if (menu) {
+                lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
+                if (bb) lv_obj_send_event(bb, LV_EVENT_CLICKED, NULL);
             }
+            lv_event_stop_processing(e);
+            return;
         }
+
+        // For all other keys (printable chars, backspace, navigation), 
+        // let the default textarea handler deal with them. 
+        // Since we stay in "editing: false" state, LVGL handles character insertion 
+        // from physical keyboards automatically without entering visual editing mode.
     }
 }
 

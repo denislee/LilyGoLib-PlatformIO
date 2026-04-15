@@ -113,19 +113,21 @@ extern bool ui_is_fake_sleep();
 
 void loop()
 {
+    // Take the lock only for the duration of processing hardware and UI
     instanceLockTake();
+    
     instance.loop();
+
 #if defined(USING_ST25R3916)
-#ifdef USING_ST25R3916
     if (!ui_is_fake_sleep()) {
         loopNFCReader();
     }
 #endif
-#endif
     
     // Only process UI timers and refresh if we are NOT in fake sleep
+    uint32_t time_to_next = 5;
     if (!ui_is_fake_sleep()) {
-        lv_timer_handler();
+        time_to_next = lv_timer_handler();
     }
 
     // Dynamic CPU Frequency Scaling for Power Saving
@@ -147,7 +149,12 @@ void loop()
     }
 
     instanceLockGive();
-    delay(5);
+    
+    // Use the time until next LVGL task to sleep, but cap it at 5ms to maintain responsiveness
+    if (time_to_next > 5) time_to_next = 5;
+    if (time_to_next == 0) time_to_next = 1;
+    
+    delay(time_to_next);
 }
 
 #endif

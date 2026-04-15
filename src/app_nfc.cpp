@@ -16,7 +16,8 @@ enum NFCReaderState {
     ST_WAIT_RELEASED,
 };
 
-static uint8_t          rawBuffer[1024] = {0};
+static uint8_t          *rawBuffer = NULL;
+#define RAW_BUFFER_SIZE 1024
 static NdefClass        ndef(&NFCReader);
 static NFCReaderState   state = ST_POLLING;
 static notify_callback_t ndef_notify_cb = NULL;
@@ -65,8 +66,10 @@ static void ndefClassHandler()
     Serial.println("NDEF detected.");
     uint32_t actual_size = 0;
 
-    memset(rawBuffer, 0, sizeof(rawBuffer));
-    err = ndef.ndefPollerReadRawMessage(rawBuffer,  sizeof(rawBuffer), &actual_size);
+    if (!rawBuffer) return;
+
+    memset(rawBuffer, 0, RAW_BUFFER_SIZE);
+    err = ndef.ndefPollerReadRawMessage(rawBuffer,  RAW_BUFFER_SIZE, &actual_size);
     if (err != ST_ERR_NONE) {
         return;
     }
@@ -664,6 +667,13 @@ static ReturnCode ndefMediaWifiDump(const ndefType *wifi, ndefTypeWifi *wifiConf
 
 bool beginNFC(notify_callback_t notify_cb, ndef_event_callback_t event_cb)
 {
+    if (!rawBuffer) {
+        rawBuffer = (uint8_t *)ps_malloc(RAW_BUFFER_SIZE);
+        if (!rawBuffer) {
+            Serial.println("rawBuffer allocation failed!");
+            return false;
+        }
+    }
     bool res = false;
     ndef_notify_cb = notify_cb;
     ndef_event_cb = event_cb;
@@ -692,6 +702,10 @@ void deinitNFC()
 {
     NFCReader.rfalNfcDeactivate(false);
     _nfc_running = false;
+    if (rawBuffer) {
+        free(rawBuffer);
+        rawBuffer = NULL;
+    }
 }
 
 #endif /*ARDUINO*/

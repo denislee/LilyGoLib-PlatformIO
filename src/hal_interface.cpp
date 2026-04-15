@@ -395,15 +395,18 @@ static void playerTask(void *args)
 
 #ifdef ARDUINO
 
-static int16_t i2s_buffer[FFT_SIZE * 2];
-static float fft_input[FFT_SIZE * 2] __attribute__((aligned(16)));
-static float window[FFT_SIZE] __attribute__((aligned(16)));
-static int16_t left_channel[FFT_SIZE];
-static int16_t right_channel[FFT_SIZE];
+static int16_t *i2s_buffer = NULL;
+static float *fft_input = NULL;
+static float *window = NULL;
+static int16_t *left_channel = NULL;
+static int16_t *right_channel = NULL;
+static float *magnitudes = NULL;
 static int read_count = 0;
 
 static void process_channel_fft(int16_t *channel_data, float *bands, float freq_per_bin)
 {
+    if (!fft_input || !window || !magnitudes) return;
+
     for (int i = 0; i < FFT_SIZE; i++) {
         fft_input[2 * i] = (float)channel_data[i] * 3.0f / 32768.0f * window[i];
         fft_input[2 * i + 1] = 0;
@@ -413,7 +416,6 @@ static void process_channel_fft(int16_t *channel_data, float *bands, float freq_
     dsps_bit_rev_fc32(fft_input, FFT_SIZE);
     dsps_cplx2reC_fc32(fft_input, FFT_SIZE);
 
-    static float magnitudes[FFT_SIZE / 2];
     for (int i = 0; i < FFT_SIZE / 2; i++) {
         float real = fft_input[2 * i];
         float imag = fft_input[2 * i + 1];
@@ -445,21 +447,17 @@ static void process_channel_fft(int16_t *channel_data, float *bands, float freq_
         }
     }
 }
-
-
-
-
-
 #endif /*ARDUINO*/
 
 
 void hw_audio_get_fft_data(FFTData *fft_data)
 {
 #ifdef ARDUINO
+    if (!i2s_buffer || !left_channel || !right_channel) return;
+
     float freq_per_bin = (float)SAMPLE_RATE / FFT_SIZE;
 
 #if defined(USING_PDM_MICROPHONE)
-    int32_t pdm_sample;
     instance.mic.readBytes((char *)i2s_buffer, FFT_SIZE * 2 * sizeof(int16_t));
 #elif defined(USING_AUDIO_CODEC)
     if (HW_CODEC_ONLINE & hw_get_device_online()) {
@@ -498,6 +496,19 @@ bool hw_set_mic_start()
     }
 #endif /*USING_AUDIO_CODEC*/
 
+    // Allocate FFT buffers in PSRAM
+    if (!i2s_buffer) i2s_buffer = (int16_t *)ps_malloc(FFT_SIZE * 2 * sizeof(int16_t));
+    if (!fft_input) fft_input = (float *)heap_caps_aligned_alloc(16, FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_SPIRAM);
+    if (!window) window = (float *)heap_caps_aligned_alloc(16, FFT_SIZE * sizeof(float), MALLOC_CAP_SPIRAM);
+    if (!left_channel) left_channel = (int16_t *)ps_malloc(FFT_SIZE * sizeof(int16_t));
+    if (!right_channel) right_channel = (int16_t *)ps_malloc(FFT_SIZE * sizeof(int16_t));
+    if (!magnitudes) magnitudes = (float *)ps_malloc((FFT_SIZE / 2) * sizeof(float));
+
+    if (!i2s_buffer || !fft_input || !window || !left_channel || !right_channel || !magnitudes) {
+        log_e("FFT buffer allocation failed!");
+        return false;
+    }
+
     ret = dsps_fft2r_init_fc32(NULL, FFT_SIZE);
     if (ret != ESP_OK) {
         log_e("fft init failed = %i\n", ret);
@@ -520,6 +531,14 @@ void hw_set_mic_stop()
     }
 #endif
     dsps_fft2r_deinit_fc32();
+
+    // Free buffers
+    if (i2s_buffer) { free(i2s_buffer); i2s_buffer = NULL; }
+    if (fft_input) { free(fft_input); fft_input = NULL; }
+    if (window) { free(window); window = NULL; }
+    if (left_channel) { free(left_channel); left_channel = NULL; }
+    if (right_channel) { free(right_channel); right_channel = NULL; }
+    if (magnitudes) { free(magnitudes); magnitudes = NULL; }
 #endif /*ARDUINO*/
 }
 
@@ -762,53 +781,35 @@ void hw_init()
 void hw_load_setting()
 {
 #ifdef ARDUINO
+    // Initialize with defaults first
+    user_setting.brightness_level = 50;
+    user_setting.keyboard_bl_level = 80;
+    user_setting.disp_timeout_second = 0;
+    user_setting.charger_current = DEVICE_CHARGE_CURRENT_RECOMMEND;
+    user_setting.charger_enable = true;
+    user_setting.sleep_mode = 0;
+    user_setting.editor_font_size = 14;
+    user_setting.editor_font_index = 0;
+    user_setting.charge_limit_en = false;
+    user_setting.wifi_enable = 0;
+    user_setting.bt_enable = 0;
+    user_setting.radio_enable = 0;
+    user_setting.nfc_enable = 0;
+    user_setting.gps_enable = 0;
+    user_setting.speaker_enable = 0;
+    user_setting.haptic_enable = 1;
+    user_setting.show_mem_usage = 0;
+
     prefs.begin(NVS_NAME);
     size_t stored_size = prefs.getBytesLength(NVS_NAME);
     if (stored_size > 0 && stored_size <= sizeof(user_setting_params_t)) {
-        // Initialize with defaults first to ensure any new fields have sane values
-        user_setting.brightness_level = 50;
-        user_setting.keyboard_bl_level = 80;
-        user_setting.disp_timeout_second = 0;
-        user_setting.charger_current = DEVICE_CHARGE_CURRENT_RECOMMEND;
-        user_setting.charger_enable = true;
-        user_setting.sleep_mode = 0;
-        user_setting.editor_font_size = 14;
-        user_setting.editor_font_index = 0;
-        user_setting.charge_limit_en = false;
-        user_setting.wifi_enable = 0;
-        user_setting.bt_enable = 0;
-        user_setting.radio_enable = 0;
-        user_setting.nfc_enable = 0;
-        user_setting.gps_enable = 0;
-        user_setting.speaker_enable = 0;
-        user_setting.haptic_enable = 1;
-        user_setting.show_mem_usage = 0;
-        
         prefs.getBytes(NVS_NAME, &user_setting, stored_size);
-        
         if (stored_size != sizeof(user_setting_params_t)) {
             log_i("Settings size mismatch (%d vs %d), migrated and saving new version", stored_size, sizeof(user_setting_params_t));
             prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
         }
     } else {
-        log_e("No valid settings found or size too large, set default setting");
-        user_setting.brightness_level = 50;
-        user_setting.keyboard_bl_level = 80;
-        user_setting.disp_timeout_second = 0;
-        user_setting.charger_current = DEVICE_CHARGE_CURRENT_RECOMMEND;
-        user_setting.charger_enable = true;
-        user_setting.sleep_mode = 0;
-        user_setting.editor_font_size = 14;
-        user_setting.editor_font_index = 0;
-        user_setting.charge_limit_en = false;
-        user_setting.wifi_enable = 0;
-        user_setting.bt_enable = 0;
-        user_setting.radio_enable = 0;
-        user_setting.nfc_enable = 0;
-        user_setting.gps_enable = 0;
-        user_setting.speaker_enable = 0;
-        user_setting.haptic_enable = 1;
-        user_setting.show_mem_usage = 0;
+        log_i("No valid settings found, using defaults and saving");
         prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
     }
 #else
@@ -1936,6 +1937,16 @@ uint16_t hw_set_charger_current_level(uint8_t level)
 void hw_get_monitor_params(monitor_params_t &params)
 {
 #ifdef ARDUINO
+    static monitor_params_t cached_params;
+    static uint32_t last_refresh = 0;
+    
+    // Refresh at most every 1 second to save power and I2C bandwidth
+    if (last_refresh != 0 && (millis() - last_refresh < 1000)) {
+        params = cached_params;
+        return;
+    }
+    last_refresh = millis();
+
     memset(&params, 0, sizeof(monitor_params_t));
 
 #if defined(USING_PPM_MANAGE)
@@ -2003,7 +2014,7 @@ void hw_get_monitor_params(monitor_params_t &params)
         }
     }
 #endif
-
+    cached_params = params;
 #else
     params.type = MONITOR_PPM;
     params.battery_percent = 30 + rand() % (100 - 30 + 1);;
