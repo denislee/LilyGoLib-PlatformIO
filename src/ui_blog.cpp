@@ -147,7 +147,7 @@ static void blog_key_event_cb(lv_event_t *e)
     if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
         lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-        if (key == 'd' || key == 'D') {
+        if (key == 'd' || key == 'D' || key == LV_KEY_BACKSPACE) {
             lv_group_t *g = lv_group_get_default();
             lv_obj_t *focused = lv_group_get_focused(g);
             if (focused) {
