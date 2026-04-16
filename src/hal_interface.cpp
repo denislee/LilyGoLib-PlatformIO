@@ -1754,12 +1754,18 @@ void hw_power_down_all()
     instance.powerControl(POWER_KEYBOARD, false);
     hw_disable_keyboard();
     // SD Card is left on to avoid mount/unmount overhead and potential filesystem issues
+    
+    // Lower CPU frequency to 40MHz for power saving during fake sleep
+    setCpuFrequencyMhz(40);
 #endif
 }
 
 void hw_power_up_all()
 {
 #ifdef ARDUINO
+    // Revert CPU frequency to 240MHz
+    setCpuFrequencyMhz(240);
+
     if (user_setting.gps_enable) instance.powerControl(POWER_GPS, true);
     if (user_setting.nfc_enable) instance.powerControl(POWER_NFC, true);
     if (user_setting.haptic_enable) instance.powerControl(POWER_HAPTIC_DRIVER, true);

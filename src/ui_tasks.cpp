@@ -56,11 +56,28 @@ static void task_event_cb(lv_event_t *e) {
             if (t.obj == obj) {
                 string icon = checked ? LV_SYMBOL_OK : LV_SYMBOL_MINUS;
                 string display_text = icon + "  " + t.text;
-                lv_checkbox_set_text(obj, display_text.c_str());
+                // Update the child label instead of the checkbox text
+                lv_obj_t * label = lv_obj_get_child(obj, 0);
+                if (label) lv_label_set_text(label, display_text.c_str());
                 break;
             }
         }
         save_tasks();
+    } else if (code == LV_EVENT_FOCUSED || code == LV_EVENT_DEFOCUSED) {
+        lv_obj_t * label = NULL;
+        if (lv_obj_has_class(obj, &lv_checkbox_class)) {
+            label = lv_obj_get_child(obj, 0);
+        } else if (lv_obj_has_class(obj, &lv_label_class)) {
+            label = obj;
+        }
+
+        if (label) {
+            if (code == LV_EVENT_FOCUSED) {
+                lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL);
+            } else {
+                lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+            }
+        }
     } else if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
         if (key == LV_KEY_BACKSPACE || key == LV_KEY_DEL) {
@@ -200,7 +217,14 @@ void ui_tasks_refresh() {
         if (t.is_task) {
             t.obj = lv_checkbox_create(task_container);
             lv_obj_set_width(t.obj, LV_PCT(100));
+            lv_checkbox_set_text(t.obj, ""); // Clear built-in text
             
+            // Create a separate label for the text to support scrolling
+            lv_obj_t * label = lv_label_create(t.obj);
+            lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP); // Default to CLIP
+            lv_obj_set_width(label, LV_PCT(100));
+            lv_obj_set_align(label, LV_ALIGN_LEFT_MID);
+
             // Hide the default checkbox indicator box to make it a clean list
             lv_obj_set_style_opa(t.obj, LV_OPA_TRANSP, LV_PART_INDICATOR);
             lv_obj_set_style_width(t.obj, 0, LV_PART_INDICATOR);
@@ -211,7 +235,7 @@ void ui_tasks_refresh() {
 
             string icon = t.checked ? LV_SYMBOL_OK : LV_SYMBOL_MINUS;
             string display_text = icon + "  " + t.text;
-            lv_checkbox_set_text(t.obj, display_text.c_str());
+            lv_label_set_text(label, display_text.c_str());
             
             // Visual feedback when navigating to the task (focused state)
             lv_obj_set_style_border_color(t.obj, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
@@ -220,8 +244,11 @@ void ui_tasks_refresh() {
             lv_obj_set_style_bg_opa(t.obj, LV_OPA_20, LV_STATE_FOCUSED);
 
             // Visual feedback when the task is done (checked state)
-            lv_obj_set_style_text_decor(t.obj, LV_TEXT_DECOR_STRIKETHROUGH, LV_STATE_CHECKED);
-            lv_obj_set_style_text_color(t.obj, lv_palette_main(LV_PALETTE_GREY), LV_STATE_CHECKED);
+            lv_obj_t * child_label = lv_obj_get_child(t.obj, 0);
+            if (child_label) {
+                lv_obj_set_style_text_decor(child_label, LV_TEXT_DECOR_STRIKETHROUGH, LV_STATE_CHECKED);
+                lv_obj_set_style_text_color(child_label, lv_palette_main(LV_PALETTE_GREY), LV_STATE_CHECKED);
+            }
 
             if (t.checked) {
                 lv_obj_add_state(t.obj, LV_STATE_CHECKED);
@@ -231,11 +258,22 @@ void ui_tasks_refresh() {
         } else {
             t.obj = lv_label_create(task_container);
             lv_obj_set_width(t.obj, LV_PCT(100));
+            lv_label_set_long_mode(t.obj, LV_LABEL_LONG_CLIP);
             lv_obj_set_style_pad_left(t.obj, 0, LV_PART_MAIN);
             
             string display_text = string(LV_SYMBOL_BULLET) + " " + t.text;
             lv_label_set_text(t.obj, display_text.c_str());
             lv_obj_set_style_text_color(t.obj, lv_palette_main(LV_PALETTE_GREY), 0);
+
+            // Make non-task items focusable so they can scroll on highlight
+            lv_obj_add_flag(t.obj, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_border_color(t.obj, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+            lv_obj_set_style_border_width(t.obj, 2, LV_STATE_FOCUSED);
+            lv_obj_set_style_bg_color(t.obj, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+            lv_obj_set_style_bg_opa(t.obj, LV_OPA_20, LV_STATE_FOCUSED);
+            
+            lv_obj_add_event_cb(t.obj, task_event_cb, LV_EVENT_ALL, NULL);
+            lv_group_add_obj(lv_group_get_default(), t.obj);
         }
     }
 }
