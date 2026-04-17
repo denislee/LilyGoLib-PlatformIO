@@ -602,6 +602,7 @@ void ui_journal_enter(lv_obj_t *parent)
 
     lv_obj_t *focus_target = exit_btn;
     int current_child_idx = 0;
+    std::vector<std::pair<lv_obj_t *, lv_obj_t *>> trunc_checks;
 
     if (total_files == 0) {
         lv_obj_t *empty_label = lv_label_create(main_page);
@@ -623,6 +624,7 @@ void ui_journal_enter(lv_obj_t *parent)
         }
 
         int render_total = end_idx - start_idx;
+        trunc_checks.reserve(render_total);
         for (int i = start_idx; i < end_idx; ++i) {
             const JournalEntry &entry = journal_entries[i];
             current_child_idx++;
@@ -725,23 +727,17 @@ void ui_journal_enter(lv_obj_t *parent)
             lv_obj_set_style_pad_left(label, 4, 0); 
             lv_obj_set_style_pad_right(label, 4, 0);
 
-            lv_obj_update_layout(label);
-            lv_obj_update_layout(scroll_area);
-            lv_obj_update_layout(post_cont);
-            int32_t bottom = lv_obj_get_scroll_bottom(scroll_area);
-            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_t *trunc_icon = lv_label_create(post_cont);
+            lv_label_set_text(trunc_icon, LV_SYMBOL_DOWN);
+            lv_obj_set_style_text_font(trunc_icon, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(trunc_icon, lv_palette_main(LV_PALETTE_ORANGE), 0);
+            lv_obj_add_flag(trunc_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
+            lv_obj_align(trunc_icon, LV_ALIGN_BOTTOM_RIGHT, -12, -5);
+            lv_obj_set_style_bg_opa(trunc_icon, LV_OPA_TRANSP, 0);
+            lv_obj_add_flag(trunc_icon, LV_OBJ_FLAG_HIDDEN);
 
-            if (bottom > 0) {
-                lv_obj_t *trunc_icon = lv_label_create(post_cont);
-                lv_label_set_text(trunc_icon, LV_SYMBOL_DOWN);
-                lv_obj_set_style_text_font(trunc_icon, &lv_font_montserrat_14, 0);
-                lv_obj_set_style_text_color(trunc_icon, lv_palette_main(LV_PALETTE_ORANGE), 0);
-                lv_obj_add_flag(trunc_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
-                lv_obj_align(trunc_icon, LV_ALIGN_BOTTOM_RIGHT, -12, -5);
-                lv_obj_set_style_bg_opa(trunc_icon, LV_OPA_TRANSP, 0);
-
-                lv_obj_add_event_cb(scroll_area, post_scroll_indicator_cb, LV_EVENT_SCROLL, trunc_icon);
-            }
+            lv_obj_add_event_cb(scroll_area, post_scroll_indicator_cb, LV_EVENT_SCROLL, trunc_icon);
+            trunc_checks.emplace_back(scroll_area, trunc_icon);
         }
 
         lv_obj_t *footer_cont = lv_obj_create(main_page);
@@ -774,6 +770,16 @@ void ui_journal_enter(lv_obj_t *parent)
     }
 
     lv_menu_set_page(menu, main_page);
+
+    lv_obj_update_layout(main_page);
+    for (auto &pair : trunc_checks) {
+        lv_obj_t *scroll_area = pair.first;
+        lv_obj_t *trunc_icon = pair.second;
+        if (lv_obj_get_scroll_bottom(scroll_area) > 0) {
+            lv_obj_remove_flag(trunc_icon, LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_obj_remove_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE);
+    }
 
     if (focus_target) {
         lv_group_focus_obj(focus_target);
