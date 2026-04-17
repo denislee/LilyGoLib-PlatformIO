@@ -329,6 +329,33 @@ static void loader_hide()
 void ui_journal_enter(lv_obj_t *parent);
 void ui_journal_exit(lv_obj_t *parent);
 
+static void free_post_user_data()
+{
+    if (!menu) return;
+    lv_obj_t *main_page = lv_menu_get_cur_main_page(menu);
+    if (!main_page) return;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(main_page); i++) {
+        lv_obj_t *child = lv_obj_get_child(main_page, i);
+        void *data = lv_obj_get_user_data(child);
+        if (data) {
+            lv_mem_free(data);
+            lv_obj_set_user_data(child, NULL);
+        }
+    }
+}
+
+static void teardown_menu_for_rerender()
+{
+    free_post_user_data();
+    lv_obj_clean(menu);
+    lv_obj_del(menu);
+    menu = NULL;
+    if (quit_btn) {
+        lv_obj_del_async(quit_btn);
+        quit_btn = NULL;
+    }
+}
+
 static void do_exit()
 {
     ui_journal_exit(NULL);
@@ -338,13 +365,7 @@ static void do_exit()
 static void next_page_cb(lv_event_t *e)
 {
     current_page++;
-    lv_obj_clean(menu);
-    lv_obj_del(menu);
-    menu = NULL;
-    if (quit_btn) {
-        lv_obj_del_async(quit_btn);
-        quit_btn = NULL;
-    }
+    teardown_menu_for_rerender();
     ui_journal_enter(parent_obj);
 }
 
@@ -352,13 +373,7 @@ static void prev_page_cb(lv_event_t *e)
 {
     if (current_page > 0) {
         current_page--;
-        lv_obj_clean(menu);
-        lv_obj_del(menu);
-        menu = NULL;
-        if (quit_btn) {
-            lv_obj_del_async(quit_btn);
-            quit_btn = NULL;
-        }
+        teardown_menu_for_rerender();
         ui_journal_enter(parent_obj);
     }
 }
@@ -380,19 +395,18 @@ static void post_focus_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
     lv_obj_scroll_to_view(obj, LV_ANIM_ON);
+}
 
+static void post_defocus_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
     lv_group_t *g = lv_group_get_default();
-    if (lv_group_get_editing(g)) {
-        lv_obj_t *focused = lv_group_get_focused(g);
-        if (focused && focused != obj) {
-            lv_group_set_editing(g, false);
-            
-            lv_obj_t *old_scroll = lv_obj_get_child(focused, 0);
-            if (old_scroll) {
-                lv_obj_clear_flag(old_scroll, LV_OBJ_FLAG_SCROLLABLE);
-                lv_obj_scroll_to_y(old_scroll, 0, LV_ANIM_OFF);
-            }
-        }
+    if (!lv_group_get_editing(g)) return;
+    lv_group_set_editing(g, false);
+    lv_obj_t *scroll_area = lv_obj_get_child(obj, 0);
+    if (scroll_area) {
+        lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_scroll_to_y(scroll_area, 0, LV_ANIM_OFF);
     }
 }
 
@@ -452,9 +466,7 @@ static void delete_msgbox_cb(lv_event_t *e)
     destroy_msgbox(mbox_to_del);
 
     if (deleted) {
-        lv_obj_clean(menu);
-        lv_obj_del(menu);
-        menu = NULL;
+        teardown_menu_for_rerender();
         ui_journal_enter(parent_obj);
     }
 
@@ -553,14 +565,12 @@ void ui_journal_enter(lv_obj_t *parent)
         hw_set_filesystem_dirty(false);
     }
 
-    if (!cache_valid || journal_entries.empty()) {
-        loader_show();
-        menu = create_menu(parent, back_event_handler);
+    bool show_loader = !cache_valid || journal_entries.empty();
+    if (show_loader) loader_show();
+    menu = create_menu(parent, back_event_handler);
+    if (show_loader) {
         refresh_journal_entries(journal_entries, loader_update, nullptr);
         cache_valid = true;
-        loader_hide();
-    } else {
-        menu = create_menu(parent, back_event_handler);
     }
 
     lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
@@ -658,6 +668,7 @@ void ui_journal_enter(lv_obj_t *parent)
 
             lv_group_add_obj(lv_group_get_default(), post_cont);
             lv_obj_add_event_cb(post_cont, post_focus_cb, LV_EVENT_FOCUSED, NULL);
+            lv_obj_add_event_cb(post_cont, post_defocus_cb, LV_EVENT_DEFOCUSED, NULL);
             lv_obj_add_event_cb(post_cont, post_click_cb, LV_EVENT_CLICKED, NULL);
             
             // Add internal scroll handler for editing mode
@@ -783,25 +794,10 @@ void ui_journal_exit(lv_obj_t *parent)
     loader_hide();
     disable_keyboard();
     if (menu) {
-        lv_obj_t *main_page = lv_menu_get_cur_main_page(menu);
-        if (main_page) {
-            for (uint32_t i = 0; i < lv_obj_get_child_count(main_page); i++) {
-                lv_obj_t *child = lv_obj_get_child(main_page, i);
-                void *data = lv_obj_get_user_data(child);
-                if (data) lv_mem_free(data);
-            }
-        }
-    }
-
-    if (quit_btn) {
+        teardown_menu_for_rerender();
+    } else if (quit_btn) {
         lv_obj_del_async(quit_btn);
         quit_btn = NULL;
-    }
-
-    if (menu) {
-        lv_obj_clean(menu);
-        lv_obj_del(menu);
-        menu = NULL;
     }
     target_focus_index = -1;
     current_page = 0;
