@@ -39,16 +39,16 @@ static void update_word_count()
     lv_label_set_text_fmt(word_count_label, "%zu words | %zu chars%s", words, chars, content_dirty ? " *" : "");
 }
 
-static void save_content(bool is_autosave = false)
+static bool save_content(bool is_autosave = false)
 {
-    if (!text_area) return;
-    
+    if (!text_area) return true;
+
     if (is_autosave && !content_dirty) {
-        return; // Nothing to save
+        return true; // Nothing to save
     }
 
     const char *txt = lv_textarea_get_text(text_area);
-    
+
     // Check if content is empty or only whitespace
     bool only_whitespace = true;
     size_t len = lv_strlen(txt);
@@ -61,7 +61,7 @@ static void save_content(bool is_autosave = false)
 
     if (only_whitespace) {
         printf("Content is empty or only whitespace, skip save\n");
-        return;
+        return true;
     }
 
     bool success = false;
@@ -78,21 +78,21 @@ static void save_content(bool is_autosave = false)
     }
 
     printf("Saving to %s...\n", target_path.c_str());
+    string err;
     if (current_file_path.empty()) {
-        // New files go to internal memory (Blog)
-        success = hw_save_internal_file(target_path.c_str(), txt);
+        // New files honour the user's storage preference (internal vs SD).
+        success = hw_save_preferred_file(target_path.c_str(), txt, &err);
     } else {
-        // Existing files: check if it was opened from internal or SD?
-        // For now, use the smarter hw_save_file or just prefer internal if it's there?
-        // The user wants Blog/Tasks to be internal.
+        // Existing files: keep system files (tasks, blog posts) on whichever
+        // storage the preference selects; other files use the smart save which
+        // prefers whichever storage already holds the file.
         if (target_path == "/tasks.txt" || (target_path.length() > 1 && isdigit(target_path[1]))) {
-            // Pattern matches Blog or Tasks
-            success = hw_save_internal_file(target_path.c_str(), txt);
+            success = hw_save_preferred_file(target_path.c_str(), txt, &err);
         } else {
-            success = hw_save_file(target_path.c_str(), txt);
+            success = hw_save_file(target_path.c_str(), txt, &err);
         }
     }
-    
+
     if (success) {
         printf("Save successful\n");
         content_dirty = false;
@@ -100,11 +100,20 @@ static void save_content(bool is_autosave = false)
             current_file_path = target_path;
         }
         update_word_count(); // to clear the asterisk
+        return true;
     } else {
-        printf("Save failed!\n");
+        printf("Save failed: %s\n", err.c_str());
         if (!is_autosave) {
-            ui_msg_pop_up("Save", "Failed to save file!");
+            string msg = "Failed to save file!";
+            if (!err.empty()) {
+                msg += "\n";
+                msg += err;
+            }
+            msg += "\nPath: ";
+            msg += target_path;
+            ui_msg_pop_up("Save", msg.c_str());
         }
+        return false;
     }
 }
 
@@ -115,7 +124,12 @@ static void autosave_timer_cb(lv_timer_t *t)
 
 static void do_exit()
 {
-    save_content(false);
+    // If save fails, stay in the editor so the "Save failed" msgbox remains
+    // interactable. menu_show() re-binds input devices to the menu group, which
+    // would otherwise leave the msgbox's Close button unreachable via encoder/keyboard.
+    if (!save_content(false)) {
+        return;
+    }
     // menu_show will trigger AppManager::switchApp which calls ui_text_editor_exit
     menu_show();
 }
@@ -270,7 +284,10 @@ void ui_text_editor_open_file(const char *path)
 void ui_text_editor_new_document()
 {
     if (text_area == NULL) return;
-    save_content(false);
+    if (!save_content(false)) {
+        // Don't discard current content if save failed.
+        return;
+    }
     lv_textarea_set_text(text_area, "");
     current_file_path = "";
     content_dirty = false;
@@ -308,8 +325,22 @@ void ui_text_editor_exit(lv_obj_t *parent)
     current_file_path = "";
 }
 
-app_t ui_text_editor_main = {
-    .setup_func_cb = ui_text_editor_enter,
-    .exit_func_cb = ui_text_editor_exit,
-    .user_data = nullptr,
+#include "apps/app_registry.h"
+
+namespace {
+class TextEditorApp : public core::App {
+public:
+    TextEditorApp() : core::App("Editor") {}
+    void onStart(lv_obj_t *parent) override { ui_text_editor_enter(parent); }
+    void onStop() override {
+        ui_text_editor_exit(getRoot());
+        core::App::onStop();
+    }
 };
+} // namespace
+
+namespace apps {
+std::shared_ptr<core::App> make_text_editor_app() {
+    return std::make_shared<TextEditorApp>();
+}
+} // namespace apps

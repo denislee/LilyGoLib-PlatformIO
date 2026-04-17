@@ -21,6 +21,7 @@
 
 static lock_callback_t mutexUnlock = NULL;
 static lock_callback_t mutexLock = NULL;
+static bool msc_use_sd = false;
 
 #if !ARDUINO_USB_MODE
 #include <USB.h>
@@ -39,109 +40,101 @@ static uint8_t  pdrv = 0; //The default drive number of ESP32 Flash is 0
 
 static int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t *buffer, uint32_t bufsize)
 {
+    if (msc_use_sd) {
 #ifdef USING_SD_FAT
-    if (mutexLock) {
-        // xSemaphoreTake(_mutex, portMAX_DELAY);
-        mutexLock();
-    }
-    uint32_t secSize = SD.sectorSize();
-    if (!secSize) {
-        if (mutexUnlock) {
-            // xSemaphoreGive(_mutex);
-            mutexUnlock();
+        if (mutexLock) {
+            mutexLock();
         }
-        return -1;  // disk error
-    }
-    log_v("Write lba: %ld\toffset: %ld\tbufsize: %ld", lba, offset, bufsize);
-    for (int x = 0; x < bufsize / secSize; x++) {
-        uint8_t blkbuffer[secSize];
-        memcpy(blkbuffer, (uint8_t *)buffer + secSize * x, secSize);
-        if (!SD.writeRAW(blkbuffer, lba + x)) {
+        uint32_t secSize = SD.sectorSize();
+        if (!secSize) {
             if (mutexUnlock) {
-                // xSemaphoreGive(_mutex);
                 mutexUnlock();
             }
-            return -1;
+            return -1;  // disk error
         }
-    }
-    if (mutexUnlock) {
-        // xSemaphoreGive(_mutex);
-        mutexUnlock();
-    }
-    return bufsize;
-#else
+        for (int x = 0; x < bufsize / secSize; x++) {
+            uint8_t blkbuffer[secSize];
+            memcpy(blkbuffer, (uint8_t *)buffer + secSize * x, secSize);
+            if (!SD.writeRAW(blkbuffer, lba + x)) {
+                if (mutexUnlock) {
+                    mutexUnlock();
+                }
+                return -1;
+            }
+        }
+        if (mutexUnlock) {
+            mutexUnlock();
+        }
+        return bufsize;
+#endif
+    } else {
 #ifdef USING_FATFS
-    const uint32_t block_count = bufsize / block_size;
-    disk_write(pdrv, (BYTE *)buffer, lba, block_count);
-    return block_count * block_size;
+        const uint32_t block_count = bufsize / block_size;
+        disk_write(pdrv, (BYTE *)buffer, lba, block_count);
+        return block_count * block_size;
 #endif
-#endif
+    }
     return 0;
 }
 
 static int32_t onRead(uint32_t lba, uint32_t offset, void *buffer, uint32_t bufsize)
 {
+    if (msc_use_sd) {
 #ifdef USING_SD_FAT
-    if (mutexLock) {
-        // xSemaphoreTake(_mutex, portMAX_DELAY);
-        mutexLock();
-    }
-    uint32_t secSize = SD.sectorSize();
-    if (!secSize) {
-        if (mutexUnlock) {
-            // xSemaphoreGive(_mutex);
-            mutexUnlock();
+        if (mutexLock) {
+            mutexLock();
         }
-        return -1;  // disk error
-    }
-    log_v("Read lba: %ld\toffset: %ld\tbufsize: %ld\tsector: %lu", lba, offset, bufsize, secSize);
-    for (int x = 0; x < bufsize / secSize; x++) {
-        if (!SD.readRAW((uint8_t *)buffer + (x * secSize), lba + x)) {
+        uint32_t secSize = SD.sectorSize();
+        if (!secSize) {
             if (mutexUnlock) {
-                // xSemaphoreGive(_mutex);
                 mutexUnlock();
             }
-            return -1;  // outside of volume boundary
+            return -1;  // disk error
         }
-    }
-    if (mutexUnlock) {
-        // xSemaphoreGive(_mutex);
-        mutexUnlock();
-    }
-    return bufsize;
-#else
+        for (int x = 0; x < bufsize / secSize; x++) {
+            if (!SD.readRAW((uint8_t *)buffer + (x * secSize), lba + x)) {
+                if (mutexUnlock) {
+                    mutexUnlock();
+                }
+                return -1;  // outside of volume boundary
+            }
+        }
+        if (mutexUnlock) {
+            mutexUnlock();
+        }
+        return bufsize;
+#endif
+    } else {
 #ifdef USING_FATFS
-    const uint32_t block_count = bufsize / block_size;
-    disk_read(pdrv, (BYTE *)buffer, lba, block_count);
-    return block_count * block_size;
+        const uint32_t block_count = bufsize / block_size;
+        disk_read(pdrv, (BYTE *)buffer, lba, block_count);
+        return block_count * block_size;
 #endif
-#endif
+    }
     return 0;
 }
 
 static bool onStartStop(uint8_t power_condition, bool start, bool load_eject)
 {
-    log_i("Start/Stop power: %u\tstart: %d\teject: %d", power_condition, start, load_eject);
-#ifdef USING_SD_FAT
-#else
+    if (!msc_use_sd) {
 #ifdef USING_FATFS
-    if (load_eject) {
-        if (!start) {
-            // Eject but first flush.
-            if (disk_ioctl(pdrv, CTRL_SYNC, NULL) != RES_OK) {
-                return false;
+        if (load_eject) {
+            if (!start) {
+                // Eject but first flush.
+                if (disk_ioctl(pdrv, CTRL_SYNC, NULL) != RES_OK) {
+                    return false;
+                }
+            }
+        } else {
+            if (!start) {
+                // Stop the unit but don't eject.
+                if (disk_ioctl(pdrv, CTRL_SYNC, NULL) != RES_OK) {
+                    return false;
+                }
             }
         }
-    } else {
-        if (!start) {
-            // Stop the unit but don't eject.
-            if (disk_ioctl(pdrv, CTRL_SYNC, NULL) != RES_OK) {
-                return false;
-            }
-        }
+#endif
     }
-#endif
-#endif
     return true;
 }
 #endif
@@ -191,10 +184,11 @@ static void __listDir(fs::FS &fs, const char *dirname, uint8_t levels)
     }
 }
 
-void setupMSC(lock_callback_t lock_cb, lock_callback_t ulock_cb)
+void setupMSC(lock_callback_t lock_cb, lock_callback_t ulock_cb, bool use_sd)
 {
     mutexUnlock = ulock_cb;
     mutexLock = lock_cb;
+    msc_use_sd = use_sd;
 
 #if defined(USING_FATFS)
     log_d("Init FFat");
@@ -227,19 +221,19 @@ void setupMSC(lock_callback_t lock_cb, lock_callback_t ulock_cb)
 
 #if !ARDUINO_USB_MODE
 
+    if (msc_use_sd) {
 #ifdef USING_SD_FAT
-    block_count = SD.numSectors();
-    block_size =  SD.sectorSize();
-    log_d("Card Size: %lluMB\n", SD.totalBytes() / 1024 / 1024);
-    log_d("Sector: %d\tCount: %d\n", SD.sectorSize(), SD.numSectors());
-#else /*USING_SD_FAT*/
-
+        block_count = SD.numSectors();
+        block_size =  SD.sectorSize();
+        log_d("Card Size: %lluMB\n", SD.totalBytes() / 1024 / 1024);
+        log_d("Sector: %d\tCount: %d\n", SD.sectorSize(), SD.numSectors());
+#endif
+    } else {
 #ifdef USING_FATFS
-    disk_ioctl(pdrv, GET_SECTOR_COUNT, &block_count);
-    disk_ioctl(pdrv, GET_SECTOR_SIZE, &block_size);
-#endif /*USING_FATFS*/
-
-#endif /*USING_SD_FAT*/
+        disk_ioctl(pdrv, GET_SECTOR_COUNT, &block_count);
+        disk_ioctl(pdrv, GET_SECTOR_SIZE, &block_size);
+#endif
+    }
 
     Serial.println("Initializing MSC");
     // Initialize USB metadata and callbacks for MSC (Mass Storage Class)

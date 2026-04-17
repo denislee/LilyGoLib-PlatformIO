@@ -14,8 +14,6 @@
 #include "hal_interface.h"
 #include "event_define.h"
 
-extern void setupGui();
-
 static const char *ntpServer1 = "pool.ntp.org";
 static const char *ntpServer2 = "time.nist.gov";
 static const uint64_t  gmtOffset_sec = GMT_OFFSET_SECOND;
@@ -63,13 +61,8 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 }
 
 #include "core/system.h"
-#include "core/app_adapter.h"
-
-extern app_t ui_sys_main;
-extern app_t ui_text_editor_main;
-extern app_t ui_file_browser_main;
-extern app_t ui_blog_main;
-extern app_t ui_tasks_main;
+#include "core/scoped_lock.h"
+#include "apps/app_registry.h"
 
 void setup()
 {
@@ -100,15 +93,7 @@ void setup()
 
     hw_init();
 
-    // Register legacy apps via adapters
-    core::AppManager& am = core::AppManager::getInstance();
-    am.registerApp(std::make_shared<core::AppAdapter>("Editor", &ui_text_editor_main));
-    am.registerApp(std::make_shared<core::AppAdapter>("Tasks", &ui_tasks_main));
-    am.registerApp(std::make_shared<core::AppAdapter>("Blog", &ui_blog_main));
-    am.registerApp(std::make_shared<core::AppAdapter>("Settings", &ui_sys_main));
-    am.registerApp(std::make_shared<core::AppAdapter>("Files", &ui_file_browser_main));
-
-    // Initialize the new System
+    apps::register_all();
     core::System::getInstance().init();
 
     // Defer WiFi init until after GUI is showing
@@ -132,56 +117,53 @@ extern bool ui_is_fake_sleep();
 
 void loop()
 {
-    // Take the lock only for the duration of processing hardware and UI
-    instanceLockTake();
-    
-    instance.loop();
+    uint32_t time_to_next = 5;
+
+    {
+        core::ScopedInstanceLock lock;
+
+        instance.loop();
 
 #if defined(USING_ST25R3916)
-    if (!ui_is_fake_sleep()) {
-        loopNFCReader();
-    }
-#endif
-    
-    // Only process UI timers and refresh if we are NOT in fake sleep
-    uint32_t time_to_next = 5;
-    if (!ui_is_fake_sleep()) {
-        time_to_next = lv_timer_handler();
-        core::System::getInstance().loop();
-    }
-
-    // Dynamic CPU Frequency Scaling for Power Saving
-    static uint32_t last_freq = 0; // Initialize to 0 to force first update
-    if (ui_is_fake_sleep()) {
-        if (last_freq != 40) {
-            setCpuFrequencyMhz(40);
-            last_freq = 40;
+        if (!ui_is_fake_sleep()) {
+            loopNFCReader();
         }
-    } else {
-        uint32_t inactive_time = lv_display_get_inactive_time(NULL);
-        user_setting_params_t settings;
-        hw_get_user_setting(settings);
-        uint32_t active_freq = settings.cpu_freq_mhz;
+#endif
 
-        if (inactive_time > 2000 && active_freq > 80) {
-            if (last_freq != 80) {
-                setCpuFrequencyMhz(80);
-                last_freq = 80;
+        if (!ui_is_fake_sleep()) {
+            time_to_next = lv_timer_handler();
+            core::System::getInstance().loop();
+        }
+
+        static uint32_t last_freq = 0;
+        if (ui_is_fake_sleep()) {
+            if (last_freq != 40) {
+                setCpuFrequencyMhz(40);
+                last_freq = 40;
             }
         } else {
-            if (last_freq != active_freq) {
-                setCpuFrequencyMhz(active_freq);
-                last_freq = active_freq;
+            uint32_t inactive_time = lv_display_get_inactive_time(NULL);
+            user_setting_params_t settings;
+            hw_get_user_setting(settings);
+            uint32_t active_freq = settings.cpu_freq_mhz;
+
+            if (inactive_time > 2000 && active_freq > 80) {
+                if (last_freq != 80) {
+                    setCpuFrequencyMhz(80);
+                    last_freq = 80;
+                }
+            } else {
+                if (last_freq != active_freq) {
+                    setCpuFrequencyMhz(active_freq);
+                    last_freq = active_freq;
+                }
             }
         }
     }
 
-    instanceLockGive();
-    
-    // Use the time until next LVGL task to sleep, but cap it at 5ms to maintain responsiveness
     if (time_to_next > 5) time_to_next = 5;
     if (time_to_next == 0) time_to_next = 1;
-    
+
     delay(time_to_next);
 }
 

@@ -1,0 +1,49 @@
+# Lint configuration for the LilyGoLib-PlatformIO firmware.
+#
+# Scope is intentionally narrow: we enable checks that catch real bugs or
+# obvious hygiene issues, and disable chatty stylistic checks that would drown
+# out the useful signal on an Arduino/ESP-IDF codebase.
+#
+# To generate compile_commands.json for clang-tidy to consume:
+#   pio run -t compiledb
+# Then run from the repo root:
+#   clang-tidy -p . src/<file>.cpp
+---
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-deprecated-headers,
+  modernize-loop-convert,
+  modernize-redundant-void-arg,
+  readability-redundant-*,
+  readability-misleading-indentation,
+  readability-inconsistent-declaration-parameter-name,
+  readability-string-compare,
+  misc-unused-parameters,
+  misc-unused-using-decls,
+  misc-redundant-expression,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-pro-type-static-cast-downcast,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-reserved-identifier,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-branch-clone,
+  -performance-no-int-to-ptr,
+  -performance-avoid-endl
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '^src/.*\.h$'
+FormatStyle: none
+
+CheckOptions:
+  - key: readability-redundant-member-init.IgnoreBaseInCopyConstructors
+    value: 'true'
+  - key: modernize-use-override.IgnoreDestructors
+    value: 'true'
+  - key: misc-unused-parameters.StrictMode
+    value: 'false'

@@ -21,15 +21,6 @@
 
 #define DEFAULT_OPA          100
 
-typedef void (*app_func_t)(lv_obj_t *parent);
-
-typedef struct {
-    app_func_t setup_func_cb;
-    app_func_t exit_func_cb;
-    void *user_data;
-} app_t;
-
-
 enum {
     LV_MENU_ITEM_BUILDER_VARIANT_1,
     LV_MENU_ITEM_BUILDER_VARIANT_2
@@ -51,7 +42,6 @@ extern lv_obj_t *menu_panel;
 extern lv_obj_t *app_panel;
 extern lv_group_t *menu_g;
 extern lv_group_t *app_g;
-extern app_t *current_app_ptr;
 
 lv_obj_t *ui_create_option(lv_obj_t *parent, const char *title, const char *symbol_txt, lv_obj_t *(*widget_create)(lv_obj_t *parent), lv_event_cb_t btn_event_cb);
 lv_obj_t *create_text(lv_obj_t *parent, const char *icon, const char *txt,
@@ -95,7 +85,6 @@ void ui_lock();
 void ui_unlock();
 
 extern bool editor_auto_edit;
-extern app_t ui_blog_main;
 
 const lv_font_t *get_editor_font();
 const lv_font_t *get_small_font();

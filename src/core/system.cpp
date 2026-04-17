@@ -16,7 +16,6 @@ lv_obj_t *menu_panel = nullptr;
 lv_obj_t *app_panel = nullptr;
 lv_group_t *menu_g = nullptr;
 lv_group_t *app_g = nullptr;
-app_t *current_app_ptr = nullptr;
 
 namespace core {
 

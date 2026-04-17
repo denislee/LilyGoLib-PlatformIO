@@ -171,10 +171,5 @@ void ui_power_exit(lv_obj_t *parent)
     }
 }
 
-app_t ui_power_main = {
-    .setup_func_cb = ui_power_enter,
-    .exit_func_cb = ui_power_exit,
-    .user_data = nullptr,
-};
 
 

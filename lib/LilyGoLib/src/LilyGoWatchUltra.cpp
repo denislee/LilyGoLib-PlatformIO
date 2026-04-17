@@ -20,7 +20,24 @@
 #include "driver/rtc_io.h"
 #include <Preferences.h>
 
-extern void setupMSC(lock_callback_t lock_cb, lock_callback_t ulock_cb);
+extern void setupMSC(lock_callback_t lock_cb, lock_callback_t ulock_cb, bool use_sd);
+
+bool LilyGoUltra::getMSCPreferSD()
+{
+    Preferences prefs;
+    prefs.begin("lilygo", true);
+    bool res = prefs.getUChar("msc_sd", 0);
+    prefs.end();
+    return res;
+}
+
+void LilyGoUltra::setMSCPreferSD(bool prefer_sd)
+{
+    Preferences prefs;
+    prefs.begin("lilygo", false);
+    prefs.putUChar("msc_sd", prefer_sd ? 1 : 0);
+    prefs.end();
+}
 extern void esp_enable_slow_crystal();
 extern void setGroupBitsFromISR(EventGroupHandle_t xEventGroup,
                                 const EventBits_t uxBitsToSet);
@@ -201,7 +218,7 @@ uint32_t LilyGoUltra::begin(uint32_t disable_hw_init)
     initShareSPIPins();
 
     if (!(disable_hw_init & NO_INIT_FATFS)) {
-        setupMSC(_lock_callback, _unlock_callback);
+        setupMSC(_lock_callback, _unlock_callback, getMSCPreferSD());
     }
 
     res = initPMU(batteryCalibrated == false);

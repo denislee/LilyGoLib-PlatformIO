@@ -41,7 +41,7 @@ static void save_tasks() {
             content += t.text + "\n";
         }
     }
-    hw_save_internal_file(tasks_file_path, content.c_str());
+    hw_save_preferred_file(tasks_file_path, content.c_str());
 }
 
 void ui_tasks_refresh();
@@ -155,8 +155,8 @@ void ui_tasks_refresh() {
     tasks.clear();
 
     string content;
-    if (!hw_read_internal_file(tasks_file_path, content)) {
-        content = ""; 
+    if (!hw_read_preferred_file(tasks_file_path, content)) {
+        content = "";
     }
 
     // Split content by \n
@@ -353,9 +353,23 @@ void ui_tasks_exit(lv_obj_t *parent) {
     tasks.clear();
 }
 
-app_t ui_tasks_main = {
-    .setup_func_cb = ui_tasks_enter,
-    .exit_func_cb = ui_tasks_exit,
-    .user_data = nullptr,
+#include "apps/app_registry.h"
+
+namespace {
+class TasksApp : public core::App {
+public:
+    TasksApp() : core::App("Tasks") {}
+    void onStart(lv_obj_t *parent) override { ui_tasks_enter(parent); }
+    void onStop() override {
+        ui_tasks_exit(getRoot());
+        core::App::onStop();
+    }
 };
+} // namespace
+
+namespace apps {
+std::shared_ptr<core::App> make_tasks_app() {
+    return std::make_shared<TasksApp>();
+}
+} // namespace apps
 

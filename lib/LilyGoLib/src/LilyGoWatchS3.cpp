@@ -21,7 +21,24 @@
 
 extern void setGroupBitsFromISR(EventGroupHandle_t xEventGroup,
                                 const EventBits_t uxBitsToSet);
-extern void setupMSC(lock_callback_t lock_cb, lock_callback_t ulock_cb);
+extern void setupMSC(lock_callback_t lock_cb, lock_callback_t ulock_cb, bool use_sd);
+
+bool LilyGoWatch2022::getMSCPreferSD()
+{
+    Preferences prefs;
+    prefs.begin("lilygo", true);
+    bool res = prefs.getUChar("msc_sd", 0);
+    prefs.end();
+    return res;
+}
+
+void LilyGoWatch2022::setMSCPreferSD(bool prefer_sd)
+{
+    Preferences prefs;
+    prefs.begin("lilygo", false);
+    prefs.putUChar("msc_sd", prefer_sd ? 1 : 0);
+    prefs.end();
+}
 
 EventGroupHandle_t LilyGoWatch2022::_event;
 static TimerHandle_t timerHandler = NULL;
@@ -111,7 +128,7 @@ uint32_t LilyGoWatch2022::begin(uint32_t disable_hw_init)
 
 
     if (!(disable_hw_init & NO_INIT_FATFS)) {
-        setupMSC(_lock_callback, _unlock_callback);
+        setupMSC(_lock_callback, _unlock_callback, getMSCPreferSD());
     }
 
     Wire.begin(SDA, SCL);

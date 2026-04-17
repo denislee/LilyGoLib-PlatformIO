@@ -16,6 +16,7 @@
 #include "freertos/event_groups.h"
 #include "driver/gpio.h"
 #include "LilyGoLib.h"
+#include <Preferences.h>
 #include <SensorWireHelper.h>
 #include "driver/rtc_io.h"
 
@@ -53,7 +54,24 @@ static QueueHandle_t rotaryMsg;
 static TaskHandle_t  rotaryHandler = NULL;
 static EventGroupHandle_t  rotaryTaskFlag = NULL;
 static void rotaryTask(void *p);
-extern void setupMSC(lock_callback_t lock_cb, lock_callback_t ulock_cb);
+extern void setupMSC(lock_callback_t lock_cb, lock_callback_t ulock_cb, bool use_sd);
+
+bool LilyGoLoRaPager::getMSCPreferSD()
+{
+    Preferences prefs;
+    prefs.begin("lilygo", true);
+    bool res = prefs.getUChar("msc_sd", 0);
+    prefs.end();
+    return res;
+}
+
+void LilyGoLoRaPager::setMSCPreferSD(bool prefer_sd)
+{
+    Preferences prefs;
+    prefs.begin("lilygo", false);
+    prefs.putUChar("msc_sd", prefer_sd ? 1 : 0);
+    prefs.end();
+}
 
 #ifndef RADIOLIB_EXCLUDE_NRF24
 nRF24 nrf24 = new Module(44/*CS*/, 9/*IRQ*/, 43/*CE*/);
@@ -366,7 +384,7 @@ uint32_t LilyGoLoRaPager::begin(uint32_t disable_hw_init)
     }
 
     if (!(disable_hw_init & NO_INIT_FATFS)) {
-        setupMSC(_lock_callback, _unlock_callback);
+        setupMSC(_lock_callback, _unlock_callback, getMSCPreferSD());
     }
 
     esp_enable_slow_crystal();

@@ -20,8 +20,9 @@
 #include "examples/lv_examples.h"
 
 #include "hal_interface.h"
+#include "core/system.h"
+#include "apps/app_registry.h"
 
-extern void setupGui();
 extern void hw_init();
 
 static lv_display_t *lvDisplay;
@@ -68,9 +69,10 @@ void hal_loop(void)
         fflush(stdout);
         SDL_Delay(5);
         Uint32 current = SDL_GetTicks();
-        lv_tick_inc(current - lastTick); // Update the tick timer. Tick is new for LVGL 9
+        lv_tick_inc(current - lastTick);
         lastTick = current;
-        lv_timer_handler(); // Update the UI-
+        lv_timer_handler();
+        core::System::getInstance().loop();
     }
 }
 
@@ -81,12 +83,11 @@ extern "C" int main(void)
 
     hal_setup();
     printf("hello lvgl\n");
-    //****************** */
     hw_init();
-    setupGui();
 
+    apps::register_all();
+    core::System::getInstance().init();
 
-    //****************** */
     hal_loop();
 }
 #endif

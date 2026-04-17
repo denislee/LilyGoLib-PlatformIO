@@ -6,9 +6,253 @@
  *
  */
 #include "ui_define.h"
+#include "core/app_manager.h"
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
+
+// --- On-disk blog index (Layer 2) ------------------------------------------
+//
+// The blog view used to read the full content of every visible post on every
+// render, which made both initial entry and pagination slow. We now keep a
+// per-storage cache file holding (filename, mtime, snippet) tuples. On entry
+// we do one cheap directory scan (names + mtimes only, no content) and reuse
+// snippets whose mtime is unchanged; otherwise we read just the snippet bytes
+// for the affected entries.
+//
+// Binary layout of /blog_idx.bin:
+//   [MAGIC:4 = "BLOG"] [VERSION:1] [COUNT:u32 LE]
+//   per entry:
+//     [MTIME:u32 LE] [NAME_LEN:u8] [NAME bytes]
+//     [SNIPPET_LEN:u16 LE] [SNIPPET bytes] [TRUNCATED:u8]
+//
+// Anything malformed is treated as "no index" and rebuilt from scratch.
+
+namespace {
+
+struct BlogEntry {
+    std::string filename;
+    uint32_t mtime;
+    std::string snippet;
+    bool truncated;
+};
+
+constexpr const char *kIndexPath = "/blog_idx.bin";
+constexpr uint32_t kIndexMagic = 0x474F4C42u; // 'BLOG' little-endian
+constexpr uint8_t  kIndexVersion = 2;
+constexpr size_t   kSnippetBytes = 4096;
+
+void write_u16le(std::vector<uint8_t> &out, uint16_t v)
+{
+    out.push_back((uint8_t)(v & 0xFF));
+    out.push_back((uint8_t)((v >> 8) & 0xFF));
+}
+
+void write_u32le(std::vector<uint8_t> &out, uint32_t v)
+{
+    out.push_back((uint8_t)(v & 0xFF));
+    out.push_back((uint8_t)((v >> 8) & 0xFF));
+    out.push_back((uint8_t)((v >> 16) & 0xFF));
+    out.push_back((uint8_t)((v >> 24) & 0xFF));
+}
+
+bool read_u16le(const std::vector<uint8_t> &in, size_t &pos, uint16_t &v)
+{
+    if (pos + 2 > in.size()) return false;
+    v = (uint16_t)in[pos] | ((uint16_t)in[pos + 1] << 8);
+    pos += 2;
+    return true;
+}
+
+bool read_u32le(const std::vector<uint8_t> &in, size_t &pos, uint32_t &v)
+{
+    if (pos + 4 > in.size()) return false;
+    v = (uint32_t)in[pos] |
+        ((uint32_t)in[pos + 1] << 8) |
+        ((uint32_t)in[pos + 2] << 16) |
+        ((uint32_t)in[pos + 3] << 24);
+    pos += 4;
+    return true;
+}
+
+bool load_index_file(std::vector<BlogEntry> &out)
+{
+    out.clear();
+    std::vector<uint8_t> raw;
+    if (!hw_read_preferred_bytes(kIndexPath, raw)) return false;
+    if (raw.size() < 9) return false;
+
+    size_t pos = 0;
+    uint32_t magic;
+    if (!read_u32le(raw, pos, magic) || magic != kIndexMagic) return false;
+    if (raw[pos++] != kIndexVersion) return false;
+    uint32_t count;
+    if (!read_u32le(raw, pos, count)) return false;
+
+    out.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        BlogEntry e;
+        uint32_t mtime;
+        if (!read_u32le(raw, pos, mtime)) return false;
+        e.mtime = mtime;
+
+        if (pos >= raw.size()) return false;
+        uint8_t name_len = raw[pos++];
+        if (pos + name_len > raw.size()) return false;
+        e.filename.assign((const char *)&raw[pos], name_len);
+        pos += name_len;
+
+        uint16_t snip_len;
+        if (!read_u16le(raw, pos, snip_len)) return false;
+        if (pos + snip_len + 1 > raw.size()) return false;
+        e.snippet.assign((const char *)&raw[pos], snip_len);
+        pos += snip_len;
+        e.truncated = (raw[pos++] != 0);
+
+        out.push_back(std::move(e));
+    }
+    return true;
+}
+
+void save_index_file(const std::vector<BlogEntry> &entries)
+{
+    std::vector<uint8_t> buf;
+    buf.reserve(entries.size() * 64 + 16);
+    write_u32le(buf, kIndexMagic);
+    buf.push_back(kIndexVersion);
+    write_u32le(buf, (uint32_t)entries.size());
+    for (const auto &e : entries) {
+        write_u32le(buf, e.mtime);
+        uint8_t name_len = (uint8_t)std::min<size_t>(e.filename.size(), 255);
+        buf.push_back(name_len);
+        buf.insert(buf.end(), e.filename.begin(), e.filename.begin() + name_len);
+        uint16_t snip_len = (uint16_t)std::min<size_t>(e.snippet.size(), 65535);
+        write_u16le(buf, snip_len);
+        buf.insert(buf.end(), e.snippet.begin(), e.snippet.begin() + snip_len);
+        buf.push_back(e.truncated ? 1 : 0);
+    }
+    hw_save_preferred_bytes(kIndexPath, buf.data(), buf.size());
+}
+
+// Progress callback fired at each phase / per-file step. `total == 0` means
+// "indeterminate / nothing to do for this phase".
+using ProgressFn = void (*)(void *ud, const char *phase, int cur, int total, const char *detail);
+
+static void report(ProgressFn cb, void *ud, const char *phase, int cur, int total, const char *detail)
+{
+    if (cb) {
+        static uint32_t last_refr = 0;
+        uint32_t now = lv_tick_get();
+        cb(ud, phase, cur, total, detail);
+        // Rate limit UI refresh to avoid stalling execution on fast storage
+        if (lv_tick_elaps(last_refr) > 50) {
+            lv_refr_now(NULL);
+            last_refr = now;
+        }
+    }
+}
+
+// Build (or refresh) the in-memory entry list to match what's on disk.
+// Reuses snippets whose mtime matches the cached one; only reads snippet
+// bytes for new/changed files. Persists if anything changed.
+void refresh_entries(std::vector<BlogEntry> &entries, ProgressFn cb = nullptr, void *ud = nullptr)
+{
+    // Use statics to bridge the C-style callback if we want granular scanning progress
+    static ProgressFn g_cb = nullptr;
+    static void *g_ud = nullptr;
+    g_cb = cb;
+    g_ud = ud;
+
+    report(cb, ud, "Scanning files...", 0, 0, nullptr);
+    std::vector<std::pair<std::string, uint32_t>> current;
+    hw_get_preferred_txt_files_info(current, [](int cur, int total, const char *name) {
+        if (g_cb) g_cb(g_ud, "Scanning files...", cur, 0, name);
+    });
+
+    current.erase(std::remove_if(current.begin(), current.end(),
+                                 [](const std::pair<std::string, uint32_t> &p) {
+                                     return p.first == "tasks.txt" ||
+                                            p.first == "/tasks.txt";
+                                 }),
+                  current.end());
+    report(cb, ud, "Scanning files...", (int)current.size(), (int)current.size(), nullptr);
+
+    std::vector<BlogEntry> existing;
+    if (entries.empty()) {
+        report(cb, ud, "Loading index...", 0, 1, nullptr);
+        load_index_file(existing);
+        report(cb, ud, "Loading index...", 1, 1, nullptr);
+    } else {
+        existing = entries;
+    }
+
+    std::vector<BlogEntry> next;
+    next.reserve(current.size());
+    bool dirty = (existing.size() != current.size());
+    int total = (int)current.size();
+    int done = 0;
+
+    for (const auto &cur : current) {
+        const std::string &name = cur.first;
+        uint32_t mtime = cur.second;
+
+        auto it = std::find_if(existing.begin(), existing.end(),
+                               [&](const BlogEntry &e) { return e.filename == name; });
+        
+        bool needs_rebuild = (it == existing.end() || it->mtime != mtime);
+        if (!needs_rebuild) {
+            next.push_back(*it);
+        } else {
+            report(cb, ud, "Reading previews...", done, total, name.c_str());
+            BlogEntry e;
+            e.filename = name;
+            e.mtime = mtime;
+            std::string snippet;
+            bool truncated = false;
+            hw_read_preferred_file_snippet(name.c_str(), snippet, kSnippetBytes, &truncated);
+            e.snippet = std::move(snippet);
+            e.truncated = truncated;
+            next.push_back(std::move(e));
+            dirty = true;
+        }
+        done++;
+        if (total > 0 && cb) {
+            // Report every file to keep bar moving smoothly
+            report(cb, ud, needs_rebuild ? "Reading previews..." : "Processing...", done, total, name.c_str());
+        }
+    }
+
+    std::sort(next.begin(), next.end(), [](const BlogEntry &a, const BlogEntry &b) {
+        return a.filename > b.filename;
+    });
+
+    if (dirty) {
+        report(cb, ud, "Saving index...", 0, 1, nullptr);
+        save_index_file(next);
+        report(cb, ud, "Saving index...", 1, 1, nullptr);
+    }
+
+    entries = std::move(next);
+}
+
+void remove_from_index(const std::string &filename)
+{
+    std::vector<BlogEntry> entries;
+    if (!load_index_file(entries)) return;
+    auto before = entries.size();
+    entries.erase(std::remove_if(entries.begin(), entries.end(),
+                                 [&](const BlogEntry &e) { return e.filename == filename; }),
+                  entries.end());
+    if (entries.size() != before) {
+        save_index_file(entries);
+    }
+}
+
+} // namespace
+
+// --- UI state ---------------------------------------------------------------
 
 static lv_obj_t *menu = NULL;
 static lv_obj_t *quit_btn = NULL;
@@ -16,8 +260,101 @@ static lv_obj_t *parent_obj = NULL;
 static int target_focus_index = -1;
 static int current_page = 0;
 #define BLOG_PAGE_SIZE 5
-static std::vector<std::string> blog_files_cache;
+static std::vector<BlogEntry> blog_entries;
 static bool cache_valid = false;
+
+// --- Loading overlay --------------------------------------------------------
+//
+// Painted on lv_layer_top so it sits above any other UI while blog entries
+// are being indexed. We force a sync redraw after each progress tick so the
+// user sees the bar advance instead of just a stale frame.
+
+namespace {
+struct LoaderUi {
+    lv_obj_t *overlay;
+    lv_obj_t *phase;
+    lv_obj_t *bar;
+    lv_obj_t *counts;
+    lv_obj_t *detail;
+};
+LoaderUi loader{};
+uint32_t loader_started_ms = 0;
+}
+
+static void loader_show()
+{
+    loader.overlay = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(loader.overlay, lv_pct(100), lv_pct(100));
+    lv_obj_center(loader.overlay);
+    lv_obj_set_style_bg_color(loader.overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(loader.overlay, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(loader.overlay, 0, 0);
+    lv_obj_set_style_pad_all(loader.overlay, 10, 0);
+    lv_obj_set_flex_flow(loader.overlay, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(loader.overlay, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(loader.overlay, 6, 0);
+    lv_obj_clear_flag(loader.overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(loader.overlay);
+    lv_label_set_text(title, "Loading Blog");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+
+    loader.phase = lv_label_create(loader.overlay);
+    lv_label_set_text(loader.phase, "Starting...");
+    lv_obj_set_style_text_color(loader.phase, lv_palette_main(LV_PALETTE_BLUE), 0);
+
+    loader.bar = lv_bar_create(loader.overlay);
+    lv_obj_set_size(loader.bar, lv_pct(80), 10);
+    lv_bar_set_range(loader.bar, 0, 100);
+    lv_bar_set_value(loader.bar, 0, LV_ANIM_OFF);
+
+    loader.counts = lv_label_create(loader.overlay);
+    lv_label_set_text(loader.counts, "");
+    lv_obj_set_style_text_color(loader.counts, lv_color_white(), 0);
+    lv_obj_set_style_text_font(loader.counts, get_small_font(), 0);
+
+    loader.detail = lv_label_create(loader.overlay);
+    lv_label_set_text(loader.detail, "");
+    lv_label_set_long_mode(loader.detail, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(loader.detail, lv_pct(80));
+    lv_obj_set_style_text_color(loader.detail, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_font(loader.detail, get_small_font(), 0);
+    lv_obj_set_style_text_align(loader.detail, LV_TEXT_ALIGN_CENTER, 0);
+
+    loader_started_ms = lv_tick_get();
+}
+
+static void loader_update(void *ud, const char *phase, int cur, int total, const char *detail)
+{
+    (void)ud;
+    if (!loader.overlay) return;
+
+    lv_label_set_text(loader.phase, phase ? phase : "");
+
+    int pct = (total > 0) ? (cur * 100 / total) : 0;
+    if (pct > 100) pct = 100;
+    lv_bar_set_value(loader.bar, pct, LV_ANIM_OFF);
+
+    char cbuf[48];
+    uint32_t elapsed = lv_tick_elaps(loader_started_ms);
+    if (total > 1) {
+        snprintf(cbuf, sizeof(cbuf), "%d / %d  -  %lums", cur, total, (unsigned long)elapsed);
+    } else {
+        snprintf(cbuf, sizeof(cbuf), "%d%%  -  %lums", pct, (unsigned long)elapsed);
+    }
+    lv_label_set_text(loader.counts, cbuf);
+
+    lv_label_set_text(loader.detail, detail ? detail : " ");
+}
+
+static void loader_hide()
+{
+    if (loader.overlay) {
+        lv_obj_del(loader.overlay);
+        loader.overlay = NULL;
+    }
+}
 
 void ui_blog_enter(lv_obj_t *parent);
 void ui_blog_exit(lv_obj_t *parent);
@@ -71,17 +408,49 @@ static void exit_btn_cb(lv_event_t *e)
 
 static void post_focus_cb(lv_event_t *e)
 {
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
     lv_obj_scroll_to_view(obj, LV_ANIM_ON);
+
+    lv_group_t *g = lv_group_get_default();
+    // If focus is changing, and we were in editing mode, clear it
+    if (lv_group_get_editing(g)) {
+        lv_obj_t *focused = lv_group_get_focused(g);
+        if (focused && focused != obj) {
+            lv_group_set_editing(g, false);
+            lv_obj_set_style_border_color(focused, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+            lv_obj_set_style_border_width(focused, 2, LV_STATE_FOCUSED);
+            
+            // Also stop scrolling on the old area
+            lv_obj_t *old_scroll = lv_obj_get_child(focused, 0);
+            if (old_scroll) {
+                lv_obj_clear_flag(old_scroll, LV_OBJ_FLAG_SCROLLABLE);
+                lv_obj_scroll_to_y(old_scroll, 0, LV_ANIM_OFF);
+            }
+        }
+    }
 }
 
 static void post_click_cb(lv_event_t *e)
 {
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    lv_group_t *g = (lv_group_t *)lv_obj_get_group(obj);
-    if (g) {
-        bool editing = lv_group_get_editing(g);
-        lv_group_set_editing(g, !editing);
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
+    lv_group_t *g = lv_group_get_default();
+    lv_obj_t *scroll_area = lv_obj_get_child(obj, 0);
+    
+    // Toggle LVGL editing mode which directs scroll/keys to the focused object
+    if (lv_group_get_editing(g) && lv_group_get_focused(g) == obj) {
+        lv_group_set_editing(g, false);
+        lv_obj_set_style_border_color(obj, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+        lv_obj_set_style_border_width(obj, 2, LV_STATE_FOCUSED);
+        if (scroll_area) {
+            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_scroll_to_y(scroll_area, 0, LV_ANIM_ON);
+        }
+    } else {
+        lv_group_set_editing(g, true);
+        // Deep Orange highlight to indicate internal scroll mode is active
+        lv_obj_set_style_border_color(obj, lv_palette_main(LV_PALETTE_DEEP_ORANGE), LV_STATE_FOCUSED);
+        lv_obj_set_style_border_width(obj, 3, LV_STATE_FOCUSED);
+        if (scroll_area) lv_obj_add_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE);
     }
 }
 
@@ -107,22 +476,21 @@ static void delete_msgbox_cb(lv_event_t *e)
     bool deleted = false;
 
     if (id == 0) { // Yes
-        if (hw_delete_internal_file(path)) {
-            printf("Deleted file: %s\n", path);
-            deleted = true;
+        if (hw_delete_preferred_file(path)) {
+            remove_from_index(path);
             cache_valid = false;
+            blog_entries.clear();
+            deleted = true;
         }
     } else {
         target_focus_index = -1;
     }
 
-    // IMPORTANT: Destroy msgbox FIRST to restore the correct group
     destroy_msgbox(mbox_to_del);
 
-    if (deleted && ui_blog_main.setup_func_cb) {
-        // Now refresh the UI using our stable exit/enter pattern
+    if (deleted) {
         ui_blog_exit(NULL);
-        (*ui_blog_main.setup_func_cb)(parent_obj);
+        ui_blog_enter(parent_obj);
     }
 
     if (path) lv_mem_free((void *)path);
@@ -133,8 +501,7 @@ static void show_delete_confirm(const char *filename)
     static const char *btns[] = {"Yes", "No", ""};
     char msg[128];
     snprintf(msg, sizeof(msg), "Delete this post?\n%s", filename);
-    
-    // Duplicate filename to pass to callback
+
     char *path_dup = (char *)lv_mem_alloc(strlen(filename) + 1);
     strcpy(path_dup, filename);
 
@@ -144,48 +511,36 @@ static void show_delete_confirm(const char *filename)
 static void blog_key_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_KEY) {
-        uint32_t key = lv_event_get_key(e);
-        lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-        if (key == 'd' || key == 'D' || key == LV_KEY_BACKSPACE) {
-            lv_group_t *g = lv_group_get_default();
-            lv_obj_t *focused = lv_group_get_focused(g);
-            if (focused) {
-                const char *filename = (const char *)lv_obj_get_user_data(focused);
-                if (filename) {
-                    // Find current index among children of the main page
-                    // We need to find which child index this 'focused' object is.
-                    lv_obj_t *page = lv_menu_get_cur_main_page(menu);
-                    if (page) {
-                        uint32_t i;
-                        for(i = 0; i < lv_obj_get_child_count(page); i++) {
-                            if (lv_obj_get_child(page, i) == focused) {
-                                target_focus_index = (int)i;
-                                break;
-                            }
-                        }
-                    }
-                    show_delete_confirm(filename);
-                }
-            }
-        } else if (key == LV_KEY_LEFT || key == LV_KEY_RIGHT || key == LV_KEY_UP || key == LV_KEY_DOWN) {
-            lv_group_t *g = lv_obj_get_group(obj);
-            if (g && lv_group_get_editing(g)) {
-                lv_coord_t y = lv_obj_get_scroll_y(obj);
-                if (key == LV_KEY_RIGHT || key == LV_KEY_DOWN) {
-                    y += 40;
-                } else if (key == LV_KEY_LEFT || key == LV_KEY_UP) {
-                    y -= 40;
-                }
-                lv_obj_scroll_to_y(obj, y, LV_ANIM_ON);
+    if (code != LV_EVENT_KEY) return;
+    uint32_t key = lv_event_get_key(e);
+    if (key == 'r' || key == 'R') {
+        cache_valid = false;
+        ui_blog_exit(NULL);
+        ui_blog_enter(parent_obj);
+        return;
+    }
+    if (key != 'd' && key != 'D' && key != LV_KEY_BACKSPACE) return;
+
+    lv_group_t *g = lv_group_get_default();
+    lv_obj_t *focused = lv_group_get_focused(g);
+    if (!focused) return;
+    const char *filename = (const char *)lv_obj_get_user_data(focused);
+    if (!filename) return;
+
+    lv_obj_t *page = lv_menu_get_cur_main_page(menu);
+    if (page) {
+        for (uint32_t i = 0; i < lv_obj_get_child_count(page); i++) {
+            if (lv_obj_get_child(page, i) == focused) {
+                target_focus_index = (int)i;
+                break;
             }
         }
     }
+    show_delete_confirm(filename);
 }
 
 static std::string parse_filename_to_human(const std::string &filename)
 {
-    // Format: /YYYYMMDD_HHMMSS.txt
     size_t start = (filename[0] == '/') ? 1 : 0;
     if (filename.length() < start + 15) return filename;
 
@@ -204,22 +559,9 @@ static std::string parse_filename_to_human(const std::string &filename)
     if (month_idx < 0 || month_idx > 11) return filename;
 
     char buffer[64];
-    snprintf(buffer, sizeof(buffer), "%s %s, %s - %s:%s:%s", 
+    snprintf(buffer, sizeof(buffer), "%s %s, %s - %s:%s:%s",
              months[month_idx], d.c_str(), y.c_str(), hh.c_str(), mm.c_str(), ss.c_str());
     return std::string(buffer);
-}
-
-static void post_scroll_indicator_cb(lv_event_t *e)
-{
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    lv_obj_t *indicator = (lv_obj_t *)lv_event_get_user_data(e);
-    if (!indicator) return;
-    
-    if (lv_obj_get_scroll_bottom(obj) <= 0) {
-        lv_obj_add_flag(indicator, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_remove_flag(indicator, LV_OBJ_FLAG_HIDDEN);
-    }
 }
 
 void ui_blog_enter(lv_obj_t *parent)
@@ -227,17 +569,25 @@ void ui_blog_enter(lv_obj_t *parent)
     if (menu != NULL) return;
     enable_keyboard();
     parent_obj = parent;
-    menu = create_menu(parent, back_event_handler);
+
+    if (!cache_valid || blog_entries.empty()) {
+        loader_show();
+        menu = create_menu(parent, back_event_handler);
+        refresh_entries(blog_entries, loader_update, nullptr);
+        cache_valid = true;
+        loader_hide();
+    } else {
+        menu = create_menu(parent, back_event_handler);
+    }
 
     lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_all(main_page, 10, 0);
+    lv_obj_set_style_pad_row(main_page, 6, 0); // Add spacing between posts
     lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_add_flag(main_page, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Capture keys on the main page
     lv_obj_add_event_cb(main_page, blog_key_event_cb, LV_EVENT_KEY, NULL);
 
-    /* Exit button */
     lv_obj_t *exit_cont = lv_menu_cont_create(main_page);
     lv_obj_t *exit_btn = lv_btn_create(exit_cont);
     lv_obj_t *exit_label = lv_label_create(exit_btn);
@@ -247,21 +597,7 @@ void ui_blog_enter(lv_obj_t *parent)
     lv_obj_add_event_cb(exit_btn, post_focus_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(exit_btn, blog_key_event_cb, LV_EVENT_KEY, NULL);
 
-    if (!cache_valid) {
-        hw_get_internal_txt_files(blog_files_cache);
-        
-        // Remove tasks.txt so it doesn't show up as a blog post
-        blog_files_cache.erase(
-            std::remove(blog_files_cache.begin(), blog_files_cache.end(), "tasks.txt"),
-            blog_files_cache.end()
-        );
-
-        // Ensure newest (latest YYYYMMDD_HHMMSS) are on top
-        std::sort(blog_files_cache.begin(), blog_files_cache.end(), std::greater<std::string>());
-        cache_valid = true;
-    }
-
-    int total_files = blog_files_cache.size();
+    int total_files = (int)blog_entries.size();
     int start_idx = current_page * BLOG_PAGE_SIZE;
     int end_idx = std::min(start_idx + BLOG_PAGE_SIZE, total_files);
 
@@ -272,7 +608,7 @@ void ui_blog_enter(lv_obj_t *parent)
     }
 
     lv_obj_t *focus_target = exit_btn;
-    int current_child_idx = 0; // index 0 is exit_cont
+    int current_child_idx = 0;
 
     if (total_files == 0) {
         lv_obj_t *empty_label = lv_label_create(main_page);
@@ -282,7 +618,6 @@ void ui_blog_enter(lv_obj_t *parent)
     } else {
         const lv_font_t *font = get_small_font();
 
-        // Prev Page Button
         if (current_page > 0) {
             lv_obj_t *prev_cont = lv_menu_cont_create(main_page);
             lv_obj_t *prev_btn = lv_btn_create(prev_cont);
@@ -294,79 +629,128 @@ void ui_blog_enter(lv_obj_t *parent)
             current_child_idx++;
         }
 
+        int render_total = end_idx - start_idx;
         for (int i = start_idx; i < end_idx; ++i) {
-            const auto &filename = blog_files_cache[i];
+            const BlogEntry &entry = blog_entries[i];
             current_child_idx++;
-            // Container for each post
+            loader_update(nullptr, "Rendering posts...",
+                          i - start_idx, render_total, entry.filename.c_str());
+
             lv_obj_t *post_cont = lv_obj_create(main_page);
             lv_obj_set_width(post_cont, lv_pct(100));
             lv_obj_set_height(post_cont, LV_SIZE_CONTENT);
-            lv_obj_set_style_max_height(post_cont, 150, 0);
+            lv_obj_set_style_max_height(post_cont, 180, 0);
             lv_obj_set_flex_flow(post_cont, LV_FLEX_FLOW_COLUMN);
-            lv_obj_set_style_pad_all(post_cont, 5, 0);
-            lv_obj_set_style_border_width(post_cont, 0, 0);
-            lv_obj_set_style_bg_opa(post_cont, LV_OPA_TRANSP, 0);
-            
-            // Store filename for deletion
-            char *fn_dup = (char *)lv_mem_alloc(filename.length() + 1);
-            strcpy(fn_dup, filename.c_str());
+            lv_obj_set_style_pad_all(post_cont, 0, 0); // No padding on outer wrapper
+            lv_obj_set_style_pad_gap(post_cont, 0, 0);
+            lv_obj_set_style_border_width(post_cont, 0, 0); 
+            lv_obj_set_style_bg_opa(post_cont, LV_OPA_COVER, 0);
+            lv_obj_set_style_bg_color(post_cont, lv_color_black(), 0);
+            lv_obj_set_style_clip_corner(post_cont, true, 0);
+            lv_obj_clear_flag(post_cont, LV_OBJ_FLAG_SCROLLABLE);
+
+            // Inner scroll area - everything inside this will scroll
+            lv_obj_t *scroll_area = lv_obj_create(post_cont);
+            lv_obj_set_width(scroll_area, lv_pct(100));
+            lv_obj_set_height(scroll_area, LV_SIZE_CONTENT);
+            lv_obj_set_style_max_height(scroll_area, 175, 0);
+            lv_obj_set_flex_flow(scroll_area, LV_FLEX_FLOW_COLUMN);
+            lv_obj_set_style_pad_all(scroll_area, 0, 0); // No padding inside scroller
+            lv_obj_set_style_pad_gap(scroll_area, 0, 0);
+            lv_obj_set_style_border_width(scroll_area, 0, 0);
+            lv_obj_set_style_bg_opa(scroll_area, LV_OPA_TRANSP, 0);
+            lv_obj_add_flag(scroll_area, LV_OBJ_FLAG_EVENT_BUBBLE);
+            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLL_CHAIN);
+            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE); // Only scrollable when selected
+            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLL_ELASTIC); // No voids on top/bottom
+            lv_obj_set_scrollbar_mode(scroll_area, LV_SCROLLBAR_MODE_AUTO);
+
+            char *fn_dup = (char *)lv_mem_alloc(entry.filename.length() + 1);
+            strcpy(fn_dup, entry.filename.c_str());
             lv_obj_set_user_data(post_cont, fn_dup);
 
-            // Standard focus style for visual feedback
+            // Highlight ONLY on focused post
             lv_obj_set_style_border_width(post_cont, 2, LV_STATE_FOCUSED);
             lv_obj_set_style_border_color(post_cont, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
-            lv_obj_set_style_border_color(post_cont, lv_palette_main(LV_PALETTE_ORANGE), LV_STATE_FOCUSED | LV_STATE_EDITED);
             lv_obj_set_style_radius(post_cont, 5, 0);
 
-            // Add to group for encoder scrolling
             lv_group_add_obj(lv_group_get_default(), post_cont);
             lv_obj_add_event_cb(post_cont, post_focus_cb, LV_EVENT_FOCUSED, NULL);
             lv_obj_add_event_cb(post_cont, post_click_cb, LV_EVENT_CLICKED, NULL);
+            
+            // Add internal scroll handler for editing mode
+            lv_obj_add_event_cb(post_cont, [](lv_event_t *ev) {
+                lv_obj_t *wrapper = (lv_obj_t *)lv_event_get_current_target(ev);
+                lv_obj_t *scroller = lv_obj_get_child(wrapper, 0);
+                lv_group_t *g = lv_group_get_default();
+                if (!lv_group_get_editing(g) || lv_group_get_focused(g) != wrapper) return;
+
+                uint32_t key = lv_event_get_key(ev);
+                if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+                    int32_t cur_y = lv_obj_get_scroll_y(scroller);
+                    int32_t step = 40;
+                    if (cur_y < step) step = cur_y;
+                    if (step > 0) lv_obj_scroll_by(scroller, 0, step, LV_ANIM_ON);
+                } else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+                    int32_t bottom = lv_obj_get_scroll_bottom(scroller);
+                    int32_t step = 40;
+                    if (bottom < step) step = bottom;
+                    if (step > 0) lv_obj_scroll_by(scroller, 0, -step, LV_ANIM_ON);
+                }
+            }, LV_EVENT_KEY, NULL);
+
             lv_obj_add_event_cb(post_cont, blog_key_event_cb, LV_EVENT_KEY, NULL);
 
             if (target_focus_index != -1) {
                 if (current_child_idx == target_focus_index) {
                     focus_target = post_cont;
                 } else if (current_child_idx < target_focus_index) {
-                    // Fallback to latest valid post if exact index is now out of bounds
                     focus_target = post_cont;
                 }
             }
 
-            // Header with date
-            lv_obj_t *header = lv_label_create(post_cont);
-            lv_label_set_text(header, parse_filename_to_human(filename).c_str());
+            lv_obj_t *header = lv_label_create(scroll_area);
+            lv_label_set_text(header, parse_filename_to_human(entry.filename).c_str());
             lv_obj_set_style_text_font(header, font, 0);
             lv_obj_set_style_text_color(header, lv_palette_main(LV_PALETTE_GREY), 0);
             lv_obj_set_width(header, lv_pct(100));
+            lv_obj_set_style_pad_left(header, 4, 0); // Subtle margin for text
 
-            // Horizontal line
-            lv_obj_t *line = lv_obj_create(post_cont);
+            lv_obj_t *line = lv_obj_create(scroll_area);
             lv_obj_set_size(line, lv_pct(100), 1);
             lv_obj_set_style_bg_color(line, lv_palette_main(LV_PALETTE_GREY), 0);
             lv_obj_set_style_border_width(line, 0, 0);
+            lv_obj_set_style_pad_all(line, 0, 0); // Important to clear default padding
 
-            // Content
-            std::string content;
-            if (hw_read_internal_file(filename.c_str(), content)) {
-                lv_obj_t *label = lv_label_create(post_cont);
-                lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-                lv_label_set_text(label, content.c_str());
-                lv_obj_set_width(label, lv_pct(100));
-                lv_obj_set_style_text_font(label, font, 0);
-                lv_obj_set_style_text_color(label, lv_color_white(), 0);
-                
-                lv_obj_t *indicator = lv_label_create(post_cont);
-                lv_label_set_text(indicator, LV_SYMBOL_DOWN);
-                lv_obj_add_flag(indicator, LV_OBJ_FLAG_FLOATING);
-                lv_obj_add_flag(indicator, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_align(indicator, LV_ALIGN_BOTTOM_RIGHT, -5, -5);
-                lv_obj_set_style_text_color(indicator, lv_palette_main(LV_PALETTE_ORANGE), 0);
-                lv_obj_add_event_cb(post_cont, post_scroll_indicator_cb, LV_EVENT_SCROLL, indicator);
+            std::string preview = entry.snippet;
+            lv_obj_t *label = lv_label_create(scroll_area);
+            lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+            lv_label_set_text(label, preview.c_str());
+            lv_obj_set_width(label, lv_pct(100));
+            lv_obj_set_style_text_font(label, font, 0);
+            lv_obj_set_style_text_color(label, lv_color_white(), 0);
+            lv_obj_set_style_pad_left(label, 4, 0); // Subtle margin for text
+            lv_obj_set_style_pad_right(label, 4, 0);
+
+            // Icon for "there is more": show if file was truncated OR if it's long enough to need scroll
+            lv_obj_add_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE); // Temporarily enable to check scroll bottom
+            lv_obj_update_layout(scroll_area);
+            bool can_scroll = (lv_obj_get_scroll_bottom(scroll_area) > 0);
+            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE); // Restore intended state
+
+            if (entry.truncated || can_scroll) {
+                lv_obj_t *trunc_icon = lv_label_create(post_cont); // Fixed child of wrapper
+                lv_label_set_text(trunc_icon, LV_SYMBOL_DOWN); 
+                lv_obj_set_style_text_font(trunc_icon, &lv_font_montserrat_14, 0);
+                lv_obj_set_style_text_color(trunc_icon, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0);
+                lv_obj_add_flag(trunc_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
+                lv_obj_align(trunc_icon, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
+                lv_obj_set_style_bg_color(trunc_icon, lv_color_black(), 0);
+                lv_obj_set_style_bg_opa(trunc_icon, LV_OPA_60, 0);
+                lv_obj_set_style_radius(trunc_icon, 2, 0);
             }
         }
 
-        // Footer container
         lv_obj_t *footer_cont = lv_obj_create(main_page);
         lv_obj_set_width(footer_cont, lv_pct(100));
         lv_obj_set_height(footer_cont, LV_SIZE_CONTENT);
@@ -376,7 +760,6 @@ void ui_blog_enter(lv_obj_t *parent)
         lv_obj_set_style_bg_opa(footer_cont, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(footer_cont, 0, 0);
 
-        // Next Page Button
         if (end_idx < total_files) {
             lv_obj_t *next_btn = lv_btn_create(footer_cont);
             lv_obj_t *next_label = lv_label_create(next_btn);
@@ -386,7 +769,6 @@ void ui_blog_enter(lv_obj_t *parent)
             lv_obj_add_event_cb(next_btn, post_focus_cb, LV_EVENT_FOCUSED, NULL);
         }
 
-        // Page indicator
         lv_obj_t *page_info = lv_label_create(footer_cont);
         char buf[32];
         snprintf(buf, sizeof(buf), "Page %d/%d", current_page + 1, (total_files + BLOG_PAGE_SIZE - 1) / BLOG_PAGE_SIZE);
@@ -400,12 +782,6 @@ void ui_blog_enter(lv_obj_t *parent)
 
     lv_menu_set_page(menu, main_page);
 
-    // Force layout computation so scroll limits are accurate
-    lv_obj_update_layout(menu);
-    for (uint32_t i = 0; i < lv_obj_get_child_count(main_page); i++) {
-        lv_obj_send_event(lv_obj_get_child(main_page, i), LV_EVENT_SCROLL, NULL);
-    }
-
     if (focus_target) {
         lv_group_focus_obj(focus_target);
         lv_obj_scroll_to_view(focus_target, LV_ANIM_OFF);
@@ -416,29 +792,30 @@ void ui_blog_enter(lv_obj_t *parent)
         do_exit();
     }, NULL);
 #endif
+
+    loader_hide();
 }
 
 void ui_blog_exit(lv_obj_t *parent)
 {
+    loader_hide();
     disable_keyboard();
-    // Clean up allocated strings in user_data when exiting
     if (menu) {
         lv_obj_t *main_page = lv_menu_get_cur_main_page(menu);
         if (main_page) {
-            uint32_t i;
-            for(i = 0; i < lv_obj_get_child_count(main_page); i++) {
+            for (uint32_t i = 0; i < lv_obj_get_child_count(main_page); i++) {
                 lv_obj_t *child = lv_obj_get_child(main_page, i);
                 void *data = lv_obj_get_user_data(child);
                 if (data) lv_mem_free(data);
             }
         }
     }
-    
+
     if (quit_btn) {
         lv_obj_del_async(quit_btn);
         quit_btn = NULL;
     }
-    
+
     if (menu) {
         lv_obj_clean(menu);
         lv_obj_del(menu);
@@ -446,12 +823,24 @@ void ui_blog_exit(lv_obj_t *parent)
     }
     target_focus_index = -1;
     current_page = 0;
-    cache_valid = false;
-    blog_files_cache.clear();
 }
 
-app_t ui_blog_main = {
-    .setup_func_cb = ui_blog_enter,
-    .exit_func_cb = ui_blog_exit,
-    .user_data = nullptr,
+#include "apps/app_registry.h"
+
+namespace {
+class BlogApp : public core::App {
+public:
+    BlogApp() : core::App("Blog") {}
+    void onStart(lv_obj_t *parent) override { ui_blog_enter(parent); }
+    void onStop() override {
+        ui_blog_exit(getRoot());
+        core::App::onStop();
+    }
 };
+} // namespace
+
+namespace apps {
+std::shared_ptr<core::App> make_blog_app() {
+    return std::make_shared<BlogApp>();
+}
+} // namespace apps

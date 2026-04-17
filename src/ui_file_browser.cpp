@@ -14,7 +14,7 @@ static lv_obj_t *quit_btn = NULL;
 
 void ui_file_browser_exit(lv_obj_t *parent);
 
-extern app_t ui_text_editor_main;
+#include "core/app_manager.h"
 
 static void back_event_handler(lv_event_t *e)
 {
@@ -32,19 +32,9 @@ static void file_click_cb(lv_event_t *e)
     if (!filename) return;
     string path = "/" + string(filename);
 
-    if (quit_btn) {
-        lv_obj_del(quit_btn);
-        quit_btn = NULL;
-    }
-    lv_obj_clean(menu);
-    lv_obj_del(menu);
-    menu = NULL;
-    file_list = NULL;
-
-    if (ui_text_editor_main.setup_func_cb) {
-        (*ui_text_editor_main.setup_func_cb)(parent_obj);
-        ui_text_editor_open_file(path.c_str());
-    }
+    // Let AppManager run our onStop (cleanup) and then start the Editor.
+    core::AppManager::getInstance().switchApp("Editor", parent_obj);
+    ui_text_editor_open_file(path.c_str());
 }
 
 void ui_file_browser_refresh()
@@ -122,8 +112,22 @@ void ui_file_browser_exit(lv_obj_t *parent)
     file_list = NULL;
 }
 
-app_t ui_file_browser_main = {
-    .setup_func_cb = ui_file_browser_enter,
-    .exit_func_cb = ui_file_browser_exit,
-    .user_data = nullptr,
+#include "apps/app_registry.h"
+
+namespace {
+class FileBrowserApp : public core::App {
+public:
+    FileBrowserApp() : core::App("Files") {}
+    void onStart(lv_obj_t *parent) override { ui_file_browser_enter(parent); }
+    void onStop() override {
+        ui_file_browser_exit(getRoot());
+        core::App::onStop();
+    }
 };
+} // namespace
+
+namespace apps {
+std::shared_ptr<core::App> make_file_browser_app() {
+    return std::make_shared<FileBrowserApp>();
+}
+} // namespace apps

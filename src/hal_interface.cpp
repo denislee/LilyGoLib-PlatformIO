@@ -14,6 +14,25 @@
 #define NVS_NAME    "pager"
 static user_setting_params_t user_setting;
 
+// Settings blob schema guard.
+//
+// The stored NVS blob is a `SettingsHeader` followed by a raw
+// `user_setting_params_t`. The header lets us reject bytes left over from a
+// previous schema instead of silently re-interpreting them as the new one.
+//
+// *** Bump SETTINGS_VERSION whenever `user_setting_params_t` changes in a way
+//     that is not byte-compatible (field reorder, type change, field removed).
+//     Adding a new field to the *end* keeps the size check effective and is
+//     safe without a version bump — missing bytes keep their default values.
+static constexpr uint32_t SETTINGS_MAGIC   = 0x50414752u; // "PAGR"
+static constexpr uint16_t SETTINGS_VERSION = 1;
+
+struct SettingsHeader {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t payload_size;
+};
+
 typedef struct _device_const_var {
     uint16_t max_brightness;
     uint16_t min_brightness;
@@ -42,6 +61,16 @@ typedef struct _device_const_var {
 #include <FFat.h>
 
 static Preferences           prefs;
+
+static void save_user_setting_nvs()
+{
+    uint8_t buf[sizeof(SettingsHeader) + sizeof(user_setting_params_t)];
+    SettingsHeader h{SETTINGS_MAGIC, SETTINGS_VERSION, (uint16_t)sizeof(user_setting_params_t)};
+    memcpy(buf, &h, sizeof(h));
+    memcpy(buf + sizeof(h), &user_setting, sizeof(user_setting_params_t));
+    prefs.putBytes(NVS_NAME, buf, sizeof(buf));
+}
+
 static TaskHandle_t          recTaskHandle;
 static TaskHandle_t          playerTaskHandler = NULL;
 static QueueHandle_t         playerQueue  = NULL;
@@ -800,19 +829,40 @@ void hw_load_setting()
     user_setting.haptic_enable = 1;
     user_setting.show_mem_usage = 0;
     user_setting.cpu_freq_mhz = 240;
+    user_setting.storage_prefer_sd = 0;
 
     prefs.begin(NVS_NAME);
-    size_t stored_size = prefs.getBytesLength(NVS_NAME);
-    if (stored_size > 0 && stored_size <= sizeof(user_setting_params_t)) {
-        prefs.getBytes(NVS_NAME, &user_setting, stored_size);
-        if (stored_size != sizeof(user_setting_params_t)) {
-            log_i("Settings size mismatch (%d vs %d), migrated and saving new version", stored_size, sizeof(user_setting_params_t));
-            prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+    const size_t stored_size = prefs.getBytesLength(NVS_NAME);
+    constexpr size_t kVersionedSize = sizeof(SettingsHeader) + sizeof(user_setting_params_t);
+
+    bool loaded = false;
+
+    if (stored_size == kVersionedSize) {
+        uint8_t buf[kVersionedSize];
+        prefs.getBytes(NVS_NAME, buf, sizeof(buf));
+        const SettingsHeader *h = reinterpret_cast<const SettingsHeader *>(buf);
+        if (h->magic == SETTINGS_MAGIC &&
+            h->version == SETTINGS_VERSION &&
+            h->payload_size == sizeof(user_setting_params_t)) {
+            memcpy(&user_setting, buf + sizeof(SettingsHeader), sizeof(user_setting_params_t));
+            loaded = true;
+        } else {
+            log_i("Settings header mismatch (magic=%08x ver=%u size=%u), resetting to defaults",
+                  (unsigned)h->magic, (unsigned)h->version, (unsigned)h->payload_size);
         }
+    } else if (stored_size > 0 && stored_size <= sizeof(user_setting_params_t)) {
+        // Legacy unversioned blob: copy what fits onto defaults, then re-save with header.
+        prefs.getBytes(NVS_NAME, &user_setting, stored_size);
+        log_i("Migrating legacy settings blob (%u bytes) to versioned format", (unsigned)stored_size);
+        loaded = true;
+    } else if (stored_size != 0) {
+        log_i("Stored settings size %u unrecognized, resetting to defaults", (unsigned)stored_size);
     } else {
-        log_i("No valid settings found, using defaults and saving");
-        prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+        log_i("No stored settings found, using defaults");
     }
+    (void)loaded;
+    // Always persist in the current format so subsequent boots take the fast path.
+    save_user_setting_nvs();
 #else
     user_setting.brightness_level = 10;
     user_setting.keyboard_bl_level = 255;
@@ -835,7 +885,7 @@ void hw_set_user_setting(user_setting_params_t &param)
 {
     user_setting = param;
 #ifdef ARDUINO
-    prefs.putBytes(NVS_NAME, &user_setting, sizeof(user_setting_params_t));
+    save_user_setting_nvs();
 #endif
 }
 
@@ -1560,18 +1610,19 @@ void hw_set_volume(uint8_t volume)
 #endif //USING_AUDIO_CODEC
 }
 
-bool hw_save_file(const char *path, const char *content)
+bool hw_save_file(const char *path, const char *content, std::string *error)
 {
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     File f;
     bool lock = false;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
-    
+    const char *target = "Internal";
+
     // If it already exists on Internal, save it there to avoid confusion
     bool exists_internal = FFat.exists(str);
-    
-    printf("Attempting to save to %s (SD: %s, Internal Exists: %s)\n", 
+
+    printf("Attempting to save to %s (SD: %s, Internal Exists: %s)\n",
            str.c_str(), is_sd ? "Yes" : "No", exists_internal ? "Yes" : "No");
 
     if (exists_internal) {
@@ -1580,6 +1631,7 @@ bool hw_save_file(const char *path, const char *content)
         instance.lockSPI();
         f = SD.open(str, "w"); // Use "w" for overwrite
         lock = true;
+        target = "SD";
     } else {
         f = FFat.open(str, "w"); // Use "w" for overwrite
     }
@@ -1587,42 +1639,58 @@ bool hw_save_file(const char *path, const char *content)
     if (!f) {
         printf("Failed to open file for writing: %s\n", str.c_str());
         if (lock) instance.unlockSPI();
+        if (error) {
+            *error = std::string("Cannot open ") + target + " file for writing.";
+        }
         return false;
     }
-    
+
     size_t written = f.print(content);
     f.close();
     if (lock) instance.unlockSPI();
-    
+
     printf("Saved %u bytes to %s (%s)\n", (unsigned int)written, str.c_str(), lock ? "SD" : "Internal");
-    return (written > 0 || strlen(content) == 0);
+    bool ok = (written > 0 || strlen(content) == 0);
+    if (!ok && error) {
+        *error = std::string("Write to ") + target + " failed (storage full?).";
+    }
+    return ok;
 #else
+    (void)error;
     printf("Save to file: %s, content: %s\n", path, content);
     return true;
 #endif
 }
 
-bool hw_save_internal_file(const char *path, const char *content)
+bool hw_save_internal_file(const char *path, const char *content, std::string *error)
 {
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     File f;
-    
+
     printf("Attempting to save to internal %s\n", str.c_str());
 
     f = FFat.open(str, "w");
 
     if (!f) {
         printf("Failed to open internal file for writing: %s\n", str.c_str());
+        if (error) {
+            *error = "Cannot open Internal file for writing.";
+        }
         return false;
     }
-    
+
     size_t written = f.print(content);
     f.close();
-    
+
     printf("Saved %u bytes to internal %s\n", (unsigned int)written, str.c_str());
-    return (written > 0 || strlen(content) == 0);
+    bool ok = (written > 0 || strlen(content) == 0);
+    if (!ok && error) {
+        *error = "Write to Internal failed (storage full?).";
+    }
+    return ok;
 #else
+    (void)error;
     printf("Save to internal file: %s, content: %s\n", path, content);
     return true;
 #endif
@@ -1738,17 +1806,21 @@ struct FileInfo {
     time_t time;
 };
 
-static void list_files(vector<FileInfo> &list, fs::FS &fs, const char *dirname, const char *ext)
+static void list_files(vector<FileInfo> &list, fs::FS &fs, const char *dirname, const char *ext,
+                       void (*cb)(int, int, const char *) = nullptr)
 {
     File root = fs.open(dirname);
     if (!root || !root.isDirectory()) return;
 
     File file = root.openNextFile();
+    int count = 0;
     while (file) {
         if (!file.isDirectory()) {
             String filename = file.name();
             if (filename.endsWith(ext)) {
                 list.push_back({filename.c_str(), file.getLastWrite()});
+                count++;
+                if (cb) cb(count, 0, filename.c_str());
             }
         }
         file.close();
@@ -1769,6 +1841,7 @@ void hw_get_txt_files(vector<string> &list)
         instance.unlockSPI();
     }
     list_files(file_infos, FFat, "/", ".txt");
+    // ... (rest remains same)
 
     std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo& a, const FileInfo& b) {
         if (a.time != b.time) {
@@ -1808,6 +1881,350 @@ void hw_get_internal_txt_files(vector<string> &list)
 #else
     list.push_back("internal1.txt");
     list.push_back("internal2.txt");
+#endif
+}
+
+bool hw_get_storage_prefer_sd()
+{
+    return user_setting.storage_prefer_sd != 0;
+}
+
+void hw_set_storage_prefer_sd(bool prefer_sd)
+{
+    user_setting.storage_prefer_sd = prefer_sd ? 1 : 0;
+#ifdef ARDUINO
+    save_user_setting_nvs();
+    if (prefer_sd) {
+        // Mount SD on demand so the new preference takes effect immediately.
+        hw_mount_sd();
+    }
+#endif
+}
+
+bool hw_get_msc_prefer_sd()
+{
+    return user_setting.msc_prefer_sd != 0;
+}
+
+void hw_set_msc_prefer_sd(bool prefer_sd)
+{
+    user_setting.msc_prefer_sd = prefer_sd ? 1 : 0;
+#ifdef ARDUINO
+    save_user_setting_nvs();
+#endif
+}
+
+// Effective storage pick: honour the user preference, but fall back to internal
+// when the SD card is not present/mounted — writes silently landing on a
+// missing card would be surprising.
+static bool storage_should_use_sd()
+{
+#ifdef ARDUINO
+    if (!user_setting.storage_prefer_sd) return false;
+    return (HW_SD_ONLINE & hw_get_device_online()) != 0;
+#else
+    return false;
+#endif
+}
+
+bool hw_save_preferred_file(const char *path, const char *content, std::string *error)
+{
+    if (storage_should_use_sd()) {
+#ifdef ARDUINO
+        String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+        instance.lockSPI();
+        File f = SD.open(str, "w");
+        if (!f) {
+            instance.unlockSPI();
+            if (error) *error = "Cannot open SD file for writing.";
+            return false;
+        }
+        size_t written = f.print(content);
+        f.close();
+        instance.unlockSPI();
+        bool ok = (written > 0 || strlen(content) == 0);
+        if (!ok && error) *error = "Write to SD failed (storage full?).";
+        return ok;
+#endif
+    }
+    return hw_save_internal_file(path, content, error);
+}
+
+bool hw_read_preferred_file(const char *path, string &content)
+{
+    if (storage_should_use_sd()) {
+#ifdef ARDUINO
+        String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+        instance.lockSPI();
+        File f = SD.open(str, FILE_READ);
+        if (!f) {
+            instance.unlockSPI();
+            return false;
+        }
+        size_t size = f.size();
+        content.resize(size);
+        if (size > 0) {
+            f.read((uint8_t *)&content[0], size);
+        }
+        f.close();
+        instance.unlockSPI();
+        return true;
+#endif
+    }
+    return hw_read_internal_file(path, content);
+}
+
+void hw_get_preferred_txt_files(vector<string> &list)
+{
+    list.clear();
+#ifdef ARDUINO
+    vector<FileInfo> file_infos;
+    if (storage_should_use_sd()) {
+        instance.lockSPI();
+        list_files(file_infos, SD, "/", ".txt");
+        instance.unlockSPI();
+    } else {
+        list_files(file_infos, FFat, "/", ".txt");
+    }
+
+    std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo &a, const FileInfo &b) {
+        if (a.time != b.time) return a.time > b.time;
+        return a.name > b.name;
+    });
+
+    for (const auto &fi : file_infos) {
+        list.push_back(fi.name);
+    }
+#else
+    list.push_back("preferred1.txt");
+    list.push_back("preferred2.txt");
+#endif
+}
+
+bool hw_read_preferred_file_snippet(const char *path, string &content, size_t max_bytes, bool *truncated)
+{
+    content.clear();
+    if (truncated) *truncated = false;
+#ifdef ARDUINO
+    bool use_sd = storage_should_use_sd();
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    File f;
+    bool lock = false;
+
+    if (use_sd) {
+        instance.lockSPI();
+        f = SD.open(str, FILE_READ);
+        if (f) {
+            lock = true;
+        } else {
+            instance.unlockSPI();
+        }
+    }
+    if (!f) {
+        f = FFat.open(str, FILE_READ);
+    }
+    if (!f) {
+        return false;
+    }
+
+    size_t total = f.size();
+    size_t to_read = total < max_bytes ? total : max_bytes;
+    content.resize(to_read);
+    if (to_read > 0) {
+        f.read((uint8_t *)&content[0], to_read);
+    }
+    f.close();
+    if (lock) instance.unlockSPI();
+
+    if (truncated) *truncated = total > max_bytes;
+    return true;
+#else
+    (void)path;
+    (void)max_bytes;
+    content = "simulated preview...";
+    if (truncated) *truncated = true;
+    return true;
+#endif
+}
+
+void hw_get_preferred_txt_files_info(vector<std::pair<string, uint32_t>> &list,
+                                     void (*cb)(int, int, const char *))
+{
+    list.clear();
+#ifdef ARDUINO
+    vector<FileInfo> infos;
+    if (storage_should_use_sd()) {
+        instance.lockSPI();
+        list_files(infos, SD, "/", ".txt", cb);
+        instance.unlockSPI();
+    } else {
+        list_files(infos, FFat, "/", ".txt", cb);
+    }
+    list.reserve(infos.size());
+    for (const auto &fi : infos) {
+        list.emplace_back(fi.name, (uint32_t)fi.time);
+    }
+#endif
+}
+
+bool hw_save_preferred_bytes(const char *path, const uint8_t *buf, size_t len, std::string *error)
+{
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    bool use_sd = storage_should_use_sd();
+    File f;
+    bool lock = false;
+    const char *target = "Internal";
+
+    if (use_sd) {
+        instance.lockSPI();
+        f = SD.open(str, "w");
+        lock = true;
+        target = "SD";
+    } else {
+        f = FFat.open(str, "w");
+    }
+
+    if (!f) {
+        if (lock) instance.unlockSPI();
+        if (error) *error = std::string("Cannot open ") + target + " file for writing.";
+        return false;
+    }
+
+    size_t written = f.write(buf, len);
+    f.close();
+    if (lock) instance.unlockSPI();
+
+    bool ok = (written == len);
+    if (!ok && error) *error = std::string("Write to ") + target + " failed (storage full?).";
+    return ok;
+#else
+    (void)path; (void)buf; (void)len; (void)error;
+    return true;
+#endif
+}
+
+bool hw_read_preferred_bytes(const char *path, vector<uint8_t> &buf)
+{
+    buf.clear();
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    bool use_sd = storage_should_use_sd();
+    File f;
+    bool lock = false;
+
+    if (use_sd) {
+        instance.lockSPI();
+        f = SD.open(str, FILE_READ);
+        if (f) {
+            lock = true;
+        } else {
+            instance.unlockSPI();
+        }
+    }
+    if (!f) {
+        f = FFat.open(str, FILE_READ);
+    }
+    if (!f) return false;
+
+    size_t size = f.size();
+    buf.resize(size);
+    if (size > 0) {
+        f.read(buf.data(), size);
+    }
+    f.close();
+    if (lock) instance.unlockSPI();
+    return true;
+#else
+    (void)path;
+    return false;
+#endif
+}
+
+bool hw_delete_preferred_file(const char *path)
+{
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    if (storage_should_use_sd()) {
+        instance.lockSPI();
+        bool ok = SD.remove(str);
+        instance.unlockSPI();
+        return ok;
+    }
+    return FFat.remove(str);
+#else
+    (void)path;
+    return true;
+#endif
+}
+
+bool hw_copy_internal_to_sd(int *copied, int *failed, std::string *error)
+{
+    if (copied) *copied = 0;
+    if (failed) *failed = 0;
+#ifdef ARDUINO
+    if (!(HW_SD_ONLINE & hw_get_device_online())) {
+        // Attempt to mount before giving up.
+        hw_mount_sd();
+        if (!(HW_SD_ONLINE & hw_get_device_online())) {
+            if (error) *error = "SD card not available.";
+            return false;
+        }
+    }
+
+    File root = FFat.open("/");
+    if (!root || !root.isDirectory()) {
+        if (error) *error = "Cannot open internal storage.";
+        return false;
+    }
+
+    int ok_count = 0;
+    int fail_count = 0;
+    File entry = root.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory()) {
+            String name = entry.name();
+            String dst = name.startsWith("/") ? name : ("/" + name);
+
+            size_t size = entry.size();
+            std::string buf;
+            buf.resize(size);
+            if (size > 0) {
+                entry.read((uint8_t *)&buf[0], size);
+            }
+            entry.close();
+
+            instance.lockSPI();
+            File out = SD.open(dst, "w");
+            bool wrote = false;
+            if (out) {
+                size_t n = size > 0 ? out.write((const uint8_t *)buf.data(), size) : 0;
+                wrote = (size == 0) || (n == size);
+                out.close();
+            }
+            instance.unlockSPI();
+
+            if (wrote) ok_count++;
+            else fail_count++;
+        } else {
+            entry.close();
+        }
+        entry = root.openNextFile();
+    }
+    root.close();
+
+    if (copied) *copied = ok_count;
+    if (failed) *failed = fail_count;
+    if (fail_count > 0 && error) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%d file(s) failed to copy.", fail_count);
+        *error = msg;
+    }
+    return fail_count == 0;
+#else
+    (void)error;
+    if (copied) *copied = 0;
+    return true;
 #endif
 }
 

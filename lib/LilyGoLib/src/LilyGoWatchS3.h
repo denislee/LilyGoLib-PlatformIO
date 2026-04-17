@@ -383,6 +383,18 @@ public:
         return 255;
     };
 
+    /**
+     * @brief Get the USB MSC storage preference.
+     * @return bool True if SD card is preferred, false if internal memory is preferred.
+     */
+    bool getMSCPreferSD();
+
+    /**
+     * @brief Set the USB MSC storage preference.
+     * @param prefer_sd True to prefer SD card, false to prefer internal memory.
+     */
+    void setMSCPreferSD(bool prefer_sd);
+
 private:
     /**
      * @brief Clear the specified event bits.

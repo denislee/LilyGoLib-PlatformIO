@@ -823,6 +823,99 @@ static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_p
     return cont;
 }
 
+static void storage_prefer_sd_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.storage_prefer_sd = en;
+    hw_set_storage_prefer_sd(en);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " SD " : " Int ");
+}
+
+static void msc_target_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.msc_prefer_sd = en;
+    hw_set_msc_prefer_sd(en);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " SD " : " Int ");
+}
+
+static void storage_copy_to_sd_cb(lv_event_t *e) {
+    int copied = 0, failed = 0;
+    std::string err;
+    bool ok = hw_copy_internal_to_sd(&copied, &failed, &err);
+
+    char msg[128];
+    if (ok) {
+        snprintf(msg, sizeof(msg), "Copied %d file(s) to SD.", copied);
+    } else if (!err.empty()) {
+        snprintf(msg, sizeof(msg), "Copy failed: %s\nCopied: %d, failed: %d.",
+                 err.c_str(), copied, failed);
+    } else {
+        snprintf(msg, sizeof(msg), "Copy failed.\nCopied: %d, failed: %d.",
+                 copied, failed);
+    }
+    ui_msg_pop_up("Storage", msg);
+}
+
+static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool initial_state, lv_event_cb_t cb);
+
+static lv_obj_t *create_subpage_storage(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_SD_CARD, "Storage");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+
+    // Toggle: internal (Int) vs SD.
+    lv_obj_t *toggle_row = create_text(sub_page, NULL, "Prefer SD Card", LV_MENU_ITEM_BUILDER_VARIANT_2);
+    lv_obj_t *btn = lv_btn_create(toggle_row);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
+    bool prefer_sd = local_param.storage_prefer_sd;
+    if (prefer_sd) lv_obj_add_state(btn, LV_STATE_CHECKED);
+    lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
+    lv_obj_set_width(btn, 60);
+    lv_obj_t *btn_label = lv_label_create(btn);
+    lv_label_set_text(btn_label, prefer_sd ? " SD " : " Int ");
+    lv_obj_center(btn_label);
+    lv_obj_set_user_data(btn, btn_label);
+    lv_obj_add_event_cb(btn, storage_prefer_sd_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    register_subpage_group_obj(sub_page, btn);
+
+    // USB MSC Toggle
+    lv_obj_t *msc_row = create_text(sub_page, NULL, "USB MSC Target", LV_MENU_ITEM_BUILDER_VARIANT_2);
+    lv_obj_t *msc_btn = lv_btn_create(msc_row);
+    lv_obj_add_flag(msc_btn, LV_OBJ_FLAG_CHECKABLE);
+    bool msc_sd = local_param.msc_prefer_sd;
+    if (msc_sd) lv_obj_add_state(msc_btn, LV_STATE_CHECKED);
+    lv_obj_set_style_outline_width(msc_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(msc_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_bg_color(msc_btn, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
+    lv_obj_set_width(msc_btn, 60);
+    lv_obj_t *msc_btn_label = lv_label_create(msc_btn);
+    lv_label_set_text(msc_btn_label, msc_sd ? " SD " : " Int ");
+    lv_obj_center(msc_btn_label);
+    lv_obj_set_user_data(msc_btn, msc_btn_label);
+    lv_obj_add_event_cb(msc_btn, msc_target_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    register_subpage_group_obj(sub_page, msc_btn);
+
+    // Action: copy all internal files to SD.
+    lv_obj_t *copy_row = create_text(sub_page, NULL, "Copy Internal -> SD", LV_MENU_ITEM_BUILDER_VARIANT_2);
+    lv_obj_t *copy_btn = lv_btn_create(copy_row);
+    lv_obj_set_width(copy_btn, 60);
+    lv_obj_t *copy_label = lv_label_create(copy_btn);
+    lv_label_set_text(copy_label, LV_SYMBOL_COPY);
+    lv_obj_center(copy_label);
+    lv_obj_add_event_cb(copy_btn, storage_copy_to_sd_cb, LV_EVENT_CLICKED, NULL);
+    register_subpage_group_obj(sub_page, copy_btn);
+
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
 static void toggle_child_focus_cb(lv_event_t * e) {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t * obj = (lv_obj_t *)lv_event_get_target(e);
@@ -1008,6 +1101,10 @@ void ui_sys_enter(lv_obj_t *parent)
     cont = create_subpage_editor_settings(menu, main_page);
     add_main_page_group_item(cont);
 
+    // //! STORAGE (internal vs SD + copy tool)
+    cont = create_subpage_storage(menu, main_page);
+    add_main_page_group_item(cont);
+
     // //! PERFORMANCE SETTING
     cont = create_subpage_performance(menu, main_page);
     add_main_page_group_item(cont);
@@ -1067,8 +1164,22 @@ void ui_sys_exit(lv_obj_t *parent)
     memset(subpage_items, 0, sizeof(subpage_items));
 }
 
-app_t ui_sys_main = {
-    .setup_func_cb = ui_sys_enter,
-    .exit_func_cb = ui_sys_exit,
-    .user_data = nullptr,
+#include "apps/app_registry.h"
+
+namespace {
+class SysApp : public core::App {
+public:
+    SysApp() : core::App("Settings") {}
+    void onStart(lv_obj_t *parent) override { ui_sys_enter(parent); }
+    void onStop() override {
+        ui_sys_exit(getRoot());
+        core::App::onStop();
+    }
 };
+} // namespace
+
+namespace apps {
+std::shared_ptr<core::App> make_sys_app() {
+    return std::make_shared<SysApp>();
+}
+} // namespace apps
