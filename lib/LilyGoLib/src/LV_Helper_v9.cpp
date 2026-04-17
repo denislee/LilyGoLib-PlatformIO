@@ -98,6 +98,26 @@ static void lv_encoder_read(lv_indev_t *drv, lv_indev_data_t *data)
 }
 #endif //USING_INPUT_DEV_ROTARY
 
+static uint32_t get_byte_pos(const char *txt, uint32_t char_pos) {
+    uint32_t byte_pos = 0;
+    while (char_pos > 0 && txt[byte_pos] != '\0') {
+        uint8_t c = txt[byte_pos];
+        if ((c & 0x80) == 0) {
+            byte_pos += 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            byte_pos += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            byte_pos += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            byte_pos += 4;
+        } else {
+            byte_pos += 1;
+        }
+        char_pos--;
+    }
+    return byte_pos;
+}
+
 #ifdef USING_INPUT_DEV_KEYBOARD
 static void keypad_read(lv_indev_t *drv, lv_indev_data_t *data)
 {
@@ -107,6 +127,38 @@ static void keypad_read(lv_indev_t *drv, lv_indev_data_t *data)
     auto *plane = (LilyGo_Display *)lv_indev_get_user_data(drv);
     int state = plane->getKeyChar(&c);
     if (state == KEYBOARD_PRESSED) {
+        if (c == 0x17) {
+            lv_group_t * g = lv_indev_get_group(drv);
+            if (g) {
+                lv_obj_t * focused = lv_group_get_focused(g);
+                if (focused && lv_obj_has_class(focused, &lv_textarea_class)) {
+                    bool deleting_spaces = true;
+                    while (true) {
+                        const char *txt = lv_textarea_get_text(focused);
+                        uint32_t cursor_pos = lv_textarea_get_cursor_pos(focused);
+                        if (cursor_pos == 0 || !txt) break;
+
+                        uint32_t byte_pos = get_byte_pos(txt, cursor_pos - 1);
+                        bool is_space = (txt[byte_pos] == ' ');
+
+                        if (deleting_spaces) {
+                            if (!is_space) {
+                                deleting_spaces = false;
+                            }
+                        } else {
+                            if (is_space) {
+                                break;
+                            }
+                        }
+                        lv_textarea_delete_char(focused);
+                    }
+                }
+            }
+            data->state = LV_INDEV_STATE_REL;
+            data->continue_reading = true;
+            return;
+        }
+
         act_key = c;
         data->key = act_key;
         data->state = LV_INDEV_STATE_PR;

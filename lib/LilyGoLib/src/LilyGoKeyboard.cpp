@@ -269,8 +269,12 @@ int LilyGoKeyboard::handleSpecialKeys(uint8_t k, bool pressed, char *c)
 
     if (k == _config->backspace_value) {
         if (pressed) {
-            *c = '\b'; // Backspace character
-            lastKeyVal = '\b';
+            if (alt_key_pressed) {
+                *c = 0x17; // Alt+Backspace
+            } else {
+                *c = '\b'; // Backspace character
+            }
+            lastKeyVal = *c;
             lastState = true;
             lastPressedTime = millis();
             return KB_PRESSED;
