@@ -78,7 +78,20 @@ static void save_content(bool is_autosave = false)
     }
 
     printf("Saving to %s...\n", target_path.c_str());
-    success = hw_save_file(target_path.c_str(), txt);
+    if (current_file_path.empty()) {
+        // New files go to internal memory (Blog)
+        success = hw_save_internal_file(target_path.c_str(), txt);
+    } else {
+        // Existing files: check if it was opened from internal or SD?
+        // For now, use the smarter hw_save_file or just prefer internal if it's there?
+        // The user wants Blog/Tasks to be internal.
+        if (target_path == "/tasks.txt" || (target_path.length() > 1 && isdigit(target_path[1]))) {
+            // Pattern matches Blog or Tasks
+            success = hw_save_internal_file(target_path.c_str(), txt);
+        } else {
+            success = hw_save_file(target_path.c_str(), txt);
+        }
+    }
     
     if (success) {
         printf("Save successful\n");

@@ -28,7 +28,7 @@ static lv_obj_t *settings_exit_btn = NULL;
 
 void ui_sys_exit(lv_obj_t *parent);
 
-#define MAX_MAIN_PAGE_ITEMS 8
+#define MAX_MAIN_PAGE_ITEMS 16
 static lv_obj_t *main_page_group_items[MAX_MAIN_PAGE_ITEMS];
 static uint8_t main_page_group_count = 0;
 
@@ -279,7 +279,15 @@ static void charger_enable_cb(lv_event_t *e)
         lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
         local_param.charger_enable = turnOn;
         printf("State: %s\n", turnOn ? "On" : "Off");
+        
+        // Immediately save the setting so the background loop respects it
+        hw_set_user_setting(local_param);
+        
         hw_set_charger(turnOn);
+        
+        // Refresh battery logic to apply any limits based on new setting
+        hw_update_battery_history();
+        
         if (slider_label) lv_label_set_text(slider_label, turnOn ? " On " : " Off ");
     }
 }
@@ -291,6 +299,9 @@ static void charger_current_cb(lv_event_t *e)
     int32_t val = lv_slider_get_value(slider);
     local_param.charger_current = hw_set_charger_current_level(val );
     lv_label_set_text_fmt(slider_label, "%04umA", local_param.charger_current);
+    
+    // Save the new current immediately
+    hw_set_user_setting(local_param);
 }
 
 static void charge_limit_cb(lv_event_t *e)
@@ -306,6 +317,9 @@ static void charge_limit_cb(lv_event_t *e)
     // If we turned off the limit, restore the default charger state
     if (!turnOn) {
         hw_set_charger(local_param.charger_enable);
+    } else {
+        // If we turned on the limit, refresh battery logic to apply it immediately
+        hw_update_battery_history();
     }
     
     if (slider_label) lv_label_set_text(slider_label, turnOn ? " On " : " Off ");
@@ -574,6 +588,37 @@ static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
 
     btn = create_toggle_btn_row(sub_page, "Limit 80%", local_param.charge_limit_en, charge_limit_cb);
     register_subpage_group_obj(sub_page, btn);
+
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
+static void cpu_freq_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    uint16_t index = lv_dropdown_get_selected(obj);
+    uint16_t freqs[] = {240, 160, 80};
+    local_param.cpu_freq_mhz = freqs[index];
+    
+    // Save immediately so the loop picks it up
+    hw_set_user_setting(local_param);
+}
+
+static lv_obj_t *create_subpage_performance(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_SETTINGS, "Performance");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+
+    const char *freq_options = "240 MHz (Max)\n160 MHz\n80 MHz (Power)";
+    uint16_t current_freq = local_param.cpu_freq_mhz;
+    uint8_t sel_idx = 0; // Default 240
+    if (current_freq == 160) sel_idx = 1;
+    else if (current_freq == 80) sel_idx = 2;
+
+    lv_obj_t *dd = create_dropdown(sub_page, NULL, "CPU Clock", freq_options, sel_idx, cpu_freq_cb);
+    register_subpage_group_obj(sub_page, dd);
 
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
@@ -961,6 +1006,10 @@ void ui_sys_enter(lv_obj_t *parent)
 
     // //! EDITOR SETTINGS
     cont = create_subpage_editor_settings(menu, main_page);
+    add_main_page_group_item(cont);
+
+    // //! PERFORMANCE SETTING
+    cont = create_subpage_performance(menu, main_page);
     add_main_page_group_item(cont);
 
     // //! SYSTEM INFO

@@ -799,6 +799,7 @@ void hw_load_setting()
     user_setting.speaker_enable = 0;
     user_setting.haptic_enable = 1;
     user_setting.show_mem_usage = 0;
+    user_setting.cpu_freq_mhz = 240;
 
     prefs.begin(NVS_NAME);
     size_t stored_size = prefs.getBytesLength(NVS_NAME);
@@ -1567,9 +1568,15 @@ bool hw_save_file(const char *path, const char *content)
     bool lock = false;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
     
-    printf("Attempting to save to %s (SD: %s)\n", str.c_str(), is_sd ? "Yes" : "No");
+    // If it already exists on Internal, save it there to avoid confusion
+    bool exists_internal = FFat.exists(str);
+    
+    printf("Attempting to save to %s (SD: %s, Internal Exists: %s)\n", 
+           str.c_str(), is_sd ? "Yes" : "No", exists_internal ? "Yes" : "No");
 
-    if (is_sd) {
+    if (exists_internal) {
+        f = FFat.open(str, "w");
+    } else if (is_sd) {
         instance.lockSPI();
         f = SD.open(str, "w"); // Use "w" for overwrite
         lock = true;
@@ -1587,10 +1594,36 @@ bool hw_save_file(const char *path, const char *content)
     f.close();
     if (lock) instance.unlockSPI();
     
-    printf("Saved %u bytes to %s\n", (unsigned int)written, str.c_str());
+    printf("Saved %u bytes to %s (%s)\n", (unsigned int)written, str.c_str(), lock ? "SD" : "Internal");
     return (written > 0 || strlen(content) == 0);
 #else
     printf("Save to file: %s, content: %s\n", path, content);
+    return true;
+#endif
+}
+
+bool hw_save_internal_file(const char *path, const char *content)
+{
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    File f;
+    
+    printf("Attempting to save to internal %s\n", str.c_str());
+
+    f = FFat.open(str, "w");
+
+    if (!f) {
+        printf("Failed to open internal file for writing: %s\n", str.c_str());
+        return false;
+    }
+    
+    size_t written = f.print(content);
+    f.close();
+    
+    printf("Saved %u bytes to internal %s\n", (unsigned int)written, str.c_str());
+    return (written > 0 || strlen(content) == 0);
+#else
+    printf("Save to internal file: %s, content: %s\n", path, content);
     return true;
 #endif
 }
@@ -1599,17 +1632,28 @@ bool hw_delete_file(const char *path)
 {
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
-    bool res = false;
+    bool res_sd = false;
+    bool res_int = false;
     if (HW_SD_ONLINE & hw_get_device_online()) {
         instance.lockSPI();
-        res = SD.remove(str);
+        res_sd = SD.remove(str);
         instance.unlockSPI();
-    } else {
-        res = FFat.remove(str);
     }
-    return res;
+    res_int = FFat.remove(str);
+    return res_sd || res_int;
 #else
     printf("Delete file: %s\n", path);
+    return true;
+#endif
+}
+
+bool hw_delete_internal_file(const char *path)
+{
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    return FFat.remove(str);
+#else
+    printf("Delete internal file: %s\n", path);
     return true;
 #endif
 }
@@ -1622,19 +1666,53 @@ bool hw_read_file(const char *path, string &content)
     bool lock = false;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
 
-    printf("Attempting to read %s (SD: %s)\n", str.c_str(), is_sd ? "Yes" : "No");
-
     if (is_sd) {
         instance.lockSPI();
         f = SD.open(str, FILE_READ);
-        lock = true;
-    } else {
+        if (f) {
+            lock = true;
+        } else {
+            instance.unlockSPI();
+        }
+    }
+
+    if (!f) {
         f = FFat.open(str, FILE_READ);
     }
 
     if (!f) {
         printf("Failed to open file for reading: %s\n", str.c_str());
-        if (lock) instance.unlockSPI();
+        return false;
+    }
+
+    size_t size = f.size();
+    content.resize(size);
+    if (size > 0) {
+        f.read((uint8_t *)&content[0], size);
+    }
+    f.close();
+    if (lock) instance.unlockSPI();
+    printf("Read %u bytes from %s (%s)\n", (unsigned int)size, str.c_str(), lock ? "SD" : "Internal");
+    return true;
+#else
+    printf("Read from file: %s\n", path);
+    content = "Dummy content for simulation";
+    return true;
+#endif
+}
+
+bool hw_read_internal_file(const char *path, string &content)
+{
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    File f;
+
+    printf("Attempting to read internal %s\n", str.c_str());
+
+    f = FFat.open(str, FILE_READ);
+
+    if (!f) {
+        printf("Failed to open internal file for reading: %s\n", str.c_str());
         return false;
     }
     size_t size = f.size();
@@ -1643,12 +1721,11 @@ bool hw_read_file(const char *path, string &content)
         f.read((uint8_t *)&content[0], size);
     }
     f.close();
-    if (lock) instance.unlockSPI();
-    printf("Read %u bytes from %s\n", (unsigned int)size, str.c_str());
+    printf("Read %u bytes from internal %s\n", (unsigned int)size, str.c_str());
     return true;
 #else
-    printf("Read from file: %s\n", path);
-    content = "Dummy content for simulation";
+    printf("Read from internal file: %s\n", path);
+    content = "Dummy internal content for simulation";
     return true;
 #endif
 }
@@ -1711,6 +1788,29 @@ void hw_get_txt_files(vector<string> &list)
 #endif
 }
 
+void hw_get_internal_txt_files(vector<string> &list)
+{
+    list.clear();
+#ifdef ARDUINO
+    vector<FileInfo> file_infos;
+    list_files(file_infos, FFat, "/", ".txt");
+
+    std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo& a, const FileInfo& b) {
+        if (a.time != b.time) {
+            return a.time > b.time;
+        }
+        return a.name > b.name;
+    });
+
+    for (const auto& fi : file_infos) {
+        list.push_back(fi.name);
+    }
+#else
+    list.push_back("internal1.txt");
+    list.push_back("internal2.txt");
+#endif
+}
+
 uint8_t hw_get_volume()
 {
 #if defined(ARDUINO) && defined(USING_AUDIO_CODEC)
@@ -1763,8 +1863,8 @@ void hw_power_down_all()
 void hw_power_up_all()
 {
 #ifdef ARDUINO
-    // Revert CPU frequency to 240MHz
-    setCpuFrequencyMhz(240);
+    // Revert CPU frequency to user set value
+    setCpuFrequencyMhz(user_setting.cpu_freq_mhz);
 
     if (user_setting.gps_enable) instance.powerControl(POWER_GPS, true);
     if (user_setting.nfc_enable) instance.powerControl(POWER_NFC, true);
@@ -2329,6 +2429,8 @@ void hw_enable_keyboard()
 #elif defined(ARDUINO_T_LORA_PAGER)
     instance.initKeyboard();
 #endif
+    // Ensure user setting is restored as initKeyboard might reset it to library defaults
+    hw_set_kb_backlight(user_setting.keyboard_bl_level);
 #endif
 }
 

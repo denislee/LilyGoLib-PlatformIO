@@ -107,7 +107,7 @@ static void delete_msgbox_cb(lv_event_t *e)
     bool deleted = false;
 
     if (id == 0) { // Yes
-        if (hw_delete_file(path)) {
+        if (hw_delete_internal_file(path)) {
             printf("Deleted file: %s\n", path);
             deleted = true;
             cache_valid = false;
@@ -248,7 +248,7 @@ void ui_blog_enter(lv_obj_t *parent)
     lv_obj_add_event_cb(exit_btn, blog_key_event_cb, LV_EVENT_KEY, NULL);
 
     if (!cache_valid) {
-        hw_get_txt_files(blog_files_cache);
+        hw_get_internal_txt_files(blog_files_cache);
         
         // Remove tasks.txt so it doesn't show up as a blog post
         blog_files_cache.erase(
@@ -348,7 +348,7 @@ void ui_blog_enter(lv_obj_t *parent)
 
             // Content
             std::string content;
-            if (hw_read_file(filename.c_str(), content)) {
+            if (hw_read_internal_file(filename.c_str(), content)) {
                 lv_obj_t *label = lv_label_create(post_cont);
                 lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
                 lv_label_set_text(label, content.c_str());

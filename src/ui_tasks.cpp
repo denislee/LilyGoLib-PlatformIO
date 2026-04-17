@@ -41,7 +41,7 @@ static void save_tasks() {
             content += t.text + "\n";
         }
     }
-    hw_save_file(tasks_file_path, content.c_str());
+    hw_save_internal_file(tasks_file_path, content.c_str());
 }
 
 void ui_tasks_refresh();
@@ -155,7 +155,7 @@ void ui_tasks_refresh() {
     tasks.clear();
 
     string content;
-    if (!hw_read_file(tasks_file_path, content)) {
+    if (!hw_read_internal_file(tasks_file_path, content)) {
         content = ""; 
     }
 

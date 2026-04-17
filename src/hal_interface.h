@@ -266,6 +266,7 @@ typedef struct {
     uint8_t speaker_enable;
     uint8_t haptic_enable;
     uint8_t show_mem_usage;
+    uint16_t cpu_freq_mhz;
 } user_setting_params_t;
 
 /**
@@ -656,6 +657,7 @@ void hw_set_volume(uint8_t volume);
  * @return True if successful, false otherwise.
  */
 bool hw_save_file(const char *path, const char *content);
+bool hw_save_internal_file(const char *path, const char *content);
 
 /**
  * @brief Delete a file.
@@ -663,6 +665,7 @@ bool hw_save_file(const char *path, const char *content);
  * @return True if successful, false otherwise.
  */
 bool hw_delete_file(const char *path);
+bool hw_delete_internal_file(const char *path);
 
 /**
  * @brief Read content from a file.
@@ -671,12 +674,14 @@ bool hw_delete_file(const char *path);
  * @return True if successful, false otherwise.
  */
 bool hw_read_file(const char *path, string &content);
+bool hw_read_internal_file(const char *path, string &content);
 
 /**
  * @brief Get a list of text files from the filesystem.
  * @param list Reference to a vector of strings to store the filenames.
  */
 void hw_get_txt_files(vector<string> &list);
+void hw_get_internal_txt_files(vector<string> &list);
 
 /**
  * @brief  Get the current volume level.

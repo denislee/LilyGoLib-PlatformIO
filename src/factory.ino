@@ -87,6 +87,8 @@ void setup()
     user_setting_params_t settings;
     hw_get_user_setting(settings);
 
+    setCpuFrequencyMhz(settings.cpu_freq_mhz);
+
     uint32_t disable_flags = 0;
     if (!settings.gps_enable) disable_flags |= NO_HW_GPS;
     if (!settings.nfc_enable) disable_flags |= NO_HW_NFC;
@@ -149,7 +151,7 @@ void loop()
     }
 
     // Dynamic CPU Frequency Scaling for Power Saving
-    static uint32_t last_freq = 240;
+    static uint32_t last_freq = 0; // Initialize to 0 to force first update
     if (ui_is_fake_sleep()) {
         if (last_freq != 40) {
             setCpuFrequencyMhz(40);
@@ -157,12 +159,20 @@ void loop()
         }
     } else {
         uint32_t inactive_time = lv_display_get_inactive_time(NULL);
-        if (inactive_time > 2000 && last_freq != 80) {
-            setCpuFrequencyMhz(80);
-            last_freq = 80;
-        } else if (inactive_time <= 2000 && last_freq != 240) {
-            setCpuFrequencyMhz(240);
-            last_freq = 240;
+        user_setting_params_t settings;
+        hw_get_user_setting(settings);
+        uint32_t active_freq = settings.cpu_freq_mhz;
+
+        if (inactive_time > 2000 && active_freq > 80) {
+            if (last_freq != 80) {
+                setCpuFrequencyMhz(80);
+                last_freq = 80;
+            }
+        } else {
+            if (last_freq != active_freq) {
+                setCpuFrequencyMhz(active_freq);
+                last_freq = active_freq;
+            }
         }
     }
 
