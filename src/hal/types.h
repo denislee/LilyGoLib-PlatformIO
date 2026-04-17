@@ -202,6 +202,7 @@ typedef struct {
     uint16_t cpu_freq_mhz;
     uint8_t storage_prefer_sd;
     uint8_t msc_prefer_sd;
+    uint8_t prune_internal;
 } user_setting_params_t;
 
 typedef struct {

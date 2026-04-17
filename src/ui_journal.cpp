@@ -1,9 +1,6 @@
 /**
- * @file      ui_blog.cpp
- * @author    LilyGo CLI Agent
- * @license   MIT
- * @date      2026-04-10
- *
+ * @file      ui_journal.cpp
+ * @brief     Chronological view of internal files with timestamps in blog style.
  */
 #include "ui_define.h"
 #include "core/app_manager.h"
@@ -12,37 +9,22 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-
-// --- On-disk blog index (Layer 2) ------------------------------------------
-//
-// The blog view used to read the full content of every visible post on every
-// render, which made both initial entry and pagination slow. We now keep a
-// per-storage cache file holding (filename, mtime, snippet) tuples. On entry
-// we do one cheap directory scan (names + mtimes only, no content) and reuse
-// snippets whose mtime is unchanged; otherwise we read just the snippet bytes
-// for the affected entries.
-//
-// Binary layout of /blog_idx.bin:
-//   [MAGIC:4 = "BLOG"] [VERSION:1] [COUNT:u32 LE]
-//   per entry:
-//     [MTIME:u32 LE] [NAME_LEN:u8] [NAME bytes]
-//     [SNIPPET_LEN:u16 LE] [SNIPPET bytes] [TRUNCATED:u8]
-//
-// Anything malformed is treated as "no index" and rebuilt from scratch.
+#include <unordered_map>
 
 namespace {
 
-struct BlogEntry {
+struct JournalEntry {
     std::string filename;
     uint32_t mtime;
     std::string snippet;
     bool truncated;
 };
 
-constexpr const char *kIndexPath = "/blog_idx.bin";
-constexpr uint32_t kIndexMagic = 0x474F4C42u; // 'BLOG' little-endian
-constexpr uint8_t  kIndexVersion = 2;
+constexpr const char *kIndexPath = "/journal_idx.bin";
+constexpr uint32_t kIndexMagic = 0x4A524E4Cu; // 'JRNL' little-endian
+constexpr uint8_t  kIndexVersion = 1;
 constexpr size_t   kSnippetBytes = 4096;
+#define JOURNAL_PAGE_SIZE 5
 
 void write_u16le(std::vector<uint8_t> &out, uint16_t v)
 {
@@ -77,7 +59,7 @@ bool read_u32le(const std::vector<uint8_t> &in, size_t &pos, uint32_t &v)
     return true;
 }
 
-bool load_index_file(std::vector<BlogEntry> &out)
+bool load_index_file(std::vector<JournalEntry> &out)
 {
     out.clear();
     std::vector<uint8_t> raw;
@@ -93,7 +75,7 @@ bool load_index_file(std::vector<BlogEntry> &out)
 
     out.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
-        BlogEntry e;
+        JournalEntry e;
         uint32_t mtime;
         if (!read_u32le(raw, pos, mtime)) return false;
         e.mtime = mtime;
@@ -116,10 +98,15 @@ bool load_index_file(std::vector<BlogEntry> &out)
     return true;
 }
 
-void save_index_file(const std::vector<BlogEntry> &entries)
+void save_index_file(const std::vector<JournalEntry> &entries)
 {
     std::vector<uint8_t> buf;
-    buf.reserve(entries.size() * 64 + 16);
+    size_t est_size = 16;
+    for (const auto &e : entries) {
+        est_size += 8 + e.filename.size() + e.snippet.size();
+    }
+    buf.reserve(est_size);
+
     write_u32le(buf, kIndexMagic);
     buf.push_back(kIndexVersion);
     write_u32le(buf, (uint32_t)entries.size());
@@ -136,8 +123,6 @@ void save_index_file(const std::vector<BlogEntry> &entries)
     hw_save_preferred_bytes(kIndexPath, buf.data(), buf.size());
 }
 
-// Progress callback fired at each phase / per-file step. `total == 0` means
-// "indeterminate / nothing to do for this phase".
 using ProgressFn = void (*)(void *ud, const char *phase, int cur, int total, const char *detail);
 
 static void report(ProgressFn cb, void *ud, const char *phase, int cur, int total, const char *detail)
@@ -146,20 +131,15 @@ static void report(ProgressFn cb, void *ud, const char *phase, int cur, int tota
         static uint32_t last_refr = 0;
         uint32_t now = lv_tick_get();
         cb(ud, phase, cur, total, detail);
-        // Rate limit UI refresh to avoid stalling execution on fast storage
-        if (lv_tick_elaps(last_refr) > 50) {
+        if (lv_tick_elaps(last_refr) > 100) {
             lv_refr_now(NULL);
             last_refr = now;
         }
     }
 }
 
-// Build (or refresh) the in-memory entry list to match what's on disk.
-// Reuses snippets whose mtime matches the cached one; only reads snippet
-// bytes for new/changed files. Persists if anything changed.
-void refresh_entries(std::vector<BlogEntry> &entries, ProgressFn cb = nullptr, void *ud = nullptr)
+void refresh_journal_entries(std::vector<JournalEntry> &entries, ProgressFn cb = nullptr, void *ud = nullptr)
 {
-    // Use statics to bridge the C-style callback if we want granular scanning progress
     static ProgressFn g_cb = nullptr;
     static void *g_ud = nullptr;
     g_cb = cb;
@@ -177,18 +157,30 @@ void refresh_entries(std::vector<BlogEntry> &entries, ProgressFn cb = nullptr, v
                                             p.first == "/tasks.txt";
                                  }),
                   current.end());
+
+    std::sort(current.begin(), current.end(), [](const std::pair<std::string, uint32_t> &a,
+                                                  const std::pair<std::string, uint32_t> &b) {
+        return a.first > b.first;
+    });
+
     report(cb, ud, "Scanning files...", (int)current.size(), (int)current.size(), nullptr);
 
-    std::vector<BlogEntry> existing;
+    std::vector<JournalEntry> existing;
     if (entries.empty()) {
         report(cb, ud, "Loading index...", 0, 1, nullptr);
         load_index_file(existing);
         report(cb, ud, "Loading index...", 1, 1, nullptr);
     } else {
-        existing = entries;
+        existing = std::move(entries);
+        entries.clear();
     }
 
-    std::vector<BlogEntry> next;
+    std::unordered_map<std::string, size_t> existing_map;
+    for (size_t i = 0; i < existing.size(); ++i) {
+        existing_map[existing[i].filename] = i;
+    }
+
+    std::vector<JournalEntry> next;
     next.reserve(current.size());
     bool dirty = (existing.size() != current.size());
     int total = (int)current.size();
@@ -198,15 +190,20 @@ void refresh_entries(std::vector<BlogEntry> &entries, ProgressFn cb = nullptr, v
         const std::string &name = cur.first;
         uint32_t mtime = cur.second;
 
-        auto it = std::find_if(existing.begin(), existing.end(),
-                               [&](const BlogEntry &e) { return e.filename == name; });
+        auto it = existing_map.find(name);
+        bool needs_rebuild = true;
         
-        bool needs_rebuild = (it == existing.end() || it->mtime != mtime);
-        if (!needs_rebuild) {
-            next.push_back(*it);
-        } else {
+        if (it != existing_map.end()) {
+            const JournalEntry &old_e = existing[it->second];
+            if (old_e.mtime == mtime) {
+                next.push_back(std::move(existing[it->second]));
+                needs_rebuild = false;
+            }
+        }
+
+        if (needs_rebuild) {
             report(cb, ud, "Reading previews...", done, total, name.c_str());
-            BlogEntry e;
+            JournalEntry e;
             e.filename = name;
             e.mtime = mtime;
             std::string snippet;
@@ -219,12 +216,11 @@ void refresh_entries(std::vector<BlogEntry> &entries, ProgressFn cb = nullptr, v
         }
         done++;
         if (total > 0 && cb) {
-            // Report every file to keep bar moving smoothly
             report(cb, ud, needs_rebuild ? "Reading previews..." : "Processing...", done, total, name.c_str());
         }
     }
 
-    std::sort(next.begin(), next.end(), [](const BlogEntry &a, const BlogEntry &b) {
+    std::sort(next.begin(), next.end(), [](const JournalEntry &a, const JournalEntry &b) {
         return a.filename > b.filename;
     });
 
@@ -237,39 +233,14 @@ void refresh_entries(std::vector<BlogEntry> &entries, ProgressFn cb = nullptr, v
     entries = std::move(next);
 }
 
-void remove_from_index(const std::string &filename)
-{
-    std::vector<BlogEntry> entries;
-    if (!load_index_file(entries)) return;
-    auto before = entries.size();
-    entries.erase(std::remove_if(entries.begin(), entries.end(),
-                                 [&](const BlogEntry &e) { return e.filename == filename; }),
-                  entries.end());
-    if (entries.size() != before) {
-        save_index_file(entries);
-    }
-}
-
-} // namespace
-
-// --- UI state ---------------------------------------------------------------
-
 static lv_obj_t *menu = NULL;
 static lv_obj_t *quit_btn = NULL;
 static lv_obj_t *parent_obj = NULL;
 static int target_focus_index = -1;
 static int current_page = 0;
-#define BLOG_PAGE_SIZE 5
-static std::vector<BlogEntry> blog_entries;
+static std::vector<JournalEntry> journal_entries;
 static bool cache_valid = false;
 
-// --- Loading overlay --------------------------------------------------------
-//
-// Painted on lv_layer_top so it sits above any other UI while blog entries
-// are being indexed. We force a sync redraw after each progress tick so the
-// user sees the bar advance instead of just a stale frame.
-
-namespace {
 struct LoaderUi {
     lv_obj_t *overlay;
     lv_obj_t *phase;
@@ -277,9 +248,8 @@ struct LoaderUi {
     lv_obj_t *counts;
     lv_obj_t *detail;
 };
-LoaderUi loader{};
-uint32_t loader_started_ms = 0;
-}
+static LoaderUi loader{};
+static uint32_t loader_started_ms = 0;
 
 static void loader_show()
 {
@@ -297,7 +267,7 @@ static void loader_show()
     lv_obj_clear_flag(loader.overlay, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(loader.overlay);
-    lv_label_set_text(title, "Loading Blog");
+    lv_label_set_text(title, "Loading Journal");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
 
     loader.phase = lv_label_create(loader.overlay);
@@ -356,12 +326,12 @@ static void loader_hide()
     }
 }
 
-void ui_blog_enter(lv_obj_t *parent);
-void ui_blog_exit(lv_obj_t *parent);
+void ui_journal_enter(lv_obj_t *parent);
+void ui_journal_exit(lv_obj_t *parent);
 
 static void do_exit()
 {
-    ui_blog_exit(NULL);
+    ui_journal_exit(NULL);
     menu_show();
 }
 
@@ -375,7 +345,7 @@ static void next_page_cb(lv_event_t *e)
         lv_obj_del_async(quit_btn);
         quit_btn = NULL;
     }
-    ui_blog_enter(parent_obj);
+    ui_journal_enter(parent_obj);
 }
 
 static void prev_page_cb(lv_event_t *e)
@@ -389,7 +359,7 @@ static void prev_page_cb(lv_event_t *e)
             lv_obj_del_async(quit_btn);
             quit_btn = NULL;
         }
-        ui_blog_enter(parent_obj);
+        ui_journal_enter(parent_obj);
     }
 }
 
@@ -412,15 +382,11 @@ static void post_focus_cb(lv_event_t *e)
     lv_obj_scroll_to_view(obj, LV_ANIM_ON);
 
     lv_group_t *g = lv_group_get_default();
-    // If focus is changing, and we were in editing mode, clear it
     if (lv_group_get_editing(g)) {
         lv_obj_t *focused = lv_group_get_focused(g);
         if (focused && focused != obj) {
             lv_group_set_editing(g, false);
-            lv_obj_set_style_border_color(focused, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
-            lv_obj_set_style_border_width(focused, 2, LV_STATE_FOCUSED);
             
-            // Also stop scrolling on the old area
             lv_obj_t *old_scroll = lv_obj_get_child(focused, 0);
             if (old_scroll) {
                 lv_obj_clear_flag(old_scroll, LV_OBJ_FLAG_SCROLLABLE);
@@ -436,20 +402,14 @@ static void post_click_cb(lv_event_t *e)
     lv_group_t *g = lv_group_get_default();
     lv_obj_t *scroll_area = lv_obj_get_child(obj, 0);
     
-    // Toggle LVGL editing mode which directs scroll/keys to the focused object
     if (lv_group_get_editing(g) && lv_group_get_focused(g) == obj) {
         lv_group_set_editing(g, false);
-        lv_obj_set_style_border_color(obj, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
-        lv_obj_set_style_border_width(obj, 2, LV_STATE_FOCUSED);
         if (scroll_area) {
             lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_scroll_to_y(scroll_area, 0, LV_ANIM_ON);
         }
     } else {
         lv_group_set_editing(g, true);
-        // Deep Orange highlight to indicate internal scroll mode is active
-        lv_obj_set_style_border_color(obj, lv_palette_main(LV_PALETTE_DEEP_ORANGE), LV_STATE_FOCUSED);
-        lv_obj_set_style_border_width(obj, 3, LV_STATE_FOCUSED);
         if (scroll_area) lv_obj_add_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE);
     }
 }
@@ -477,9 +437,12 @@ static void delete_msgbox_cb(lv_event_t *e)
 
     if (id == 0) { // Yes
         if (hw_delete_preferred_file(path)) {
-            remove_from_index(path);
-            cache_valid = false;
-            blog_entries.clear();
+            journal_entries.erase(std::remove_if(journal_entries.begin(), journal_entries.end(),
+                                              [&](const JournalEntry &be) { return be.filename == path; }),
+                               journal_entries.end());
+            save_index_file(journal_entries);
+            cache_valid = true;
+            hw_set_filesystem_dirty(false);
             deleted = true;
         }
     } else {
@@ -489,8 +452,10 @@ static void delete_msgbox_cb(lv_event_t *e)
     destroy_msgbox(mbox_to_del);
 
     if (deleted) {
-        ui_blog_exit(NULL);
-        ui_blog_enter(parent_obj);
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        menu = NULL;
+        ui_journal_enter(parent_obj);
     }
 
     if (path) lv_mem_free((void *)path);
@@ -500,7 +465,7 @@ static void show_delete_confirm(const char *filename)
 {
     static const char *btns[] = {"Yes", "No", ""};
     char msg[128];
-    snprintf(msg, sizeof(msg), "Delete this post?\n%s", filename);
+    snprintf(msg, sizeof(msg), "Delete this entry?\n%s", filename);
 
     char *path_dup = (char *)lv_mem_alloc(strlen(filename) + 1);
     strcpy(path_dup, filename);
@@ -508,15 +473,15 @@ static void show_delete_confirm(const char *filename)
     create_msgbox(NULL, "Confirm", msg, btns, delete_msgbox_cb, path_dup);
 }
 
-static void blog_key_event_cb(lv_event_t *e)
+static void journal_key_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     if (code != LV_EVENT_KEY) return;
     uint32_t key = lv_event_get_key(e);
     if (key == 'r' || key == 'R') {
         cache_valid = false;
-        ui_blog_exit(NULL);
-        ui_blog_enter(parent_obj);
+        ui_journal_exit(NULL);
+        ui_journal_enter(parent_obj);
         return;
     }
     if (key != 'd' && key != 'D' && key != LV_KEY_BACKSPACE) return;
@@ -564,16 +529,34 @@ static std::string parse_filename_to_human(const std::string &filename)
     return std::string(buffer);
 }
 
-void ui_blog_enter(lv_obj_t *parent)
+static void post_scroll_indicator_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *indicator = (lv_obj_t *)lv_event_get_user_data(e);
+    if (!indicator) return;
+    
+    if (lv_obj_get_scroll_bottom(obj) <= 0) {
+        lv_obj_add_flag(indicator, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(indicator, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void ui_journal_enter(lv_obj_t *parent)
 {
     if (menu != NULL) return;
     enable_keyboard();
     parent_obj = parent;
 
-    if (!cache_valid || blog_entries.empty()) {
+    if (hw_get_filesystem_dirty()) {
+        cache_valid = false;
+        hw_set_filesystem_dirty(false);
+    }
+
+    if (!cache_valid || journal_entries.empty()) {
         loader_show();
         menu = create_menu(parent, back_event_handler);
-        refresh_entries(blog_entries, loader_update, nullptr);
+        refresh_journal_entries(journal_entries, loader_update, nullptr);
         cache_valid = true;
         loader_hide();
     } else {
@@ -582,11 +565,11 @@ void ui_blog_enter(lv_obj_t *parent)
 
     lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_all(main_page, 10, 0);
-    lv_obj_set_style_pad_row(main_page, 6, 0); // Add spacing between posts
+    lv_obj_set_style_pad_row(main_page, 6, 0);
     lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_add_flag(main_page, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_add_event_cb(main_page, blog_key_event_cb, LV_EVENT_KEY, NULL);
+    lv_obj_add_event_cb(main_page, journal_key_event_cb, LV_EVENT_KEY, NULL);
 
     lv_obj_t *exit_cont = lv_menu_cont_create(main_page);
     lv_obj_t *exit_btn = lv_btn_create(exit_cont);
@@ -595,15 +578,15 @@ void ui_blog_enter(lv_obj_t *parent)
     lv_obj_add_event_cb(exit_btn, exit_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_group_add_obj(lv_group_get_default(), exit_btn);
     lv_obj_add_event_cb(exit_btn, post_focus_cb, LV_EVENT_FOCUSED, NULL);
-    lv_obj_add_event_cb(exit_btn, blog_key_event_cb, LV_EVENT_KEY, NULL);
+    lv_obj_add_event_cb(exit_btn, journal_key_event_cb, LV_EVENT_KEY, NULL);
 
-    int total_files = (int)blog_entries.size();
-    int start_idx = current_page * BLOG_PAGE_SIZE;
-    int end_idx = std::min(start_idx + BLOG_PAGE_SIZE, total_files);
+    int total_files = (int)journal_entries.size();
+    int start_idx = current_page * JOURNAL_PAGE_SIZE;
+    int end_idx = std::min(start_idx + JOURNAL_PAGE_SIZE, total_files);
 
     if (start_idx >= total_files && total_files > 0) {
-        current_page = (total_files - 1) / BLOG_PAGE_SIZE;
-        start_idx = current_page * BLOG_PAGE_SIZE;
+        current_page = (total_files - 1) / JOURNAL_PAGE_SIZE;
+        start_idx = current_page * JOURNAL_PAGE_SIZE;
         end_idx = total_files;
     }
 
@@ -612,7 +595,7 @@ void ui_blog_enter(lv_obj_t *parent)
 
     if (total_files == 0) {
         lv_obj_t *empty_label = lv_label_create(main_page);
-        lv_label_set_text(empty_label, "No blog posts yet.");
+        lv_label_set_text(empty_label, "No entries found.");
         lv_obj_set_style_text_align(empty_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(empty_label, lv_pct(100));
     } else {
@@ -631,17 +614,17 @@ void ui_blog_enter(lv_obj_t *parent)
 
         int render_total = end_idx - start_idx;
         for (int i = start_idx; i < end_idx; ++i) {
-            const BlogEntry &entry = blog_entries[i];
+            const JournalEntry &entry = journal_entries[i];
             current_child_idx++;
-            loader_update(nullptr, "Rendering posts...",
+            loader_update(nullptr, "Rendering entries...",
                           i - start_idx, render_total, entry.filename.c_str());
 
             lv_obj_t *post_cont = lv_obj_create(main_page);
             lv_obj_set_width(post_cont, lv_pct(100));
             lv_obj_set_height(post_cont, LV_SIZE_CONTENT);
-            lv_obj_set_style_max_height(post_cont, 180, 0);
+            lv_obj_set_style_max_height(post_cont, 130, 0);
             lv_obj_set_flex_flow(post_cont, LV_FLEX_FLOW_COLUMN);
-            lv_obj_set_style_pad_all(post_cont, 0, 0); // No padding on outer wrapper
+            lv_obj_set_style_pad_all(post_cont, 0, 0); 
             lv_obj_set_style_pad_gap(post_cont, 0, 0);
             lv_obj_set_style_border_width(post_cont, 0, 0); 
             lv_obj_set_style_bg_opa(post_cont, LV_OPA_COVER, 0);
@@ -649,29 +632,28 @@ void ui_blog_enter(lv_obj_t *parent)
             lv_obj_set_style_clip_corner(post_cont, true, 0);
             lv_obj_clear_flag(post_cont, LV_OBJ_FLAG_SCROLLABLE);
 
-            // Inner scroll area - everything inside this will scroll
             lv_obj_t *scroll_area = lv_obj_create(post_cont);
             lv_obj_set_width(scroll_area, lv_pct(100));
             lv_obj_set_height(scroll_area, LV_SIZE_CONTENT);
-            lv_obj_set_style_max_height(scroll_area, 175, 0);
+            lv_obj_set_style_max_height(scroll_area, 125, 0);
             lv_obj_set_flex_flow(scroll_area, LV_FLEX_FLOW_COLUMN);
-            lv_obj_set_style_pad_all(scroll_area, 0, 0); // No padding inside scroller
+            lv_obj_set_style_pad_all(scroll_area, 0, 0);
             lv_obj_set_style_pad_gap(scroll_area, 0, 0);
             lv_obj_set_style_border_width(scroll_area, 0, 0);
             lv_obj_set_style_bg_opa(scroll_area, LV_OPA_TRANSP, 0);
             lv_obj_add_flag(scroll_area, LV_OBJ_FLAG_EVENT_BUBBLE);
             lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLL_CHAIN);
-            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE); // Only scrollable when selected
-            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLL_ELASTIC); // No voids on top/bottom
+            lv_obj_add_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE); 
+            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLL_ELASTIC); 
             lv_obj_set_scrollbar_mode(scroll_area, LV_SCROLLBAR_MODE_AUTO);
 
             char *fn_dup = (char *)lv_mem_alloc(entry.filename.length() + 1);
             strcpy(fn_dup, entry.filename.c_str());
             lv_obj_set_user_data(post_cont, fn_dup);
 
-            // Highlight ONLY on focused post
             lv_obj_set_style_border_width(post_cont, 2, LV_STATE_FOCUSED);
             lv_obj_set_style_border_color(post_cont, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+            lv_obj_set_style_border_color(post_cont, lv_palette_main(LV_PALETTE_ORANGE), LV_STATE_FOCUSED | LV_STATE_EDITED);
             lv_obj_set_style_radius(post_cont, 5, 0);
 
             lv_group_add_obj(lv_group_get_default(), post_cont);
@@ -699,7 +681,7 @@ void ui_blog_enter(lv_obj_t *parent)
                 }
             }, LV_EVENT_KEY, NULL);
 
-            lv_obj_add_event_cb(post_cont, blog_key_event_cb, LV_EVENT_KEY, NULL);
+            lv_obj_add_event_cb(post_cont, journal_key_event_cb, LV_EVENT_KEY, NULL);
 
             if (target_focus_index != -1) {
                 if (current_child_idx == target_focus_index) {
@@ -714,13 +696,13 @@ void ui_blog_enter(lv_obj_t *parent)
             lv_obj_set_style_text_font(header, font, 0);
             lv_obj_set_style_text_color(header, lv_palette_main(LV_PALETTE_GREY), 0);
             lv_obj_set_width(header, lv_pct(100));
-            lv_obj_set_style_pad_left(header, 4, 0); // Subtle margin for text
+            lv_obj_set_style_pad_left(header, 4, 0); 
 
             lv_obj_t *line = lv_obj_create(scroll_area);
             lv_obj_set_size(line, lv_pct(100), 1);
             lv_obj_set_style_bg_color(line, lv_palette_main(LV_PALETTE_GREY), 0);
             lv_obj_set_style_border_width(line, 0, 0);
-            lv_obj_set_style_pad_all(line, 0, 0); // Important to clear default padding
+            lv_obj_set_style_pad_all(line, 0, 0); 
 
             std::string preview = entry.snippet;
             lv_obj_t *label = lv_label_create(scroll_area);
@@ -729,25 +711,33 @@ void ui_blog_enter(lv_obj_t *parent)
             lv_obj_set_width(label, lv_pct(100));
             lv_obj_set_style_text_font(label, font, 0);
             lv_obj_set_style_text_color(label, lv_color_white(), 0);
-            lv_obj_set_style_pad_left(label, 4, 0); // Subtle margin for text
+            lv_obj_set_style_pad_left(label, 4, 0); 
             lv_obj_set_style_pad_right(label, 4, 0);
 
-            // Icon for "there is more": show if file was truncated OR if it's long enough to need scroll
-            lv_obj_add_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE); // Temporarily enable to check scroll bottom
-            lv_obj_update_layout(scroll_area);
-            bool can_scroll = (lv_obj_get_scroll_bottom(scroll_area) > 0);
-            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE); // Restore intended state
+            lv_obj_update_layout(label); 
+            lv_obj_update_layout(scroll_area); 
+            lv_obj_update_layout(post_cont); 
+            int32_t bottom = lv_obj_get_scroll_bottom(scroll_area);
+            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE); 
 
-            if (entry.truncated || can_scroll) {
-                lv_obj_t *trunc_icon = lv_label_create(post_cont); // Fixed child of wrapper
+            // Calculate line count of the snippet label
+            int32_t label_h = lv_obj_get_height(label);
+            int32_t line_h = lv_font_get_line_height(font);
+            int32_t line_count = (line_h > 0) ? (label_h / line_h) : 0;
+
+            if (entry.truncated || bottom > 0 || line_count > 8) {
+                lv_obj_t *trunc_icon = lv_label_create(post_cont);
                 lv_label_set_text(trunc_icon, LV_SYMBOL_DOWN); 
                 lv_obj_set_style_text_font(trunc_icon, &lv_font_montserrat_14, 0);
-                lv_obj_set_style_text_color(trunc_icon, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0);
+                lv_obj_set_style_text_color(trunc_icon, lv_palette_main(LV_PALETTE_ORANGE), 0); 
                 lv_obj_add_flag(trunc_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
-                lv_obj_align(trunc_icon, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
-                lv_obj_set_style_bg_color(trunc_icon, lv_color_black(), 0);
-                lv_obj_set_style_bg_opa(trunc_icon, LV_OPA_60, 0);
-                lv_obj_set_style_radius(trunc_icon, 2, 0);
+                lv_obj_align(trunc_icon, LV_ALIGN_BOTTOM_RIGHT, -12, -5);
+                lv_obj_set_style_bg_opa(trunc_icon, LV_OPA_TRANSP, 0);
+
+                // Add scroll event to hide icon when reached bottom
+                lv_obj_add_event_cb(scroll_area, post_scroll_indicator_cb, LV_EVENT_SCROLL, trunc_icon);
+                // Initial state
+                if (bottom <= 0 && line_count <= 8) lv_obj_add_flag(trunc_icon, LV_OBJ_FLAG_HIDDEN);
             }
         }
 
@@ -771,7 +761,7 @@ void ui_blog_enter(lv_obj_t *parent)
 
         lv_obj_t *page_info = lv_label_create(footer_cont);
         char buf[32];
-        snprintf(buf, sizeof(buf), "Page %d/%d", current_page + 1, (total_files + BLOG_PAGE_SIZE - 1) / BLOG_PAGE_SIZE);
+        snprintf(buf, sizeof(buf), "Page %d/%d", current_page + 1, (total_files + JOURNAL_PAGE_SIZE - 1) / JOURNAL_PAGE_SIZE);
         lv_label_set_text(page_info, buf);
         lv_obj_set_style_text_font(page_info, font, 0);
         lv_obj_set_style_text_color(page_info, lv_palette_main(LV_PALETTE_GREY), 0);
@@ -796,7 +786,7 @@ void ui_blog_enter(lv_obj_t *parent)
     loader_hide();
 }
 
-void ui_blog_exit(lv_obj_t *parent)
+void ui_journal_exit(lv_obj_t *parent)
 {
     loader_hide();
     disable_keyboard();
@@ -825,22 +815,20 @@ void ui_blog_exit(lv_obj_t *parent)
     current_page = 0;
 }
 
-#include "apps/app_registry.h"
-
-namespace {
-class BlogApp : public core::App {
-public:
-    BlogApp() : core::App("Blog") {}
-    void onStart(lv_obj_t *parent) override { ui_blog_enter(parent); }
-    void onStop() override {
-        ui_blog_exit(getRoot());
-        core::App::onStop();
-    }
-};
 } // namespace
 
 namespace apps {
-std::shared_ptr<core::App> make_blog_app() {
-    return std::make_shared<BlogApp>();
+class JournalApp : public core::App {
+public:
+    JournalApp() : core::App("Journal") {}
+    void onStart(lv_obj_t *parent) override { ui_journal_enter(parent); }
+    void onStop() override {
+        ui_journal_exit(getRoot());
+        core::App::onStop();
+    }
+};
+
+std::shared_ptr<core::App> make_journal_app() {
+    return std::make_shared<JournalApp>();
 }
 } // namespace apps

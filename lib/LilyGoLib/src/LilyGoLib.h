@@ -11,7 +11,8 @@
 
 // #define USING_SPIFFS
 #define USING_FATFS
-// #define USING_SDCARD
+#define USING_SDCARD
+#define USING_SD_FAT
 
 #include <esp_arduino_version.h>
 

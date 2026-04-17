@@ -16,9 +16,9 @@ namespace apps {
 
 std::shared_ptr<core::App> make_text_editor_app();
 std::shared_ptr<core::App> make_tasks_app();
-std::shared_ptr<core::App> make_blog_app();
 std::shared_ptr<core::App> make_sys_app();
 std::shared_ptr<core::App> make_file_browser_app();
+std::shared_ptr<core::App> make_journal_app();
 
 void register_all();
 

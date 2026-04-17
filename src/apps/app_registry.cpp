@@ -10,9 +10,9 @@ void register_all() {
     auto &am = core::AppManager::getInstance();
     am.registerApp(make_text_editor_app());
     am.registerApp(make_tasks_app());
-    am.registerApp(make_blog_app());
     am.registerApp(make_sys_app());
     am.registerApp(make_file_browser_app());
+    am.registerApp(make_journal_app());
 }
 
 } // namespace apps

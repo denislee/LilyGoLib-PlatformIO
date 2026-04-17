@@ -383,10 +383,6 @@ uint32_t LilyGoLoRaPager::begin(uint32_t disable_hw_init)
         incrementalBrightness(250, 20);
     }
 
-    if (!(disable_hw_init & NO_INIT_FATFS)) {
-        setupMSC(_lock_callback, _unlock_callback, getMSCPreferSD());
-    }
-
     esp_enable_slow_crystal();
 
 
@@ -438,6 +434,10 @@ uint32_t LilyGoLoRaPager::begin(uint32_t disable_hw_init)
                 break;
             }
         } while (--retry);
+    }
+
+    if (!(disable_hw_init & NO_INIT_FATFS)) {
+        setupMSC(_lock_callback, _unlock_callback, getMSCPreferSD());
     }
 
 

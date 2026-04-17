@@ -83,7 +83,7 @@ static bool save_content(bool is_autosave = false)
         // New files honour the user's storage preference (internal vs SD).
         success = hw_save_preferred_file(target_path.c_str(), txt, &err);
     } else {
-        // Existing files: keep system files (tasks, blog posts) on whichever
+        // Existing files: keep system files (tasks) on whichever
         // storage the preference selects; other files use the smart save which
         // prefers whichever storage already holds the file.
         if (target_path == "/tasks.txt" || (target_path.length() > 1 && isdigit(target_path[1]))) {

@@ -383,35 +383,39 @@ typedef struct {
     lv_obj_t *min;
 } datetime_setup_t;
 
+static datetime_setup_t dt_setup;
+
 static void save_datetime_cb(lv_event_t *e)
 {
-    datetime_setup_t *setup = (datetime_setup_t *)lv_event_get_user_data(e);
+    datetime_setup_t *setup_ptr = (datetime_setup_t *)lv_event_get_user_data(e);
     struct tm timeinfo = {0};
 
-    timeinfo.tm_year = lv_spinbox_get_value(setup->year) - 1900;
-    timeinfo.tm_mon = lv_spinbox_get_value(setup->mon) - 1;
-    timeinfo.tm_mday = lv_spinbox_get_value(setup->day);
-    timeinfo.tm_hour = lv_spinbox_get_value(setup->hour);
-    timeinfo.tm_min = lv_spinbox_get_value(setup->min);
+    timeinfo.tm_year = lv_spinbox_get_value(setup_ptr->year) - 1900;
+    timeinfo.tm_mon = lv_spinbox_get_value(setup_ptr->mon) - 1;
+    timeinfo.tm_mday = lv_spinbox_get_value(setup_ptr->day);
+    timeinfo.tm_hour = lv_spinbox_get_value(setup_ptr->hour);
+    timeinfo.tm_min = lv_spinbox_get_value(setup_ptr->min);
     timeinfo.tm_sec = 0;
 
     hw_set_date_time(timeinfo);
-    lv_menu_set_page(menu, settings_main_page);
+    
+    // Proper way to go back in lv_menu to pop history
+    lv_obj_t *back_btn = lv_menu_get_main_header_back_button(menu);
+    if (back_btn) {
+        lv_obj_send_event(back_btn, LV_EVENT_CLICKED, NULL);
+    } else {
+        lv_menu_set_page(menu, settings_main_page);
+    }
 }
 
-static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
+static void build_subpage_datetime(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_BELL, "Date & Time");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(sub_page, 5, 0);
     lv_obj_set_style_pad_row(sub_page, 4, 0);
 
     struct tm timeinfo;
     hw_get_date_time(timeinfo);
-
-    static datetime_setup_t setup;
 
     /* --- Date row: Year / Month / Day --- */
     lv_obj_t *date_row = lv_obj_create(sub_page);
@@ -445,9 +449,9 @@ static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
         return sb;
     };
 
-    setup.year  = create_sb(date_row, "Year",  2000, 2099, timeinfo.tm_year + 1900, 4);
-    setup.mon   = create_sb(date_row, "Mon",   1, 12, timeinfo.tm_mon + 1, 2);
-    setup.day   = create_sb(date_row, "Day",   1, 31, timeinfo.tm_mday, 2);
+    dt_setup.year  = create_sb(date_row, "Year",  2000, 2099, timeinfo.tm_year + 1900, 4);
+    dt_setup.mon   = create_sb(date_row, "Mon",   1, 12, timeinfo.tm_mon + 1, 2);
+    dt_setup.day   = create_sb(date_row, "Day",   1, 31, timeinfo.tm_mday, 2);
 
     /* --- Time row: Hour / Min --- */
     lv_obj_t *time_row = lv_obj_create(sub_page);
@@ -458,14 +462,14 @@ static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_set_style_pad_column(time_row, 6, 0);
     lv_obj_set_style_border_width(time_row, 0, 0);
 
-    setup.hour  = create_sb(time_row, "Hour",  0, 23, timeinfo.tm_hour, 2);
+    dt_setup.hour  = create_sb(time_row, "Hour",  0, 23, timeinfo.tm_hour, 2);
 
     lv_obj_t *colon = lv_label_create(time_row);
     lv_label_set_text(colon, ":");
     lv_obj_set_style_text_font(colon, &lv_font_montserrat_24, 0);
     lv_obj_set_style_pad_bottom(colon, 0, 0);
 
-    setup.min   = create_sb(time_row, "Min",   0, 59, timeinfo.tm_min, 2);
+    dt_setup.min   = create_sb(time_row, "Min",   0, 59, timeinfo.tm_min, 2);
 
     /* --- Apply button --- */
     lv_obj_t *btn_row = lv_obj_create(sub_page);
@@ -479,18 +483,22 @@ static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_t *save_label = lv_label_create(save_btn);
     lv_label_set_text(save_label, LV_SYMBOL_OK " Apply");
     lv_obj_center(save_label);
-    lv_obj_add_event_cb(save_btn, save_datetime_cb, LV_EVENT_CLICKED, &setup);
+    lv_obj_add_event_cb(save_btn, save_datetime_cb, LV_EVENT_CLICKED, &dt_setup);
     register_subpage_group_obj(sub_page, save_btn);
+}
 
+static lv_obj_t *create_subpage_datetime(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_BELL, "Date & Time");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_datetime);
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
 
-static lv_obj_t *create_subpage_backlight(lv_obj_t *menu, lv_obj_t *main_page)
+static void build_subpage_backlight(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_IMAGE, "Display & Backlight");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_row(sub_page, 2, 0);
 
     lv_obj_t *slider;
@@ -551,16 +559,20 @@ static lv_obj_t *create_subpage_backlight(lv_obj_t *menu, lv_obj_t *main_page)
 
     lv_obj_t *btn = create_toggle_btn_row(sub_page, "Show Memory", local_param.show_mem_usage, show_mem_usage_cb);
     register_subpage_group_obj(sub_page, btn);
+}
 
+static lv_obj_t *create_subpage_backlight(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_IMAGE, "Display & Backlight");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_backlight);
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
 
-static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
+static void build_subpage_otg(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_CHARGE, "Charger");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_row(sub_page, 2, 0);
 
     bool enableOtg = hw_get_otg_enable();
@@ -588,7 +600,14 @@ static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
 
     btn = create_toggle_btn_row(sub_page, "Limit 80%", local_param.charge_limit_en, charge_limit_cb);
     register_subpage_group_obj(sub_page, btn);
+}
 
+static lv_obj_t *create_subpage_otg(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_CHARGE, "Charger");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_otg);
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
@@ -604,11 +623,8 @@ static void cpu_freq_cb(lv_event_t *e)
     hw_set_user_setting(local_param);
 }
 
-static lv_obj_t *create_subpage_performance(lv_obj_t *menu, lv_obj_t *main_page)
+static void build_subpage_performance(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_SETTINGS, "Performance");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_row(sub_page, 2, 0);
 
     const char *freq_options = "240 MHz (Max)\n160 MHz\n80 MHz (Power)";
@@ -619,17 +635,21 @@ static lv_obj_t *create_subpage_performance(lv_obj_t *menu, lv_obj_t *main_page)
 
     lv_obj_t *dd = create_dropdown(sub_page, NULL, "CPU Clock", freq_options, sel_idx, cpu_freq_cb);
     register_subpage_group_obj(sub_page, dd);
+}
 
+static lv_obj_t *create_subpage_performance(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_SETTINGS, "Performance");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_performance);
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
 
-static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
+static void build_subpage_info(lv_obj_t *menu, lv_obj_t *sub_page)
 {
     sys_label.info_loaded = false;
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_LIST, "System Info");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_add_flag(sub_page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(sub_page, 4, 0);
@@ -704,18 +724,22 @@ static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
     add_info_row("Hash", hw_get_firmware_hash_string());
     add_info_row("Chip", hw_get_chip_id_string());
 
-    lv_menu_set_load_page_event(menu, cont, sub_page);
-
     timer = lv_timer_create(sys_timer_event_cb, 1000, NULL);
+}
+
+static lv_obj_t *create_subpage_info(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_LIST, "System Info");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_info);
+    lv_menu_set_load_page_event(menu, cont, sub_page);
 
     return cont;
 }
 
-static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
+static void build_device_probe(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_USB, "Devices");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_add_flag(sub_page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(sub_page, 4, 0);
@@ -760,11 +784,20 @@ static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
         }
         devices_mask >>= 1;
     }
+}
 
+static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_USB, "Devices");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_device_probe);
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
 
+
+typedef void (*subpage_builder_t)(lv_obj_t *menu, lv_obj_t *page);
 
 static void settings_page_changed_cb(lv_event_t *e)
 {
@@ -774,6 +807,11 @@ static void settings_page_changed_cb(lv_event_t *e)
 
     lv_obj_t *page = lv_menu_get_cur_main_page(obj);
     if (page != settings_main_page) {
+        subpage_builder_t builder = (subpage_builder_t)lv_obj_get_user_data(page);
+        if (builder) {
+            builder(menu, page);
+            lv_obj_set_user_data(page, NULL); // Only build once
+        }
         activate_subpage_group(page);
     } else {
         restore_main_page_group();
@@ -800,11 +838,8 @@ static void editor_font_size_cb(lv_event_t *e)
     lv_event_stop_processing(e);
 }
 
-static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_page)
+static void build_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_EDIT, "Editor Settings");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_row(sub_page, 2, 0);
 
     const char *font_options = "Montserrat\nUnscii 8\nUnscii 16\nCourier";
@@ -818,7 +853,14 @@ static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_p
     }
     lv_obj_t *dd_size = create_dropdown(sub_page, NULL, "Font Size", size_options, size_idx, editor_font_size_cb);
     register_subpage_group_obj(sub_page, dd_size);
+}
 
+static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_EDIT, "Editor Settings");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_editor_settings);
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
@@ -841,10 +883,85 @@ static void msc_target_cb(lv_event_t *e) {
     if (label) lv_label_set_text(label, en ? " SD " : " Int ");
 }
 
+static void storage_prune_cb(lv_event_t *e) {
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
+    local_param.prune_internal = en;
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+    if (label) lv_label_set_text(label, en ? " On " : " Off ");
+}
+
+static struct {
+    lv_obj_t *overlay;
+    lv_obj_t *bar;
+    lv_obj_t *label;
+} storage_loader;
+
+static void storage_progress_cb(int cur, int total, const char *name)
+{
+    if (!storage_loader.overlay) return;
+
+    if (total > 0) {
+        lv_bar_set_value(storage_loader.bar, cur * 100 / total, LV_ANIM_OFF);
+        lv_label_set_text_fmt(storage_loader.label, "Processing (%d/%d):\n%s", cur, total, name);
+    } else {
+        lv_label_set_text(storage_loader.label, name ? name : "Working...");
+    }
+    lv_refr_now(NULL);
+}
+
+static void show_storage_loader(const char *title)
+{
+    storage_loader.overlay = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(storage_loader.overlay, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(storage_loader.overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(storage_loader.overlay, LV_OPA_80, 0);
+    lv_obj_set_flex_flow(storage_loader.overlay, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(storage_loader.overlay, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(storage_loader.overlay, 10, 0);
+
+    lv_obj_t *t = lv_label_create(storage_loader.overlay);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_color(t, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_18, 0);
+
+    storage_loader.label = lv_label_create(storage_loader.overlay);
+    lv_label_set_text(storage_loader.label, "Preparing...");
+    lv_obj_set_style_text_color(storage_loader.label, lv_color_white(), 0);
+    lv_obj_set_style_text_align(storage_loader.label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(storage_loader.label, lv_pct(80));
+
+    storage_loader.bar = lv_bar_create(storage_loader.overlay);
+    lv_obj_set_size(storage_loader.bar, lv_pct(70), 12);
+    lv_bar_set_range(storage_loader.bar, 0, 100);
+    lv_bar_set_value(storage_loader.bar, 0, LV_ANIM_OFF);
+    
+    lv_refr_now(NULL);
+}
+
+static void hide_storage_loader()
+{
+    if (storage_loader.overlay) {
+        lv_obj_del(storage_loader.overlay);
+        storage_loader.overlay = NULL;
+    }
+}
+
+static void storage_prune_now_cb(lv_event_t *e) {
+    show_storage_loader("Pruning Internal");
+    hw_prune_internal_storage(storage_progress_cb);
+    hide_storage_loader();
+    ui_msg_pop_up("Storage", "Internal storage pruned to\nkeep only the 50 newest files.");
+}
+
 static void storage_copy_to_sd_cb(lv_event_t *e) {
+    show_storage_loader("Backup to SD");
+
     int copied = 0, failed = 0;
     std::string err;
-    bool ok = hw_copy_internal_to_sd(&copied, &failed, &err);
+    bool ok = hw_copy_internal_to_sd(&copied, &failed, &err, storage_progress_cb);
+
+    hide_storage_loader();
 
     char msg[128];
     if (ok) {
@@ -857,63 +974,6 @@ static void storage_copy_to_sd_cb(lv_event_t *e) {
                  copied, failed);
     }
     ui_msg_pop_up("Storage", msg);
-}
-
-static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool initial_state, lv_event_cb_t cb);
-
-static lv_obj_t *create_subpage_storage(lv_obj_t *menu, lv_obj_t *main_page)
-{
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_SD_CARD, "Storage");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
-    lv_obj_set_style_pad_row(sub_page, 2, 0);
-
-    // Toggle: internal (Int) vs SD.
-    lv_obj_t *toggle_row = create_text(sub_page, NULL, "Prefer SD Card", LV_MENU_ITEM_BUILDER_VARIANT_2);
-    lv_obj_t *btn = lv_btn_create(toggle_row);
-    lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
-    bool prefer_sd = local_param.storage_prefer_sd;
-    if (prefer_sd) lv_obj_add_state(btn, LV_STATE_CHECKED);
-    lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
-    lv_obj_set_style_border_width(btn, 0, LV_STATE_FOCUS_KEY);
-    lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
-    lv_obj_set_width(btn, 60);
-    lv_obj_t *btn_label = lv_label_create(btn);
-    lv_label_set_text(btn_label, prefer_sd ? " SD " : " Int ");
-    lv_obj_center(btn_label);
-    lv_obj_set_user_data(btn, btn_label);
-    lv_obj_add_event_cb(btn, storage_prefer_sd_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    register_subpage_group_obj(sub_page, btn);
-
-    // USB MSC Toggle
-    lv_obj_t *msc_row = create_text(sub_page, NULL, "USB MSC Target", LV_MENU_ITEM_BUILDER_VARIANT_2);
-    lv_obj_t *msc_btn = lv_btn_create(msc_row);
-    lv_obj_add_flag(msc_btn, LV_OBJ_FLAG_CHECKABLE);
-    bool msc_sd = local_param.msc_prefer_sd;
-    if (msc_sd) lv_obj_add_state(msc_btn, LV_STATE_CHECKED);
-    lv_obj_set_style_outline_width(msc_btn, 0, LV_STATE_FOCUS_KEY);
-    lv_obj_set_style_border_width(msc_btn, 0, LV_STATE_FOCUS_KEY);
-    lv_obj_set_style_bg_color(msc_btn, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
-    lv_obj_set_width(msc_btn, 60);
-    lv_obj_t *msc_btn_label = lv_label_create(msc_btn);
-    lv_label_set_text(msc_btn_label, msc_sd ? " SD " : " Int ");
-    lv_obj_center(msc_btn_label);
-    lv_obj_set_user_data(msc_btn, msc_btn_label);
-    lv_obj_add_event_cb(msc_btn, msc_target_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    register_subpage_group_obj(sub_page, msc_btn);
-
-    // Action: copy all internal files to SD.
-    lv_obj_t *copy_row = create_text(sub_page, NULL, "Copy Internal -> SD", LV_MENU_ITEM_BUILDER_VARIANT_2);
-    lv_obj_t *copy_btn = lv_btn_create(copy_row);
-    lv_obj_set_width(copy_btn, 60);
-    lv_obj_t *copy_label = lv_label_create(copy_btn);
-    lv_label_set_text(copy_label, LV_SYMBOL_COPY);
-    lv_obj_center(copy_label);
-    lv_obj_add_event_cb(copy_btn, storage_copy_to_sd_cb, LV_EVENT_CLICKED, NULL);
-    register_subpage_group_obj(sub_page, copy_btn);
-
-    lv_menu_set_load_page_event(menu, cont, sub_page);
-    return cont;
 }
 
 static void toggle_child_focus_cb(lv_event_t * e) {
@@ -940,7 +1000,6 @@ static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool i
     lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_border_width(btn, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
-    lv_obj_set_flex_grow(btn, 1);
     
     // Fix width to align "On/Off" texts to the right, like the standard labels
     lv_obj_set_width(btn, 60);
@@ -957,6 +1016,91 @@ static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool i
     lv_obj_add_event_cb(btn, cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     return btn;
+}
+
+static void build_subpage_storage(lv_obj_t *menu, lv_obj_t *sub_page)
+{
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+
+    // USB MSC Toggle
+    lv_obj_t *msc_row = create_text(sub_page, NULL, "USB MSC Target", LV_MENU_ITEM_BUILDER_VARIANT_2);
+    lv_obj_set_style_border_width(msc_row, 2, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_color(msc_row, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+
+    lv_obj_t *msc_btn = lv_btn_create(msc_row);
+    lv_obj_add_flag(msc_btn, LV_OBJ_FLAG_CHECKABLE);
+    bool msc_sd = local_param.msc_prefer_sd;
+    if (msc_sd) lv_obj_add_state(msc_btn, LV_STATE_CHECKED);
+    lv_obj_set_style_outline_width(msc_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(msc_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_bg_color(msc_btn, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
+    lv_obj_set_width(msc_btn, 60);
+    lv_obj_t *msc_btn_label = lv_label_create(msc_btn);
+    lv_label_set_text(msc_btn_label, msc_sd ? " SD " : " Int ");
+    lv_obj_center(msc_btn_label);
+    lv_obj_set_user_data(msc_btn, msc_btn_label);
+    lv_obj_add_event_cb(msc_btn, msc_target_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(msc_btn, toggle_child_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(msc_btn, toggle_child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+    register_subpage_group_obj(sub_page, msc_btn);
+
+    // Prune Internal Toggle
+    lv_obj_t *btn = create_toggle_btn_row(sub_page, "Limit 50 files", local_param.prune_internal, storage_prune_cb);
+    register_subpage_group_obj(sub_page, btn);
+
+    // Action: copy all internal files to SD.
+    lv_obj_t *copy_row = create_text(sub_page, NULL, "Copy Internal -> SD", LV_MENU_ITEM_BUILDER_VARIANT_2);
+    lv_obj_set_style_border_width(copy_row, 2, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_color(copy_row, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+
+    lv_obj_t *copy_btn = lv_btn_create(copy_row);
+    lv_obj_set_width(copy_btn, 60);
+    lv_obj_set_style_outline_width(copy_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_outline_width(copy_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(copy_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(copy_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(copy_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(copy_btn, 0, LV_STATE_FOCUS_KEY);
+
+    lv_obj_t *copy_label = lv_label_create(copy_btn);
+    lv_label_set_text(copy_label, LV_SYMBOL_COPY);
+    lv_obj_center(copy_label);
+    lv_obj_add_event_cb(copy_btn, storage_copy_to_sd_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(copy_btn, toggle_child_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(copy_btn, toggle_child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+    register_subpage_group_obj(sub_page, copy_btn);
+
+    // Action: Manual prune
+    lv_obj_t *prune_row = create_text(sub_page, NULL, "Prune Now (Keep 50)", LV_MENU_ITEM_BUILDER_VARIANT_2);
+    lv_obj_set_style_border_width(prune_row, 2, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_color(prune_row, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+
+    lv_obj_t *prune_btn = lv_btn_create(prune_row);
+    lv_obj_set_width(prune_btn, 60);
+    lv_obj_set_style_outline_width(prune_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_outline_width(prune_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(prune_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(prune_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(prune_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(prune_btn, 0, LV_STATE_FOCUS_KEY);
+
+    lv_obj_t *prune_label = lv_label_create(prune_btn);
+    lv_label_set_text(prune_label, LV_SYMBOL_TRASH);
+    lv_obj_center(prune_label);
+    lv_obj_add_event_cb(prune_btn, storage_prune_now_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(prune_btn, toggle_child_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(prune_btn, toggle_child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+    register_subpage_group_obj(sub_page, prune_btn);
+}
+
+static lv_obj_t *create_subpage_storage(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_SD_CARD, "Storage");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_storage);
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
 }
 
 static void wifi_enable_cb(lv_event_t *e) {
@@ -1022,11 +1166,8 @@ static void haptic_enable_cb(lv_event_t *e) {
     if (label) lv_label_set_text(label, en ? " On " : " Off ");
 }
 
-static lv_obj_t *create_subpage_connectivity(lv_obj_t *menu, lv_obj_t *main_page)
+static void build_subpage_connectivity(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_WIFI, "Connectivity");
-    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_style_pad_row(sub_page, 2, 0);
 
     lv_obj_t *btn;
@@ -1051,7 +1192,14 @@ static lv_obj_t *create_subpage_connectivity(lv_obj_t *menu, lv_obj_t *main_page
 
     btn = create_toggle_btn_row(sub_page, "Haptic", hw_get_haptic_enable(), haptic_enable_cb);
     register_subpage_group_obj(sub_page, btn);
+}
 
+static lv_obj_t *create_subpage_connectivity(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_WIFI, "Connectivity");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_connectivity);
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
@@ -1132,7 +1280,12 @@ void ui_sys_enter(lv_obj_t *parent)
         if (page == settings_main_page) {
              settings_exit_cb(NULL);
         } else {
-             lv_menu_set_page(menu, settings_main_page);
+             lv_obj_t *back_btn = lv_menu_get_main_header_back_button(menu);
+             if (back_btn) {
+                 lv_obj_send_event(back_btn, LV_EVENT_CLICKED, NULL);
+             } else {
+                 lv_menu_set_page(menu, settings_main_page);
+             }
         }
     }, NULL);
 #endif

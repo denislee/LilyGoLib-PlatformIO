@@ -91,6 +91,12 @@ void System::setupGlobalUI() {
     lv_obj_set_style_text_color(_statMemLabel, lv_color_white(), 0);
     lv_obj_add_flag(_statMemLabel, LV_OBJ_FLAG_HIDDEN);
 
+    _statSDLabel = lv_label_create(_statusBar);
+    lv_obj_align(_statSDLabel, LV_ALIGN_LEFT_MID, 5, 0);
+    lv_obj_set_style_text_color(_statSDLabel, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_label_set_text(_statSDLabel, LV_SYMBOL_SD_CARD);
+    lv_obj_add_flag(_statSDLabel, LV_OBJ_FLAG_HIDDEN);
+
     lv_timer_create([](lv_timer_t *t) {
         System& self = System::getInstance();
         // Status bar update logic
@@ -109,6 +115,32 @@ void System::setupGlobalUI() {
             if (params.is_charging) batt_sym = LV_SYMBOL_CHARGE;
             else if (params.battery_percent < 20) batt_sym = LV_SYMBOL_BATTERY_EMPTY;
             lv_label_set_text_fmt(self._statBattLabel, "%s %d%%", batt_sym, params.battery_percent);
+        }
+
+        if (self._statSDLabel) {
+            bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
+            if (sd_online) {
+                lv_obj_clear_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+
+        user_setting_params_t settings;
+        hw_get_user_setting(settings);
+        if (self._statMemLabel) {
+            if (settings.show_mem_usage) {
+                uint32_t total, free_h;
+                hw_get_heap_info(total, free_h);
+                lv_label_set_text_fmt(self._statMemLabel, "M:%uK", free_h / 1024);
+                lv_obj_clear_flag(self._statMemLabel, LV_OBJ_FLAG_HIDDEN);
+                
+                // Position after SD icon if SD is online
+                bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
+                lv_obj_set_x(self._statMemLabel, sd_online ? 30 : 5);
+            } else {
+                lv_obj_add_flag(self._statMemLabel, LV_OBJ_FLAG_HIDDEN);
+            }
         }
     }, 1000, NULL);
 }

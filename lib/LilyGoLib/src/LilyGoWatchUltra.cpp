@@ -217,10 +217,6 @@ uint32_t LilyGoUltra::begin(uint32_t disable_hw_init)
 
     initShareSPIPins();
 
-    if (!(disable_hw_init & NO_INIT_FATFS)) {
-        setupMSC(_lock_callback, _unlock_callback, getMSCPreferSD());
-    }
-
     res = initPMU(batteryCalibrated == false);
     if (!res) {
         log_e("Failed to find PMU.");
@@ -337,6 +333,10 @@ uint32_t LilyGoUltra::begin(uint32_t disable_hw_init)
 
     if (!(disable_hw_init & NO_HW_SD)) {
         installSD();
+    }
+
+    if (!(disable_hw_init & NO_INIT_FATFS)) {
+        setupMSC(_lock_callback, _unlock_callback, getMSCPreferSD());
     }
 
 #ifdef USING_PDM_MICROPHONE
