@@ -714,30 +714,22 @@ void ui_journal_enter(lv_obj_t *parent)
             lv_obj_set_style_pad_left(label, 4, 0); 
             lv_obj_set_style_pad_right(label, 4, 0);
 
-            lv_obj_update_layout(label); 
-            lv_obj_update_layout(scroll_area); 
-            lv_obj_update_layout(post_cont); 
+            lv_obj_update_layout(label);
+            lv_obj_update_layout(scroll_area);
+            lv_obj_update_layout(post_cont);
             int32_t bottom = lv_obj_get_scroll_bottom(scroll_area);
-            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE); 
+            lv_obj_clear_flag(scroll_area, LV_OBJ_FLAG_SCROLLABLE);
 
-            // Calculate line count of the snippet label
-            int32_t label_h = lv_obj_get_height(label);
-            int32_t line_h = lv_font_get_line_height(font);
-            int32_t line_count = (line_h > 0) ? (label_h / line_h) : 0;
-
-            if (entry.truncated || bottom > 0 || line_count > 8) {
+            if (bottom > 0) {
                 lv_obj_t *trunc_icon = lv_label_create(post_cont);
-                lv_label_set_text(trunc_icon, LV_SYMBOL_DOWN); 
+                lv_label_set_text(trunc_icon, LV_SYMBOL_DOWN);
                 lv_obj_set_style_text_font(trunc_icon, &lv_font_montserrat_14, 0);
-                lv_obj_set_style_text_color(trunc_icon, lv_palette_main(LV_PALETTE_ORANGE), 0); 
+                lv_obj_set_style_text_color(trunc_icon, lv_palette_main(LV_PALETTE_ORANGE), 0);
                 lv_obj_add_flag(trunc_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
                 lv_obj_align(trunc_icon, LV_ALIGN_BOTTOM_RIGHT, -12, -5);
                 lv_obj_set_style_bg_opa(trunc_icon, LV_OPA_TRANSP, 0);
 
-                // Add scroll event to hide icon when reached bottom
                 lv_obj_add_event_cb(scroll_area, post_scroll_indicator_cb, LV_EVENT_SCROLL, trunc_icon);
-                // Initial state
-                if (bottom <= 0 && line_count <= 8) lv_obj_add_flag(trunc_icon, LV_OBJ_FLAG_HIDDEN);
             }
         }
 
