@@ -85,7 +85,7 @@ static const uint8_t SCK = 35;
 #define EXPANDS_SD_EN     (12)
 
 // Peripheral definition exists
-// #define USING_AUDIO_CODEC
+#define USING_AUDIO_CODEC
 #define USING_XL9555_EXPANDS
 #define USING_PPM_MANAGE
 #define USING_BQ_GAUGE
