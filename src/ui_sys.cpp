@@ -932,34 +932,43 @@ static void home_font_size_cb(lv_event_t *e)
 
 static void build_subpage_fonts(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    lv_obj_set_style_pad_row(sub_page, 2, 0);
+    lv_obj_set_style_pad_row(sub_page, 4, 0);
 
     auto add_font_section = [&](const char *title, uint8_t face_idx, uint8_t size,
                                 lv_event_cb_t face_cb, lv_event_cb_t size_cb) {
-        lv_obj_t *header = lv_label_create(sub_page);
-        lv_label_set_text(header, title);
-        lv_obj_set_width(header, LV_PCT(100));
-        lv_obj_set_style_text_align(header, LV_TEXT_ALIGN_LEFT, 0);
-        lv_obj_set_style_text_color(header, UI_COLOR_MUTED, 0);
-        lv_obj_set_style_pad_top(header, 6, 0);
-        lv_obj_set_style_pad_left(header, 12, 0);
-
-        lv_obj_t *row = lv_menu_section_create(sub_page);
+        lv_obj_t *row = lv_obj_create(sub_page);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_style_pad_column(row, 4, 0);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, 6, 0);
+        lv_obj_set_style_pad_hor(row, 12, 0);
+        lv_obj_set_style_pad_ver(row, 2, 0);
 
-        lv_obj_t *dd_face = create_dropdown(row, NULL, "Face", FONT_FACE_OPTIONS, face_idx, face_cb);
-        lv_obj_t *face_cont = lv_obj_get_parent(dd_face);
-        lv_obj_set_width(face_cont, 0);
-        lv_obj_set_flex_grow(face_cont, 1);
-        lv_obj_set_style_pad_hor(face_cont, 6, 0);
+        lv_obj_t *name = lv_label_create(row);
+        lv_label_set_text(name, title);
+        lv_obj_set_style_text_color(name, UI_COLOR_MUTED, 0);
+        lv_obj_set_width(name, LV_PCT(26));
+
+        lv_obj_t *dd_face = lv_dropdown_create(row);
+        lv_dropdown_set_options(dd_face, FONT_FACE_OPTIONS);
+        lv_dropdown_set_selected(dd_face, face_idx);
+        lv_obj_set_width(dd_face, 0);
+        lv_obj_set_flex_grow(dd_face, 2);
+        if (face_cb) {
+            lv_obj_add_event_cb(dd_face, face_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        }
         register_subpage_group_obj(sub_page, dd_face);
 
-        lv_obj_t *dd_size = create_dropdown(row, NULL, "Size", FONT_SIZE_OPTIONS, size_to_idx(size), size_cb);
-        lv_obj_t *size_cont = lv_obj_get_parent(dd_size);
-        lv_obj_set_width(size_cont, 0);
-        lv_obj_set_flex_grow(size_cont, 1);
-        lv_obj_set_style_pad_hor(size_cont, 6, 0);
+        lv_obj_t *dd_size = lv_dropdown_create(row);
+        lv_dropdown_set_options(dd_size, FONT_SIZE_OPTIONS);
+        lv_dropdown_set_selected(dd_size, size_to_idx(size));
+        lv_obj_set_width(dd_size, 0);
+        lv_obj_set_flex_grow(dd_size, 1);
+        if (size_cb) {
+            lv_obj_add_event_cb(dd_size, size_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        }
         register_subpage_group_obj(sub_page, dd_size);
     };
 
