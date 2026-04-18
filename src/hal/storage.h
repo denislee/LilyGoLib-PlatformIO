@@ -31,8 +31,10 @@ struct HwDirEntry {
     bool is_dir;
     uint32_t mtime;
 };
-void hw_list_internal_entries(std::vector<HwDirEntry> &list, const char *filter_ext);
-void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext);
+void hw_list_internal_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
+                              const char *dirname = "/");
+void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
+                        const char *dirname = "/");
 
 // Cheap non-allocating count of files (not directories) in the internal FFat
 // root. Intended for the status-bar indicator — does not recurse.

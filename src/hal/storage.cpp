@@ -541,6 +541,9 @@ static void list_entries(std::vector<HwDirEntry> &list, fs::FS &fs,
     File entry = root.openNextFile();
     while (entry) {
         String name = entry.name();
+        // Normalize to leaf name — SD returns full path, FFat returns leaf.
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0) name = name.substring(slash + 1);
         if (entry.isDirectory()) {
             dirs.push_back({std::string(name.c_str()), true, (uint32_t)entry.getLastWrite()});
         } else {
@@ -562,42 +565,62 @@ static void list_entries(std::vector<HwDirEntry> &list, fs::FS &fs,
 }
 #endif
 
-void hw_list_internal_entries(std::vector<HwDirEntry> &list, const char *filter_ext)
+void hw_list_internal_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
+                              const char *dirname)
 {
     list.clear();
+    if (!dirname || !dirname[0]) dirname = "/";
 #ifdef ARDUINO
-    list_entries(list, FFat, "/", filter_ext);
+    list_entries(list, FFat, dirname, filter_ext);
 #else
     bool all = !(filter_ext && filter_ext[0]);
-    list.push_back({"/notes",         true,  1710000000});
-    list.push_back({"/drafts",        true,  1711000000});
-    list.push_back({"/internal1.txt", false, 1712000000});
-    list.push_back({"/internal2.txt", false, 1713000000});
-    if (all) {
-        list.push_back({"/readme.md", false, 1714000000});
-        list.push_back({"/data.bin",  false, 1715000000});
+    bool at_root = (strcmp(dirname, "/") == 0);
+    if (at_root) {
+        list.push_back({"notes",         true,  1710000000});
+        list.push_back({"drafts",        true,  1711000000});
+        list.push_back({"internal1.txt", false, 1712000000});
+        list.push_back({"internal2.txt", false, 1713000000});
+        if (all) {
+            list.push_back({"readme.md", false, 1714000000});
+            list.push_back({"data.bin",  false, 1715000000});
+        }
+    } else if (strcmp(dirname, "/notes") == 0) {
+        list.push_back({"hello.txt",  false, 1712100000});
+        list.push_back({"ideas.txt",  false, 1712200000});
+    } else if (strcmp(dirname, "/drafts") == 0) {
+        list.push_back({"wip.txt",    false, 1711100000});
     }
 #endif
 }
 
-void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext)
+void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
+                        const char *dirname)
 {
     list.clear();
+    if (!dirname || !dirname[0]) dirname = "/";
 #ifdef ARDUINO
     if (HW_SD_ONLINE & hw_get_device_online()) {
         instance.lockSPI();
-        list_entries(list, SD, "/", filter_ext);
+        list_entries(list, SD, dirname, filter_ext);
         instance.unlockSPI();
     }
 #else
     bool all = !(filter_ext && filter_ext[0]);
-    list.push_back({"/md",      true,  1710500000});
-    list.push_back({"/photos",  true,  1711500000});
-    list.push_back({"/sd1.txt", false, 1712500000});
-    list.push_back({"/sd2.txt", false, 1713500000});
-    if (all) {
-        list.push_back({"/track.mp3", false, 1714500000});
-        list.push_back({"/image.jpg", false, 1715500000});
+    bool at_root = (strcmp(dirname, "/") == 0);
+    if (at_root) {
+        list.push_back({"md",      true,  1710500000});
+        list.push_back({"photos",  true,  1711500000});
+        list.push_back({"sd1.txt", false, 1712500000});
+        list.push_back({"sd2.txt", false, 1713500000});
+        if (all) {
+            list.push_back({"track.mp3", false, 1714500000});
+            list.push_back({"image.jpg", false, 1715500000});
+        }
+    } else if (strcmp(dirname, "/md") == 0) {
+        list.push_back({"note1.md", false, 1710600000});
+        list.push_back({"note2.md", false, 1710700000});
+    } else if (strcmp(dirname, "/photos") == 0) {
+        list.push_back({"pic1.jpg", false, 1711600000});
     }
 #endif
 }

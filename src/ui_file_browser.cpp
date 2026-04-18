@@ -10,7 +10,7 @@
 #include <string>
 #include <algorithm>
 
-LV_FONT_DECLARE(lv_font_montserrat_16);
+LV_FONT_DECLARE(lv_font_montserrat_14);
 
 namespace {
 
@@ -58,10 +58,28 @@ static lv_obj_t *filter_btn_all = NULL;
 
 static StorageSource current_source = SOURCE_INTERNAL;
 static FileFilter current_filter = FILTER_TXT;
+static std::string current_dir = "/";
 
 static std::vector<Entry> all_entries;
 // Backing storage for button user_data — keeps c_str() stable while list is shown.
 static std::vector<std::string> path_store;
+
+static std::string join_path(const std::string &dir, const std::string &leaf)
+{
+    if (dir.empty() || dir == "/") return "/" + leaf;
+    if (!dir.empty() && dir.back() == '/') return dir + leaf;
+    return dir + "/" + leaf;
+}
+
+static std::string parent_of(const std::string &dir)
+{
+    if (dir.empty() || dir == "/") return "/";
+    std::string d = dir;
+    if (d.back() == '/') d.pop_back();
+    size_t slash = d.find_last_of('/');
+    if (slash == std::string::npos || slash == 0) return "/";
+    return d.substr(0, slash);
+}
 
 static void load_entries()
 {
@@ -69,9 +87,9 @@ static void load_entries()
 
     std::vector<HwDirEntry> raw;
     if (current_source == SOURCE_INTERNAL) {
-        hw_list_internal_entries(raw, nullptr);
+        hw_list_internal_entries(raw, nullptr, current_dir.c_str());
     } else {
-        hw_list_sd_entries(raw, nullptr);
+        hw_list_sd_entries(raw, nullptr, current_dir.c_str());
     }
 
     for (const auto &r : raw) {
@@ -113,6 +131,8 @@ static std::string display_name(const std::string &path)
     return path.substr(slash + 1);
 }
 
+static void refresh_ui();
+
 static void file_click_cb(lv_event_t *e)
 {
     lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
@@ -125,6 +145,23 @@ static void file_click_cb(lv_event_t *e)
 
     core::AppManager::getInstance().switchApp("Editor", parent_obj);
     ui_text_editor_open_file(path.c_str());
+}
+
+static void folder_click_cb(lv_event_t *e)
+{
+    lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
+    const char *full = (const char *)lv_obj_get_user_data(btn);
+    if (!full) return;
+    current_dir = full;
+    load_entries();
+    refresh_ui();
+}
+
+static void parent_click_cb(lv_event_t *e)
+{
+    current_dir = parent_of(current_dir);
+    load_entries();
+    refresh_ui();
 }
 
 static void style_toggle_btn(lv_obj_t *btn, bool active)
@@ -148,9 +185,9 @@ static void refresh_ui()
     if (!file_list) return;
     lv_obj_clean(file_list);
     path_store.clear();
-    path_store.reserve(all_entries.size());
 
     int total = (int)all_entries.size();
+    bool show_parent = (current_dir != "/" && !current_dir.empty());
 
     style_toggle_btn(src_btn_int,        current_source == SOURCE_INTERNAL);
     style_toggle_btn(src_btn_sd,         current_source == SOURCE_SD);
@@ -158,7 +195,16 @@ static void refresh_ui()
     style_toggle_btn(filter_btn_non_txt, current_filter == FILTER_NON_TXT);
     style_toggle_btn(filter_btn_all,     current_filter == FILTER_ALL);
 
-    if (total == 0) {
+    // Reserve up-front so c_str() pointers stay stable across push_backs.
+    path_store.reserve(total + (show_parent ? 1 : 0));
+
+    if (show_parent) {
+        lv_obj_t *btn = lv_list_add_btn(file_list, LV_SYMBOL_LEFT, "..");
+        lv_obj_add_event_cb(btn, parent_click_cb, LV_EVENT_CLICKED, NULL);
+        lv_group_add_obj(lv_group_get_default(), btn);
+    }
+
+    if (total == 0 && !show_parent) {
         lv_obj_t *empty = lv_label_create(file_list);
         lv_label_set_text(empty, LV_SYMBOL_WARNING "  No items");
         lv_obj_set_style_text_color(empty, UI_COLOR_MUTED, 0);
@@ -167,7 +213,9 @@ static void refresh_ui()
         lv_obj_set_style_pad_all(empty, 16, 0);
     } else {
         // Pre-size path_store so c_str() pointers stay valid for user_data.
-        for (int i = 0; i < total; ++i) path_store.push_back(all_entries[i].path);
+        for (int i = 0; i < total; ++i) {
+            path_store.push_back(join_path(current_dir, all_entries[i].path));
+        }
 
         for (int i = 0; i < total; ++i) {
             const Entry &ent = all_entries[i];
@@ -178,8 +226,7 @@ static void refresh_ui()
             if (!ent.is_dir) {
                 lv_obj_add_event_cb(btn, file_click_cb, LV_EVENT_CLICKED, NULL);
             } else {
-                // Folder entries are shown but not navigable yet.
-                lv_obj_set_style_text_color(btn, UI_COLOR_MUTED, LV_PART_MAIN);
+                lv_obj_add_event_cb(btn, folder_click_cb, LV_EVENT_CLICKED, NULL);
             }
             lv_group_add_obj(lv_group_get_default(), btn);
 
@@ -210,7 +257,7 @@ static void refresh_ui()
     }
 
     lv_obj_t *to_focus = NULL;
-    if (total > 0 && lv_obj_get_child_count(file_list) > 0) {
+    if ((total > 0 || show_parent) && lv_obj_get_child_count(file_list) > 0) {
         to_focus = lv_obj_get_child(file_list, 0);
     }
     if (to_focus) {
@@ -225,6 +272,7 @@ static void source_click_cb(lv_event_t *e)
     StorageSource s = (StorageSource)(uintptr_t)lv_event_get_user_data(e);
     if (current_source != s) {
         current_source = s;
+        current_dir = "/";
         load_entries();
     }
     refresh_ui();
@@ -297,6 +345,7 @@ void ui_file_browser_enter(lv_obj_t *parent)
 
     bool sd_online = (HW_SD_ONLINE & hw_get_device_online()) != 0;
     if (!sd_online && current_source == SOURCE_SD) current_source = SOURCE_INTERNAL;
+    current_dir = "/";
 
     menu = create_menu(parent, back_event_handler);
 
@@ -332,7 +381,7 @@ void ui_file_browser_enter(lv_obj_t *parent)
     lv_obj_set_style_border_color(sidebar, UI_COLOR_MUTED, 0);
     lv_obj_set_style_radius(sidebar, UI_RADIUS, 0);
     lv_obj_set_style_bg_opa(sidebar, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_text_font(sidebar, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(sidebar, &lv_font_montserrat_14, 0);
 
     make_section_label(sidebar, "---");
     src_btn_int = make_side_btn(sidebar, LV_SYMBOL_DRIVE, "Internal",
