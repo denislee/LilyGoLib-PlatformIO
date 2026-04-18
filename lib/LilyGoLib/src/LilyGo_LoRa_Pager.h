@@ -341,6 +341,11 @@ public:
     int getKeyChar(char *c) override;
 
     /**
+     * @brief Returns whether the Alt modifier key is currently held on the keyboard.
+     */
+    bool isAltKeyPressed() override;
+
+    /**
      * @brief Get the rotary message.
      *
      * This function retrieves the message related to the rotary encoder. It returns a value of type RotaryMsg_t

@@ -145,6 +145,11 @@ public:
      */
     void setRepeat(bool enable);
 
+    /**
+     * @brief Returns whether the Alt modifier key is currently held.
+     */
+    bool isAltKeyPressed() const { return alt_key_pressed; }
+
 private:
     /**
      * @brief Updates the keyboard state and retrieves the currently pressed key.

@@ -71,23 +71,89 @@ static void touchpad_read( lv_indev_t *drv, lv_indev_data_t *data )
 }
 #endif //USING_INPUT_DEV_TOUCHPAD
 
+static uint32_t get_byte_pos(const char *txt, uint32_t char_pos);
+
 #ifdef USING_INPUT_DEV_ROTARY
+static bool is_word_boundary_char(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+static void textarea_jump_word(lv_obj_t *ta, int direction)
+{
+    const char *txt = lv_textarea_get_text(ta);
+    if (!txt) return;
+
+    if (direction > 0) {
+        uint32_t len = lv_strlen(txt);
+        bool skipped_word = false;
+        while (true) {
+            uint32_t pos = lv_textarea_get_cursor_pos(ta);
+            if (pos >= len) break;
+            uint32_t bp = get_byte_pos(txt, pos);
+            bool is_space = is_word_boundary_char(txt[bp]);
+            if (!skipped_word) {
+                if (!is_space) skipped_word = true;
+            } else {
+                if (is_space) break;
+            }
+            lv_textarea_cursor_right(ta);
+        }
+    } else {
+        bool skipped_word = false;
+        while (true) {
+            uint32_t pos = lv_textarea_get_cursor_pos(ta);
+            if (pos == 0) break;
+            uint32_t bp = get_byte_pos(txt, pos - 1);
+            bool is_space = is_word_boundary_char(txt[bp]);
+            if (!skipped_word) {
+                if (!is_space) skipped_word = true;
+            } else {
+                if (is_space) break;
+            }
+            lv_textarea_cursor_left(ta);
+        }
+    }
+}
+
 static void lv_encoder_read(lv_indev_t *drv, lv_indev_data_t *data)
 {
     static uint8_t last_dir = 0;
     auto *plane = (LilyGo_Display *)lv_indev_get_user_data(drv);
     RotaryMsg_t msg =  plane->getRotary();
+    int diff = 0;
     switch (msg.dir) {
     case ROTARY_DIR_UP:
-        data->enc_diff = 1;
+        diff = 1;
         break;
     case ROTARY_DIR_DOWN:
-        data->enc_diff = -1;
+        diff = -1;
         break;
     default:
         data->state = LV_INDEV_STATE_RELEASED;
         break;
     }
+
+    // Alt + scroll jumps the textarea cursor by word instead of by character.
+    if (diff != 0 && plane->isAltKeyPressed()) {
+        lv_group_t *g = lv_indev_get_group(drv);
+        if (g && lv_group_get_editing(g)) {
+            lv_obj_t *focused = lv_group_get_focused(g);
+            if (focused && lv_obj_has_class(focused, &lv_textarea_class)) {
+                textarea_jump_word(focused, diff);
+                data->enc_diff = 0;
+                if (msg.centerBtnPressed) {
+                    data->state = LV_INDEV_STATE_PRESSED;
+                }
+                if (last_dir != msg.dir || msg.centerBtnPressed) {
+                    plane->feedback((void *)drv);
+                }
+                return;
+            }
+        }
+    }
+
+    data->enc_diff = diff;
     if (msg.centerBtnPressed) {
         data->state = LV_INDEV_STATE_PRESSED;
     }

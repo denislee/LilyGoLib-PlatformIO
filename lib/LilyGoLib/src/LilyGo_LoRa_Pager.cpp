@@ -497,6 +497,14 @@ int LilyGoLoRaPager::getKeyChar(char *c)
     return -1;
 }
 
+bool LilyGoLoRaPager::isAltKeyPressed()
+{
+    if (devices_probe & HW_KEYBOARD_ONLINE) {
+        return kb.isAltKeyPressed();
+    }
+    return false;
+}
+
 bool LilyGoLoRaPager::initPMU()
 {
     bool res = ppm.init(Wire, SDA, SCL);

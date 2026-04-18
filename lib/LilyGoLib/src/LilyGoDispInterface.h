@@ -90,6 +90,7 @@ public:
     virtual RotaryMsg_t getRotary(){RotaryMsg_t msg;return msg;}
     virtual uint8_t getPoint(int16_t *x, int16_t *y, uint8_t get_point){return 0;};
     virtual int getKeyChar(char *c){return -1;}
+    virtual bool isAltKeyPressed(){return false;}
     virtual bool hasTouch() {return false;}
     virtual bool hasEncoder() { return false; }
     virtual bool hasKeyboard() { return false; }
