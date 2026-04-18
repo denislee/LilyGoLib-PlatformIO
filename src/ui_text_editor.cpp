@@ -220,11 +220,10 @@ void ui_text_editor_enter(lv_obj_t *parent)
     lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_COLUMN);
 
     /* Back button lives on the top status bar. */
-    ui_show_back_button(exit_btn_cb);
+    lv_obj_t *back_btn = ui_show_back_button(exit_btn_cb);
 
-    /* Textarea fills the whole page; the word-count readout floats over its
-     * bottom-right corner with a black backdrop so it stays legible on top of
-     * whatever text is there (mirrors the MD viewer's progress overlay). */
+    /* Textarea fills the whole page. The word-count readout sits on the status
+     * bar just to the right of the back button (same row as '<'). */
     text_area = lv_textarea_create(main_page);
     lv_obj_set_width(text_area, LV_PCT(100));
     lv_obj_set_flex_grow(text_area, 1);
@@ -242,17 +241,11 @@ void ui_text_editor_enter(lv_obj_t *parent)
     lv_obj_add_event_cb(text_area, text_area_event_cb, LV_EVENT_ALL, NULL);
     lv_group_add_obj(lv_group_get_default(), text_area);
 
-    word_count_label = lv_label_create(main_page);
+    word_count_label = lv_label_create(lv_obj_get_parent(back_btn));
     lv_label_set_text(word_count_label, "0 words | 0 chars");
-    lv_obj_add_flag(word_count_label, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_add_flag(word_count_label, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_style_bg_color(word_count_label, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(word_count_label, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(word_count_label, lv_color_white(), 0);
+    lv_obj_set_style_text_color(word_count_label, lv_palette_main(LV_PALETTE_GREY), 0);
     lv_obj_set_style_text_font(word_count_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_pad_hor(word_count_label, 4, 0);
-    lv_obj_set_style_pad_ver(word_count_label, 2, 0);
-    lv_obj_align(word_count_label, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_align_to(word_count_label, back_btn, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
 
     lv_menu_set_page(menu, main_page);
 
@@ -312,6 +305,11 @@ void ui_text_editor_exit(lv_obj_t *parent)
     }
 
     ui_hide_back_button();
+
+    if (word_count_label) {
+        lv_obj_del(word_count_label);
+        word_count_label = NULL;
+    }
 
     if (menu) {
         lv_obj_clean(menu);
