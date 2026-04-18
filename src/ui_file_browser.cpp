@@ -10,6 +10,8 @@
 #include <string>
 #include <algorithm>
 
+LV_FONT_DECLARE(lv_font_montserrat_16);
+
 namespace {
 
 enum StorageSource {
@@ -330,7 +332,7 @@ void ui_file_browser_enter(lv_obj_t *parent)
     lv_obj_set_style_border_color(sidebar, UI_COLOR_MUTED, 0);
     lv_obj_set_style_radius(sidebar, UI_RADIUS, 0);
     lv_obj_set_style_bg_opa(sidebar, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_text_font(sidebar, get_small_font(), 0);
+    lv_obj_set_style_text_font(sidebar, &lv_font_montserrat_16, 0);
 
     make_section_label(sidebar, "---");
     src_btn_int = make_side_btn(sidebar, LV_SYMBOL_DRIVE, "Internal",

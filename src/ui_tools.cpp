@@ -494,20 +494,32 @@ void enable_input_devices()
     }
 }
 
+// Tracks whether the I2C keyboard has been brought up. Re-running
+// hw_enable_keyboard() without an intervening disable re-runs kb.begin() and
+// re-attaches the ISR, which hangs on the TCA8418 — this flag keeps the
+// enable/disable pair idempotent across asymmetric call sites (e.g. fresh
+// boot → Settings, where the menu enabled it but MenuApp::onStop never ran
+// the disable side).
+static bool s_keyboard_enabled = false;
+
 void disable_keyboard()
 {
+    if (!s_keyboard_enabled) return;
     if (hw_has_keyboard()) {
         hw_disable_keyboard();
         lv_indev_enable(lv_get_keyboard_indev(), false);
     }
+    s_keyboard_enabled = false;
 }
 
 void enable_keyboard()
 {
+    if (s_keyboard_enabled) return;
     if (hw_has_keyboard()) {
         hw_enable_keyboard();
         lv_indev_enable(lv_get_keyboard_indev(), true);
     }
+    s_keyboard_enabled = true;
 }
 
 bool is_screen_small()

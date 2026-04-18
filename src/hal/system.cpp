@@ -306,7 +306,7 @@ void hw_load_setting()
     user_setting.show_file_count = 0;
     user_setting.cpu_freq_mhz = 240;
     user_setting.storage_prefer_sd = 0;
-    user_setting.msc_prefer_sd = 0;
+    user_setting.msc_prefer_sd = 1;
     user_setting.prune_internal = 0;
 
     prefs.begin(NVS_NAME);
