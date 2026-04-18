@@ -20,6 +20,7 @@ std::shared_ptr<core::App> make_sys_app();
 std::shared_ptr<core::App> make_file_browser_app();
 std::shared_ptr<core::App> make_journal_app();
 std::shared_ptr<core::App> make_md_viewer_app();
+std::shared_ptr<core::App> make_audio_notes_app();
 
 void register_all();
 

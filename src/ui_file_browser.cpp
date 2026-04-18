@@ -6,6 +6,7 @@
 #include "ui_define.h"
 #include "core/app_manager.h"
 #include "hal/system.h"
+#include "hal/storage.h"
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -329,12 +330,75 @@ static lv_obj_t *make_side_btn(lv_obj_t *parent, const char *icon, const char *t
     return btn;
 }
 
-static lv_obj_t *make_section_label(lv_obj_t *parent, const char *txt)
+static lv_obj_t *make_divider(lv_obj_t *parent)
 {
-    lv_obj_t *lbl = lv_label_create(parent);
-    lv_label_set_text(lbl, txt);
-    lv_obj_set_style_text_color(lbl, UI_COLOR_MUTED, 0);
-    return lbl;
+    lv_obj_t *line = lv_obj_create(parent);
+    lv_obj_set_width(line, LV_PCT(70));
+    lv_obj_set_height(line, 1);
+    lv_obj_set_style_bg_color(line, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_bg_opa(line, LV_OPA_40, 0);
+    lv_obj_set_style_border_width(line, 0, 0);
+    lv_obj_set_style_radius(line, 0, 0);
+    lv_obj_set_style_pad_all(line, 0, 0);
+    lv_obj_set_style_margin_ver(line, 2, 0);
+    lv_obj_remove_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+    return line;
+}
+
+static void delete_msgbox_cb(lv_event_t *e)
+{
+    lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *label = lv_obj_get_child(btn, 0);
+    const char *text = lv_label_get_text(label);
+    bool confirmed = (strcmp(text, "Yes") == 0);
+    lv_obj_t *mbox_to_del = lv_obj_get_parent(lv_obj_get_parent(btn));
+
+    const char *path = (const char *)lv_event_get_user_data(e);
+
+    if (confirmed && path) {
+        if (hw_delete_file(path)) {
+            load_entries();
+            refresh_ui();
+        } else {
+            ui_msg_pop_up("Error", "Failed to delete file.");
+        }
+    }
+
+    destroy_msgbox(mbox_to_del);
+    if (path) lv_mem_free((void *)path);
+}
+
+static void show_delete_confirm(const std::string &path)
+{
+    static const char *btns[] = {"Yes", "No", ""};
+    char msg[160];
+    snprintf(msg, sizeof(msg), "Delete this file?\n%s", path.c_str());
+
+    char *path_dup = (char *)lv_mem_alloc(path.size() + 1);
+    strcpy(path_dup, path.c_str());
+
+    create_msgbox(NULL, "Confirm", msg, btns, delete_msgbox_cb, path_dup);
+}
+
+static void file_list_key_cb(lv_event_t *e)
+{
+    uint32_t key = lv_event_get_key(e);
+    if (key != LV_KEY_BACKSPACE) return;
+
+    lv_group_t *g = lv_group_get_default();
+    lv_obj_t *focused = lv_group_get_focused(g);
+    if (!focused) return;
+
+    const char *full = (const char *)lv_obj_get_user_data(focused);
+    if (!full) return;
+
+    std::string path_str = full;
+    for (const auto &ent : all_entries) {
+        if (join_path(current_dir, ent.path) == path_str) {
+            if (!ent.is_dir) show_delete_confirm(path_str);
+            return;
+        }
+    }
 }
 
 void ui_file_browser_enter(lv_obj_t *parent)
@@ -383,7 +447,6 @@ void ui_file_browser_enter(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(sidebar, LV_OPA_TRANSP, 0);
     lv_obj_set_style_text_font(sidebar, &lv_font_montserrat_14, 0);
 
-    make_section_label(sidebar, "---");
     src_btn_int = make_side_btn(sidebar, LV_SYMBOL_DRIVE, "Internal",
                                 source_click_cb, (void *)(uintptr_t)SOURCE_INTERNAL);
     if (sd_online) {
@@ -393,7 +456,7 @@ void ui_file_browser_enter(lv_obj_t *parent)
         src_btn_sd = NULL;
     }
 
-    make_section_label(sidebar, "---");
+    make_divider(sidebar);
     filter_btn_txt = make_side_btn(sidebar, NULL, ".txt only",
                                    filter_click_cb, (void *)(uintptr_t)FILTER_TXT);
     filter_btn_non_txt = make_side_btn(sidebar, NULL, "No .txt",
@@ -407,6 +470,7 @@ void ui_file_browser_enter(lv_obj_t *parent)
     lv_obj_set_height(file_list, LV_PCT(100));
     lv_obj_set_style_radius(file_list, UI_RADIUS, 0);
     lv_obj_set_style_pad_all(file_list, 2, 0);
+    lv_obj_add_event_cb(file_list, file_list_key_cb, LV_EVENT_KEY, NULL);
 
     load_entries();
     refresh_ui();

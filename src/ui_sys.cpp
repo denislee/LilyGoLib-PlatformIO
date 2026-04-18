@@ -1316,58 +1316,36 @@ void ui_sys_enter(lv_obj_t *parent)
     lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
 
     lv_obj_t *cont;
-    lv_obj_t *section;
     main_page_group_count = 0;
     subpage_item_count = 0;
 
-    auto add_section_header = [&](const char *text) {
-        lv_obj_t *label = lv_label_create(main_page);
-        lv_label_set_text(label, text);
-        lv_obj_set_width(label, LV_PCT(100));
-        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
-        lv_obj_set_style_text_color(label, UI_COLOR_MUTED, 0);
-        lv_obj_set_style_pad_top(label, 8, 0);
-        lv_obj_set_style_pad_left(label, 12, 0);
-        lv_obj_set_style_pad_bottom(label, 2, 0);
+    // Flatten the item list into a two-column grid: each lv_menu_cont gets
+    // LV_PCT(48) width and the page wraps rows of two.
+    lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(main_page, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(main_page, 6, 0);
+    lv_obj_set_style_pad_row(main_page, 6, 0);
+
+    auto add_grid_item = [&](lv_obj_t *c) {
+        if (!c) return;
+        lv_obj_set_width(c, LV_PCT(48));
+        add_main_page_group_item(c);
     };
 
     // Back button lives on the status bar. Keep the pointer so
     // restore_main_page_group() can focus it when returning from a subpage.
     settings_exit_btn = ui_show_back_button(settings_exit_cb);
 
-    // --- Personalization ---
-    add_section_header("Personalization");
-    section = lv_menu_section_create(main_page);
-    cont = create_subpage_backlight(menu, section);
-    add_main_page_group_item(cont);
-    cont = create_subpage_fonts(menu, section);
-    add_main_page_group_item(cont);
-    cont = create_subpage_datetime(menu, section);
-    add_main_page_group_item(cont);
-
-    // --- Power & Connectivity ---
-    add_section_header("Power & Connectivity");
-    section = lv_menu_section_create(main_page);
-    cont = create_subpage_otg(menu, section);
-    add_main_page_group_item(cont);
-    cont = create_subpage_connectivity(menu, section);
-    add_main_page_group_item(cont);
-
-    // --- System ---
-    add_section_header("System");
-    section = lv_menu_section_create(main_page);
-    cont = create_subpage_storage(menu, section);
-    add_main_page_group_item(cont);
-    cont = create_subpage_performance(menu, section);
-    add_main_page_group_item(cont);
-
-    // --- Info ---
-    add_section_header("Info");
-    section = lv_menu_section_create(main_page);
-    cont = create_subpage_info(menu, section);
-    add_main_page_group_item(cont);
-    cont = create_device_probe(menu, section);
-    add_main_page_group_item(cont);
+    cont = create_subpage_backlight(menu, main_page);    add_grid_item(cont);
+    cont = create_subpage_fonts(menu, main_page);        add_grid_item(cont);
+    cont = create_subpage_datetime(menu, main_page);     add_grid_item(cont);
+    cont = create_subpage_otg(menu, main_page);          add_grid_item(cont);
+    cont = create_subpage_connectivity(menu, main_page); add_grid_item(cont);
+    cont = create_subpage_storage(menu, main_page);      add_grid_item(cont);
+    cont = create_subpage_performance(menu, main_page);  add_grid_item(cont);
+    cont = create_subpage_info(menu, main_page);         add_grid_item(cont);
+    cont = create_device_probe(menu, main_page);         add_grid_item(cont);
 
     settings_main_page = main_page;
     lv_menu_set_page(menu, main_page);

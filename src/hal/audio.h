@@ -25,3 +25,15 @@ void hw_audio_get_fft_data(FFTData *fft_data);
 
 void hw_set_audio_effect_3d(bool enable);
 void hw_set_audio_effect_ab_class(bool enable);
+
+// --- Recording (WAV, 16 kHz / 16-bit / mono) to SD card ---
+#define HW_REC_SAMPLE_RATE 16000u
+#define HW_REC_BYTES_PER_SEC (HW_REC_SAMPLE_RATE * 2u)   // mono, 16-bit
+#define HW_REC_MAX_MS (5u * 60u * 1000u)
+
+bool hw_mic_available();
+bool hw_rec_start(const char *sd_path);
+void hw_rec_stop();
+bool hw_rec_running();
+uint32_t hw_rec_elapsed_ms();
+uint32_t hw_rec_bytes_written();

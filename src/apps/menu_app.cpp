@@ -21,6 +21,7 @@ void MenuApp::onStart(lv_obj_t* parent) {
 
     createMenuItem("Editor", LV_SYMBOL_KEYBOARD, "Editor");
     createMenuItem("Tasks", LV_SYMBOL_OK, "Tasks");
+    createMenuItem("Notes", LV_SYMBOL_AUDIO, "Notes");
     createMenuItem("Journal", LV_SYMBOL_DIRECTORY, "Journal");
     createMenuItem("MD Viewer", LV_SYMBOL_EYE_OPEN, "MD Viewer");
     createMenuItem("Settings", LV_SYMBOL_SETTINGS, "Settings");

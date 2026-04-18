@@ -4,6 +4,7 @@
  */
 #include "audio.h"
 #include "internal.h"
+#include "system.h"
 
 #ifdef ARDUINO
 #include <math.h>
@@ -125,10 +126,22 @@ WAIT:
     return true;
 }
 
+#if defined(USING_AUDIO_CODEC)
+static void playWAV_sd(const char *filename);
+#endif
+
 static void hw_sd_play(audio_source_type_t source, const char *filename)
 {
     size_t len = strlen(filename);
     bool isMP3 = (len > 4 && strcasecmp(filename + len - 4, ".mp3") == 0);
+    bool isWAV = (len > 4 && strcasecmp(filename + len - 4, ".wav") == 0);
+
+#if defined(USING_AUDIO_CODEC)
+    if (isWAV && source == AUDIO_SOURCE_SDCARD) {
+        playWAV_sd(filename);
+        return;
+    }
+#endif
     bool lock = false;
 
     char path[128];
@@ -195,6 +208,81 @@ static void hw_sd_play(audio_source_type_t source, const char *filename)
     }
     free(buf);
 }
+
+#if defined(USING_AUDIO_CODEC)
+// Stream-plays a 16 kHz / 16-bit / mono WAV file from SD without loading it
+// all into PSRAM (a 5-minute note is ~10 MB). Header is a fixed-size 44-byte
+// RIFF/WAVE/fmt/data layout — we trust it because we write it ourselves.
+static void playWAV_sd(const char *filename)
+{
+    char path[128];
+    snprintf(path, sizeof(path), "/%s", filename);
+    instance.lockSPI();
+    File f = SD.open(path);
+    if (!f) {
+        instance.unlockSPI();
+        return;
+    }
+    if (f.size() < 44) {
+        f.close();
+        instance.unlockSPI();
+        return;
+    }
+    if (!f.seek(44)) {
+        f.close();
+        instance.unlockSPI();
+        return;
+    }
+    instance.unlockSPI();
+
+    if (!(HW_CODEC_ONLINE & hw_get_device_online())) {
+        instance.lockSPI();
+        f.close();
+        instance.unlockSPI();
+        return;
+    }
+    int ret = instance.codec.open(16, 1, HW_REC_SAMPLE_RATE);
+    if (ret < 0) {
+        instance.lockSPI();
+        f.close();
+        instance.unlockSPI();
+        return;
+    }
+
+    xEventGroupSetBits(playerEvent, PLAYER_RUNNING);
+
+    const size_t CHUNK = 4096;
+    uint8_t *buf = (uint8_t *)heap_caps_malloc(CHUNK, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        instance.codec.close();
+        instance.lockSPI();
+        f.close();
+        instance.unlockSPI();
+        xEventGroupClearBits(playerEvent, PLAYER_RUNNING | PLAYER_PLAY | PLAYER_END);
+        return;
+    }
+
+    for (;;) {
+        EventBits_t bits = xEventGroupWaitBits(playerEvent, PLAYER_PLAY | PLAYER_END,
+                                               pdFALSE, pdFALSE, portMAX_DELAY);
+        if (bits & PLAYER_END) break;
+
+        instance.lockSPI();
+        int n = f.read(buf, CHUNK);
+        instance.unlockSPI();
+        if (n <= 0) break;
+
+        instance.codec.write(buf, (size_t)n);
+    }
+
+    free(buf);
+    instance.codec.close();
+    instance.lockSPI();
+    f.close();
+    instance.unlockSPI();
+    xEventGroupClearBits(playerEvent, PLAYER_RUNNING | PLAYER_PLAY | PLAYER_END);
+}
+#endif /*USING_AUDIO_CODEC*/
 
 static void playerTask(void *args)
 {
@@ -389,6 +477,246 @@ void hw_set_mic_stop()
     if (right_channel) { free(right_channel); right_channel = NULL; }
     if (magnitudes) { free(magnitudes); magnitudes = NULL; }
 #endif /*ARDUINO*/
+}
+
+// --- Recording: WAV / 16 kHz / 16-bit / mono → SD card ----------------
+
+bool hw_mic_available()
+{
+#if defined(ARDUINO) && defined(USING_PDM_MICROPHONE)
+    return true;
+#elif defined(ARDUINO) && defined(USING_AUDIO_CODEC)
+    return (HW_CODEC_ONLINE & hw_get_device_online()) != 0;
+#else
+    return false;
+#endif
+}
+
+#ifdef ARDUINO
+static TaskHandle_t    recorderTaskHandler = NULL;
+static volatile bool   recorder_stop_req  = false;
+static volatile bool   recorder_running   = false;
+static volatile uint32_t recorder_start_ms = 0;
+static volatile uint32_t recorder_bytes   = 0;
+static File            recFile;
+static std::string     recPath;
+
+static void wav_write_header(File &f, uint32_t data_bytes)
+{
+    uint32_t sample_rate = HW_REC_SAMPLE_RATE;
+    uint16_t channels    = 1;
+    uint16_t bits        = 16;
+    uint32_t byte_rate   = sample_rate * channels * (bits / 8);
+    uint16_t block_align = channels * (bits / 8);
+    uint32_t riff_size   = 36 + data_bytes;
+    uint32_t fmt_size    = 16;
+    uint16_t fmt_pcm     = 1;
+
+    uint8_t h[44];
+    memcpy(h +  0, "RIFF", 4);
+    memcpy(h +  4, &riff_size, 4);
+    memcpy(h +  8, "WAVE", 4);
+    memcpy(h + 12, "fmt ", 4);
+    memcpy(h + 16, &fmt_size, 4);
+    memcpy(h + 20, &fmt_pcm, 2);
+    memcpy(h + 22, &channels, 2);
+    memcpy(h + 24, &sample_rate, 4);
+    memcpy(h + 28, &byte_rate, 4);
+    memcpy(h + 32, &block_align, 2);
+    memcpy(h + 34, &bits, 2);
+    memcpy(h + 36, "data", 4);
+    memcpy(h + 40, &data_bytes, 4);
+    f.write(h, 44);
+}
+
+static void recorderTask(void *args)
+{
+    const int frame_samples = 512;
+    // Match the codec's actual channel count so the sample rate in the file
+    // header matches real time. Reading stereo-sized blocks from a codec
+    // opened as mono decimates the audio and causes 2x-fast playback.
+    const uint8_t in_channels = instance.getCodecInputChannels();
+    const size_t in_bytes   = (size_t)frame_samples * in_channels * sizeof(int16_t);
+    const size_t mono_bytes = (size_t)frame_samples * sizeof(int16_t);
+
+    int16_t *in_buf   = (int16_t *)heap_caps_malloc(in_bytes,   MALLOC_CAP_SPIRAM);
+    int16_t *mono_buf = (int16_t *)heap_caps_malloc(mono_bytes, MALLOC_CAP_SPIRAM);
+
+    if (!in_buf || !mono_buf) {
+        log_e("recorder: buffer alloc failed");
+        if (in_buf) free(in_buf);
+        if (mono_buf) free(mono_buf);
+        instance.lockSPI();
+        if (recFile) recFile.close();
+        instance.unlockSPI();
+        recorder_running = false;
+        recorderTaskHandler = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    while (!recorder_stop_req) {
+        uint32_t elapsed = millis() - recorder_start_ms;
+        if (elapsed >= HW_REC_MAX_MS) break;
+
+#if defined(USING_PDM_MICROPHONE)
+        instance.mic.readBytes((char *)in_buf, in_bytes);
+#elif defined(USING_AUDIO_CODEC)
+        if (!(HW_CODEC_ONLINE & hw_get_device_online())) break;
+        int rret = instance.codec.read((uint8_t *)in_buf, in_bytes);
+        if (rret != 0) {
+            log_e("codec.read failed: 0x%X", rret);
+            break;
+        }
+#else
+        break;
+#endif
+
+        const uint8_t *write_src;
+        size_t write_len;
+        if (in_channels >= 2) {
+            for (int i = 0; i < frame_samples; ++i) {
+                int32_t s = (int32_t)in_buf[2 * i] + (int32_t)in_buf[2 * i + 1];
+                mono_buf[i] = (int16_t)(s / 2);
+            }
+            write_src = (const uint8_t *)mono_buf;
+            write_len = mono_bytes;
+        } else {
+            write_src = (const uint8_t *)in_buf;
+            write_len = in_bytes;
+        }
+
+        instance.lockSPI();
+        size_t written = recFile.write(write_src, write_len);
+        instance.unlockSPI();
+        recorder_bytes += written;
+        if (written != write_len) {
+            log_e("recorder: short write %u/%u (SD full?)",
+                  (unsigned)written, (unsigned)write_len);
+            break;
+        }
+    }
+
+    // Finalize WAV header with actual data size.
+    instance.lockSPI();
+    if (recFile) {
+        recFile.seek(0);
+        wav_write_header(recFile, recorder_bytes);
+        recFile.close();
+    }
+    instance.unlockSPI();
+
+#if defined(USING_AUDIO_CODEC)
+    if (HW_CODEC_ONLINE & hw_get_device_online()) {
+        instance.codec.close();
+    }
+#endif
+
+    free(in_buf);
+    free(mono_buf);
+    recorder_running = false;
+    recorderTaskHandler = NULL;
+    vTaskDelete(NULL);
+}
+#endif /*ARDUINO*/
+
+bool hw_rec_start(const char *sd_path)
+{
+#ifdef ARDUINO
+    if (recorder_running || hw_player_running()) return false;
+    if (!hw_mic_available()) return false;
+    if (!sd_path || !sd_path[0]) return false;
+
+    instance.lockSPI();
+    recFile = SD.open(sd_path, FILE_WRITE);
+    if (!recFile) {
+        log_e("recorder: SD.open(%s) failed", sd_path);
+        instance.unlockSPI();
+        return false;
+    }
+    wav_write_header(recFile, 0);
+    instance.unlockSPI();
+
+#if defined(USING_AUDIO_CODEC)
+    if (HW_CODEC_ONLINE & hw_get_device_online()) {
+        int ret = instance.codec.open(16, instance.getCodecInputChannels(),
+                                      HW_REC_SAMPLE_RATE);
+        if (ret < 0) {
+            log_e("recorder: codec.open failed 0x%X", ret);
+            instance.lockSPI();
+            recFile.close();
+            SD.remove(sd_path);
+            instance.unlockSPI();
+            return false;
+        }
+    }
+#endif
+
+    recPath            = sd_path;
+    recorder_stop_req  = false;
+    recorder_bytes     = 0;
+    recorder_start_ms  = millis();
+    recorder_running   = true;
+
+    if (xTaskCreate(recorderTask, "app/rec", 8 * 1024, NULL, 12,
+                    &recorderTaskHandler) != pdPASS) {
+        log_e("recorder: task create failed");
+        recorder_running = false;
+#if defined(USING_AUDIO_CODEC)
+        if (HW_CODEC_ONLINE & hw_get_device_online()) {
+            instance.codec.close();
+        }
+#endif
+        instance.lockSPI();
+        recFile.close();
+        SD.remove(sd_path);
+        instance.unlockSPI();
+        return false;
+    }
+    return true;
+#else
+    (void)sd_path;
+    return false;
+#endif
+}
+
+void hw_rec_stop()
+{
+#ifdef ARDUINO
+    if (!recorder_running) return;
+    recorder_stop_req = true;
+    while (recorder_running) {
+        delay(5);
+    }
+#endif
+}
+
+bool hw_rec_running()
+{
+#ifdef ARDUINO
+    return recorder_running;
+#else
+    return false;
+#endif
+}
+
+uint32_t hw_rec_elapsed_ms()
+{
+#ifdef ARDUINO
+    if (!recorder_running) return 0;
+    return (uint32_t)(millis() - recorder_start_ms);
+#else
+    return 0;
+#endif
+}
+
+uint32_t hw_rec_bytes_written()
+{
+#ifdef ARDUINO
+    return recorder_bytes;
+#else
+    return 0;
+#endif
 }
 
 // --- Speaker / volume -------------------------------------------------
