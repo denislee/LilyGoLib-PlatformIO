@@ -253,26 +253,11 @@ static uint32_t loader_started_ms = 0;
 
 static void loader_show()
 {
-    loader.overlay = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(loader.overlay, lv_pct(100), lv_pct(100));
-    lv_obj_center(loader.overlay);
-    lv_obj_set_style_bg_color(loader.overlay, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(loader.overlay, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(loader.overlay, 0, 0);
-    lv_obj_set_style_pad_all(loader.overlay, 10, 0);
-    lv_obj_set_flex_flow(loader.overlay, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(loader.overlay, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(loader.overlay, 6, 0);
-    lv_obj_clear_flag(loader.overlay, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *title = lv_label_create(loader.overlay);
-    lv_label_set_text(title, "Loading Journal");
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    loader.overlay = ui_popup_create("Loading Journal");
 
     loader.phase = lv_label_create(loader.overlay);
     lv_label_set_text(loader.phase, "Starting...");
-    lv_obj_set_style_text_color(loader.phase, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_obj_set_style_text_color(loader.phase, UI_COLOR_ACCENT, 0);
 
     loader.bar = lv_bar_create(loader.overlay);
     lv_obj_set_size(loader.bar, lv_pct(80), 10);
@@ -281,14 +266,14 @@ static void loader_show()
 
     loader.counts = lv_label_create(loader.overlay);
     lv_label_set_text(loader.counts, "");
-    lv_obj_set_style_text_color(loader.counts, lv_color_white(), 0);
+    lv_obj_set_style_text_color(loader.counts, UI_COLOR_FG, 0);
     lv_obj_set_style_text_font(loader.counts, get_small_font(), 0);
 
     loader.detail = lv_label_create(loader.overlay);
     lv_label_set_text(loader.detail, "");
     lv_label_set_long_mode(loader.detail, LV_LABEL_LONG_DOT);
     lv_obj_set_width(loader.detail, lv_pct(80));
-    lv_obj_set_style_text_color(loader.detail, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(loader.detail, UI_COLOR_MUTED, 0);
     lv_obj_set_style_text_font(loader.detail, get_small_font(), 0);
     lv_obj_set_style_text_align(loader.detail, LV_TEXT_ALIGN_CENTER, 0);
 
@@ -321,7 +306,7 @@ static void loader_update(void *ud, const char *phase, int cur, int total, const
 static void loader_hide()
 {
     if (loader.overlay) {
-        lv_obj_del(loader.overlay);
+        ui_popup_destroy(loader.overlay);
         loader.overlay = NULL;
     }
 }
@@ -574,21 +559,21 @@ void ui_journal_enter(lv_obj_t *parent)
     }
 
     lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
-    lv_obj_set_style_pad_all(main_page, 10, 0);
+    lv_obj_set_style_pad_all(main_page, 0, 0);
     lv_obj_set_style_pad_row(main_page, 6, 0);
     lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(main_page, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_add_flag(main_page, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_add_event_cb(main_page, journal_key_event_cb, LV_EVENT_KEY, NULL);
 
-    lv_obj_t *exit_cont = lv_menu_cont_create(main_page);
-    lv_obj_t *exit_btn = lv_btn_create(exit_cont);
-    lv_obj_t *exit_label = lv_label_create(exit_btn);
-    lv_label_set_text(exit_label, LV_SYMBOL_LEFT);
-    lv_obj_add_event_cb(exit_btn, exit_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_group_add_obj(lv_group_get_default(), exit_btn);
-    lv_obj_add_event_cb(exit_btn, post_focus_cb, LV_EVENT_FOCUSED, NULL);
-    lv_obj_add_event_cb(exit_btn, journal_key_event_cb, LV_EVENT_KEY, NULL);
+    // Back button moves to the top status bar. The journal-specific focus and
+    // key handlers stay attached to it.
+    lv_obj_t *exit_btn = ui_show_back_button(exit_btn_cb);
+    if (exit_btn) {
+        lv_obj_add_event_cb(exit_btn, post_focus_cb, LV_EVENT_FOCUSED, NULL);
+        lv_obj_add_event_cb(exit_btn, journal_key_event_cb, LV_EVENT_KEY, NULL);
+    }
 
     int total_files = (int)journal_entries.size();
     int start_idx = current_page * JOURNAL_PAGE_SIZE;
@@ -601,7 +586,9 @@ void ui_journal_enter(lv_obj_t *parent)
     }
 
     lv_obj_t *focus_target = exit_btn;
-    int current_child_idx = 0;
+    // The back button no longer occupies main_page's child 0, so child indices
+    // for prev_btn_cont and post_conts start at 0 instead of 1.
+    int current_child_idx = -1;
     std::vector<std::pair<lv_obj_t *, lv_obj_t *>> trunc_checks;
 
     if (total_files == 0) {
@@ -663,10 +650,9 @@ void ui_journal_enter(lv_obj_t *parent)
             strcpy(fn_dup, entry.filename.c_str());
             lv_obj_set_user_data(post_cont, fn_dup);
 
-            lv_obj_set_style_border_width(post_cont, 2, LV_STATE_FOCUSED);
-            lv_obj_set_style_border_color(post_cont, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
-            lv_obj_set_style_border_color(post_cont, lv_palette_main(LV_PALETTE_ORANGE), LV_STATE_FOCUSED | LV_STATE_EDITED);
-            lv_obj_set_style_radius(post_cont, 5, 0);
+            lv_obj_set_style_border_width(post_cont, UI_BORDER_W, LV_STATE_FOCUSED);
+            lv_obj_set_style_border_color(post_cont, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
+            lv_obj_set_style_radius(post_cont, UI_RADIUS, 0);
 
             lv_group_add_obj(lv_group_get_default(), post_cont);
             lv_obj_add_event_cb(post_cont, post_focus_cb, LV_EVENT_FOCUSED, NULL);
@@ -730,7 +716,7 @@ void ui_journal_enter(lv_obj_t *parent)
             lv_obj_t *trunc_icon = lv_label_create(post_cont);
             lv_label_set_text(trunc_icon, LV_SYMBOL_DOWN);
             lv_obj_set_style_text_font(trunc_icon, &lv_font_montserrat_14, 0);
-            lv_obj_set_style_text_color(trunc_icon, lv_palette_main(LV_PALETTE_ORANGE), 0);
+            lv_obj_set_style_text_color(trunc_icon, UI_COLOR_ACCENT, 0);
             lv_obj_add_flag(trunc_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
             lv_obj_align(trunc_icon, LV_ALIGN_BOTTOM_RIGHT, -12, -5);
             lv_obj_set_style_bg_opa(trunc_icon, LV_OPA_TRANSP, 0);
@@ -798,6 +784,7 @@ void ui_journal_enter(lv_obj_t *parent)
 void ui_journal_exit(lv_obj_t *parent)
 {
     loader_hide();
+    ui_hide_back_button();
     disable_keyboard();
     if (menu) {
         teardown_menu_for_rerender();

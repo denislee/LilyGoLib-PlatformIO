@@ -77,6 +77,13 @@ static void back_event_handler(lv_event_t *e)
     }
 }
 
+static void power_back_cb(lv_event_t *e)
+{
+    if (!menu) return;
+    lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
+    if (bb) lv_obj_send_event(bb, LV_EVENT_CLICKED, NULL);
+}
+
 void ui_power_enter(lv_obj_t *parent)
 {
     bool is_small = is_screen_small();
@@ -85,6 +92,20 @@ void ui_power_enter(lv_obj_t *parent)
 
     menu = create_menu(parent, back_event_handler);
     lv_menu_set_mode_root_back_btn(menu, LV_MENU_ROOT_BACK_BTN_ENABLED);
+
+    // Suppress the built-in header back button by zero-sizing it so LVGL
+    // auto-hides the header (content_height becomes 0). Still clickable
+    // programmatically via send_event from the status bar back.
+    lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
+    if (bb) {
+        lv_obj_set_size(bb, 0, 0);
+        lv_obj_set_style_pad_all(bb, 0, 0);
+        lv_obj_set_style_border_width(bb, 0, 0);
+        lv_obj_set_style_outline_width(bb, 0, 0);
+        lv_obj_set_style_shadow_width(bb, 0, 0);
+        lv_obj_set_style_bg_opa(bb, LV_OPA_TRANSP, 0);
+    }
+    ui_show_back_button(power_back_cb);
 
     lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_scrollbar_mode(main_page, LV_SCROLLBAR_MODE_OFF);
@@ -164,6 +185,7 @@ void ui_power_enter(lv_obj_t *parent)
 
 void ui_power_exit(lv_obj_t *parent)
 {
+    ui_hide_back_button();
     if (menu) {
         lv_obj_clean(menu);
         lv_obj_del(menu);

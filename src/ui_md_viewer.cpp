@@ -35,8 +35,11 @@ static size_t current_md_offset = 0;
 static size_t current_page_len = 0; // length of the chunk rendered for current page
 static const size_t MD_CHUNK_SIZE = 2048; // Load 2KB at a time
 static std::vector<size_t> page_offsets;
+static bool md_headers_loaded = false;
 
 void ui_md_viewer_exit(lv_obj_t *parent);
+static void refresh_ui();
+static void sync_menu_header();
 
 static std::string sanitize_utf8(const std::string& input) {
     std::string out;
@@ -145,6 +148,37 @@ static void back_event_handler(lv_event_t *e)
     }
 }
 
+// Pages are navigated via lv_menu_set_page directly, which doesn't populate
+// lv_menu's history stack. Handle back navigation explicitly based on the
+// currently-displayed page.
+static void md_view_back_cb(lv_event_t *e)
+{
+    if (!menu) return;
+    lv_obj_t *cur = lv_menu_get_cur_main_page(menu);
+    if (cur == view_page) {
+        // If this file has an index, return to it; otherwise back to file list.
+        lv_obj_t *target = (md_headers_loaded && !md_headers.empty()) ? index_page : main_page;
+        lv_menu_set_page(menu, target);
+        sync_menu_header();
+    } else if (cur == index_page) {
+        lv_menu_set_page(menu, main_page);
+        sync_menu_header();
+    } else {
+        ui_md_viewer_exit(NULL);
+        menu_show();
+    }
+}
+
+// Hide the menu's built-in header so the status bar back button is the only
+// "<" visible. Called after each page change — only needed to re-apply the
+// hidden flag if lv_menu restored it.
+static void sync_menu_header()
+{
+    if (!menu) return;
+    lv_obj_t *header = lv_menu_get_main_header(menu);
+    if (header) lv_obj_add_flag(header, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void update_page()
 {
     if (current_md_path.empty()) return;
@@ -216,66 +250,45 @@ static void index_click_cb(lv_event_t *e)
     page_offsets.push_back(current_md_offset);
 
     lv_menu_set_page(menu, view_page);
+    sync_menu_header();
     update_page();
-}
-
-static bool md_headers_loaded = false;
-static bool cancel_index_loading = false;
-
-static void btn_cancel_index_cb(lv_event_t *e)
-{
-    cancel_index_loading = true;
 }
 
 static bool index_progress_cb(size_t current, size_t total)
 {
-    lv_timer_handler(); // Process LVGL events to catch button clicks
-    return !cancel_index_loading;
+    lv_timer_handler();
+    return true;
 }
 
 static void btn_index_click_cb(lv_event_t *e)
 {
     if (!md_headers_loaded) {
-        cancel_index_loading = false;
-
         lv_obj_t *loading_cont = lv_obj_create(lv_screen_active());
         lv_obj_set_size(loading_cont, 200, 120);
         lv_obj_center(loading_cont);
-        lv_obj_set_style_bg_color(loading_cont, lv_color_black(), 0);
+        lv_obj_set_style_bg_color(loading_cont, UI_COLOR_BG, 0);
         lv_obj_set_style_bg_opa(loading_cont, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(loading_cont, lv_color_white(), 0);
-        lv_obj_set_style_border_width(loading_cont, 2, 0);
+        lv_obj_set_style_border_color(loading_cont, UI_COLOR_ACCENT, 0);
+        lv_obj_set_style_border_width(loading_cont, UI_BORDER_W, 0);
+        lv_obj_set_style_radius(loading_cont, UI_RADIUS, 0);
         lv_obj_set_flex_flow(loading_cont, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(loading_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
         lv_obj_t *loading_label = lv_label_create(loading_cont);
         lv_label_set_text(loading_label, "Loading indexes...");
 
-        lv_obj_t *cancel_btn = lv_btn_create(loading_cont);
-        lv_obj_t *cancel_label = lv_label_create(cancel_btn);
-        lv_label_set_text(cancel_label, "Cancel");
-        lv_obj_add_event_cb(cancel_btn, btn_cancel_index_cb, LV_EVENT_CLICKED, NULL);
-
-        lv_group_add_obj(lv_group_get_default(), cancel_btn);
-        lv_group_focus_obj(cancel_btn);
-
         lv_refr_now(NULL);
 
         hw_get_md_headers(current_md_path.c_str(), md_headers, index_progress_cb);
 
-        md_headers_loaded = !cancel_index_loading;
+        md_headers_loaded = true;
         lv_obj_del(loading_cont);
-
-        if (cancel_index_loading) {
-            // User cancelled, clear any partially loaded headers and return without showing the index menu
-            md_headers.clear();
-            return;
-        }
     }
 
     if (md_headers.empty()) {
         if (e == NULL) {
             lv_menu_set_page(menu, view_page);
+            sync_menu_header();
             update_page();
         } else {
             ui_msg_pop_up("Index", "No headers found in this file.");
@@ -322,6 +335,69 @@ static void btn_index_click_cb(lv_event_t *e)
     }
     
     lv_menu_set_page(menu, index_page);
+    sync_menu_header();
+}
+
+static std::string resolve_md_path(const char *filename)
+{
+    std::string path = filename;
+    if (path.empty()) return path;
+    if (path[0] != '/') path = "/" + path;
+    if (path.find("/md/") != 0) {
+        if (path[0] == '/') path = "/md" + path;
+        else path = "/md/" + path;
+    }
+    return path;
+}
+
+static void delete_msgbox_cb(lv_event_t *e)
+{
+    lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *label = lv_obj_get_child(btn, 0);
+    const char *text = lv_label_get_text(label);
+    bool confirmed = (strcmp(text, "Yes") == 0);
+    lv_obj_t *mbox_to_del = lv_obj_get_parent(lv_obj_get_parent(btn));
+
+    const char *path = (const char *)lv_event_get_user_data(e);
+
+    if (confirmed && path) {
+        if (hw_delete_file(path)) {
+            load_files();
+            refresh_ui();
+        } else {
+            ui_msg_pop_up("Error", "Failed to delete file.");
+        }
+    }
+
+    destroy_msgbox(mbox_to_del);
+    if (path) lv_mem_free((void *)path);
+}
+
+static void show_delete_confirm(const std::string &path)
+{
+    static const char *btns[] = {"Yes", "No", ""};
+    char msg[160];
+    snprintf(msg, sizeof(msg), "Delete this file?\n%s", path.c_str());
+
+    char *path_dup = (char *)lv_mem_alloc(path.size() + 1);
+    strcpy(path_dup, path.c_str());
+
+    create_msgbox(NULL, "Confirm", msg, btns, delete_msgbox_cb, path_dup);
+}
+
+static void file_list_key_cb(lv_event_t *e)
+{
+    uint32_t key = lv_event_get_key(e);
+    if (key != LV_KEY_BACKSPACE) return;
+
+    lv_group_t *g = lv_group_get_default();
+    lv_obj_t *focused = lv_group_get_focused(g);
+    if (!focused) return;
+
+    const char *filename = lv_list_get_button_text(file_list, focused);
+    if (!filename) return;
+
+    show_delete_confirm(resolve_md_path(filename));
 }
 
 static void file_click_cb(lv_event_t *e)
@@ -330,12 +406,7 @@ static void file_click_cb(lv_event_t *e)
     const char *filename = lv_list_get_button_text(file_list, btn);
     if (!filename) return;
 
-    std::string path = filename;
-    if (path[0] != '/') path = "/" + path;
-    if (path.find("/md/") != 0) {
-        if (path[0] == '/') path = "/md" + path;
-        else path = "/md/" + path;
-    }
+    std::string path = resolve_md_path(filename);
 
     current_md_path = path;
     current_md_size = hw_get_file_size(current_md_path.c_str());
@@ -362,6 +433,21 @@ static void refresh_ui()
             lv_obj_t *btn = lv_list_add_btn(file_list, LV_SYMBOL_FILE, file.c_str());
             lv_obj_add_event_cb(btn, file_click_cb, LV_EVENT_CLICKED, NULL);
             lv_group_add_obj(lv_group_get_default(), btn);
+
+            lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+            lv_obj_t *icon = lv_obj_get_child(btn, 0);
+            lv_obj_t *lbl = lv_obj_get_child(btn, 1);
+            if (icon) {
+                lv_obj_set_width(icon, 20);
+                lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
+            }
+            if (lbl) {
+                lv_obj_set_width(lbl, 0);
+                lv_obj_set_flex_grow(lbl, 1);
+                lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+            }
         }
     }
 
@@ -379,19 +465,35 @@ void ui_md_viewer_enter(lv_obj_t *parent)
     menu = create_menu(parent, back_event_handler);
     lv_menu_set_mode_root_back_btn(menu, LV_MENU_ROOT_BACK_BTN_ENABLED);
 
-    lv_obj_t *back_btn = lv_menu_get_main_header_back_button(menu);
-    if (back_btn) lv_group_add_obj(lv_group_get_default(), back_btn);
+    // Suppress the built-in header back button: zero-size and transparent so
+    // the menu header's content_height stays 0 and LVGL auto-hides the
+    // header. Still clickable programmatically via send_event.
+    lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
+    if (bb) {
+        lv_obj_set_size(bb, 0, 0);
+        lv_obj_set_style_pad_all(bb, 0, 0);
+        lv_obj_set_style_border_width(bb, 0, 0);
+        lv_obj_set_style_outline_width(bb, 0, 0);
+        lv_obj_set_style_shadow_width(bb, 0, 0);
+        lv_obj_set_style_bg_opa(bb, LV_OPA_TRANSP, 0);
+    }
 
-    main_page = lv_menu_page_create(menu, (char*)"MD Viewer");
+    // Route the single status bar back button through the menu's built-in back
+    // so the menu's back_event_handler decides root-vs-subpage behaviour.
+    ui_show_back_button(md_view_back_cb);
+
+    main_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_COLUMN);
 
     file_list = lv_list_create(main_page);
     lv_obj_set_width(file_list, LV_PCT(100));
     lv_obj_set_flex_grow(file_list, 1);
+    lv_obj_add_event_cb(file_list, file_list_key_cb, LV_EVENT_KEY, NULL);
 
-    view_page = lv_menu_page_create(menu, (char*)"View MD");
+    view_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_flex_flow(view_page, LV_FLEX_FLOW_COLUMN);
-    
+    lv_obj_set_style_pad_all(view_page, 0, 0);
+
     // Create a wrapper for the text area that is focusable and scrollable
     scroll_wrapper = lv_obj_create(view_page);
     lv_obj_set_width(scroll_wrapper, LV_PCT(100));
@@ -399,8 +501,8 @@ void ui_md_viewer_enter(lv_obj_t *parent)
     lv_obj_set_scroll_dir(scroll_wrapper, LV_DIR_VER);
     lv_obj_add_flag(scroll_wrapper, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(scroll_wrapper, LV_OBJ_FLAG_CLICK_FOCUSABLE);
-    lv_obj_set_style_border_width(scroll_wrapper, 1, LV_STATE_FOCUSED);
-    lv_obj_set_style_border_color(scroll_wrapper, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(scroll_wrapper, UI_BORDER_W, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_color(scroll_wrapper, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
     lv_obj_set_style_pad_all(scroll_wrapper, 5, 0);
 
     lv_obj_add_event_cb(scroll_wrapper, [](lv_event_t *ev) {
@@ -409,6 +511,10 @@ void ui_md_viewer_enter(lv_obj_t *parent)
         if (!lv_group_get_editing(g) || lv_group_get_focused(g) != wrapper) return;
 
         uint32_t key = lv_event_get_key(ev);
+        // LV_KEY_UP / LV_KEY_LEFT: move toward the start of content (scroll up).
+        // Use lv_obj_scroll_to_y so we issue an absolute target — avoids a
+        // race with LVGL's default arrow-key scroll handler, which also
+        // re-runs after ours and would otherwise half-cancel the movement.
         if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
             int32_t cur_y = lv_obj_get_scroll_y(wrapper);
             if (cur_y == 0 && has_prev_page) {
@@ -416,19 +522,23 @@ void ui_md_viewer_enter(lv_obj_t *parent)
             } else {
                 int32_t step = 40;
                 if (cur_y < step) step = cur_y;
-                if (step > 0) lv_obj_scroll_by(wrapper, 0, step, LV_ANIM_ON);
+                if (step > 0) lv_obj_scroll_to_y(wrapper, cur_y - step, LV_ANIM_ON);
             }
+            lv_event_stop_processing(ev);
         } else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
             int32_t bottom = lv_obj_get_scroll_bottom(wrapper);
+            int32_t cur_y = lv_obj_get_scroll_y(wrapper);
             if (bottom == 0 && has_next_page) {
                 next_btn_cb(NULL);
             } else {
                 int32_t step = 40;
                 if (bottom < step) step = bottom;
-                if (step > 0) lv_obj_scroll_by(wrapper, 0, -step, LV_ANIM_ON);
+                if (step > 0) lv_obj_scroll_to_y(wrapper, cur_y + step, LV_ANIM_ON);
             }
+            lv_event_stop_processing(ev);
         } else if (key == LV_KEY_ENTER || key == LV_KEY_ESC) {
             lv_group_set_editing(g, false);
+            lv_event_stop_processing(ev);
         }
     }, LV_EVENT_KEY, NULL);
 
@@ -439,6 +549,9 @@ void ui_md_viewer_enter(lv_obj_t *parent)
     lv_obj_set_style_text_font(text_area, get_md_font(), 0);
     lv_obj_set_style_text_color(text_area, lv_color_white(), 0);
     lv_obj_remove_flag(text_area, LV_OBJ_FLAG_CLICKABLE);
+
+    // Back button moves to the top status bar; visibility is driven by
+    // sync_menu_header() based on which menu page is active.
 
     // Progress overlay in bottom-right corner of the viewer
     lbl_progress = lv_label_create(view_page);
@@ -452,7 +565,7 @@ void ui_md_viewer_enter(lv_obj_t *parent)
     lv_obj_set_style_pad_ver(lbl_progress, 2, 0);
     lv_obj_align(lbl_progress, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
-    index_page = lv_menu_page_create(menu, (char*)"Index");
+    index_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_flex_flow(index_page, LV_FLEX_FLOW_COLUMN);
     
     index_list = lv_list_create(index_page);
@@ -466,10 +579,12 @@ void ui_md_viewer_enter(lv_obj_t *parent)
     refresh_ui();
 
     lv_menu_set_page(menu, main_page);
+    sync_menu_header();
 }
 
 void ui_md_viewer_exit(lv_obj_t *parent)
 {
+    ui_hide_back_button();
     disable_keyboard();
     if (menu) {
         lv_obj_del(menu);

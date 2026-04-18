@@ -149,6 +149,12 @@ static void back_event_handler(lv_event_t *e) {
     }
 }
 
+static void tasks_back_cb(lv_event_t *e) {
+    if (!menu) return;
+    lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
+    if (bb) lv_obj_send_event(bb, LV_EVENT_CLICKED, NULL);
+}
+
 void ui_tasks_refresh() {
     if (task_container == NULL) return;
     lv_obj_clean(task_container);
@@ -237,17 +243,14 @@ void ui_tasks_refresh() {
             string display_text = icon + "  " + t.text;
             lv_label_set_text(label, display_text.c_str());
             
-            // Visual feedback when navigating to the task (focused state)
-            lv_obj_set_style_border_color(t.obj, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
-            lv_obj_set_style_border_width(t.obj, 2, LV_STATE_FOCUSED);
-            lv_obj_set_style_bg_color(t.obj, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+            lv_obj_set_style_bg_color(t.obj, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
             lv_obj_set_style_bg_opa(t.obj, LV_OPA_20, LV_STATE_FOCUSED);
 
             // Visual feedback when the task is done (checked state)
             lv_obj_t * child_label = lv_obj_get_child(t.obj, 0);
             if (child_label) {
                 lv_obj_set_style_text_decor(child_label, LV_TEXT_DECOR_STRIKETHROUGH, LV_STATE_CHECKED);
-                lv_obj_set_style_text_color(child_label, lv_palette_main(LV_PALETTE_GREY), LV_STATE_CHECKED);
+                lv_obj_set_style_text_color(child_label, UI_COLOR_MUTED, LV_STATE_CHECKED);
             }
 
             if (t.checked) {
@@ -263,13 +266,13 @@ void ui_tasks_refresh() {
             
             string display_text = string(LV_SYMBOL_BULLET) + " " + t.text;
             lv_label_set_text(t.obj, display_text.c_str());
-            lv_obj_set_style_text_color(t.obj, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_color(t.obj, UI_COLOR_MUTED, 0);
 
             // Make non-task items focusable so they can scroll on highlight
             lv_obj_add_flag(t.obj, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_border_color(t.obj, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
-            lv_obj_set_style_border_width(t.obj, 2, LV_STATE_FOCUSED);
-            lv_obj_set_style_bg_color(t.obj, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+            lv_obj_set_style_border_color(t.obj, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
+            lv_obj_set_style_border_width(t.obj, UI_BORDER_W, LV_STATE_FOCUSED);
+            lv_obj_set_style_bg_color(t.obj, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
             lv_obj_set_style_bg_opa(t.obj, LV_OPA_20, LV_STATE_FOCUSED);
             
             lv_obj_add_event_cb(t.obj, task_event_cb, LV_EVENT_ALL, NULL);
@@ -286,10 +289,19 @@ void ui_tasks_enter(lv_obj_t *parent) {
     menu = create_menu(parent, back_event_handler);
     lv_menu_set_mode_root_back_btn(menu, LV_MENU_ROOT_BACK_BTN_ENABLED);
 
-    lv_obj_t *back_btn = lv_menu_get_main_header_back_button(menu);
-    if (back_btn) {
-        lv_group_add_obj(lv_group_get_default(), back_btn);
+    // Suppress the built-in header back button by zero-sizing it so LVGL
+    // auto-hides the header (content_height becomes 0). Still clickable
+    // programmatically via send_event from the status bar back.
+    lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
+    if (bb) {
+        lv_obj_set_size(bb, 0, 0);
+        lv_obj_set_style_pad_all(bb, 0, 0);
+        lv_obj_set_style_border_width(bb, 0, 0);
+        lv_obj_set_style_outline_width(bb, 0, 0);
+        lv_obj_set_style_shadow_width(bb, 0, 0);
+        lv_obj_set_style_bg_opa(bb, LV_OPA_TRANSP, 0);
     }
+    ui_show_back_button(tasks_back_cb);
 
     main_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_COLUMN);
@@ -300,12 +312,7 @@ void ui_tasks_enter(lv_obj_t *parent) {
     lv_textarea_set_placeholder_text(add_ta, "[new task]");
     lv_obj_set_width(add_ta, LV_PCT(100));
 
-    lv_obj_set_style_border_width(add_ta, 2, LV_STATE_FOCUSED);
-    lv_obj_set_style_border_color(add_ta, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
-    lv_obj_set_style_border_color(add_ta, lv_palette_main(LV_PALETTE_ORANGE), LV_STATE_EDITED);
-    
-    // Set placeholder text color to grey
-    lv_obj_set_style_text_color(add_ta, lv_palette_main(LV_PALETTE_GREY), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_text_color(add_ta, UI_COLOR_MUTED, LV_PART_TEXTAREA_PLACEHOLDER);
 
     lv_obj_add_event_cb(add_ta, add_ta_event_cb, LV_EVENT_ALL, NULL);
     lv_group_add_obj(lv_group_get_default(), add_ta);
@@ -337,6 +344,7 @@ void ui_tasks_enter(lv_obj_t *parent) {
 }
 
 void ui_tasks_exit(lv_obj_t *parent) {
+    ui_hide_back_button();
     disable_keyboard();
     if (menu) {
         lv_obj_clean(menu);

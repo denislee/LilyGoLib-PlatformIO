@@ -21,6 +21,14 @@
 
 #define DEFAULT_OPA          100
 
+/* Unified theme tokens. Use these everywhere instead of hard-coded colors. */
+#define UI_COLOR_ACCENT      lv_palette_main(LV_PALETTE_ORANGE)
+#define UI_COLOR_MUTED       lv_palette_main(LV_PALETTE_GREY)
+#define UI_COLOR_BG          lv_color_black()
+#define UI_COLOR_FG          lv_color_white()
+#define UI_RADIUS            8
+#define UI_BORDER_W          2
+
 enum {
     LV_MENU_ITEM_BUILDER_VARIANT_1,
     LV_MENU_ITEM_BUILDER_VARIANT_2
@@ -65,6 +73,13 @@ void set_default_group(lv_group_t *group);
 
 lv_obj_t *ui_create_process_bar(lv_obj_t *parent, const char *title);
 
+/* Themed fullscreen modal overlay. Caller appends children (labels, bar, buttons)
+ * to the returned object; destroy with ui_popup_destroy(). Used for loading
+ * overlays, progress dialogs, and other short-lived modals that need the same
+ * look as create_msgbox() (black bg, accent border, white text). */
+lv_obj_t *ui_popup_create(const char *title);
+void ui_popup_destroy(lv_obj_t *popup);
+
 void theme_init();
 
 void disable_input_devices();
@@ -95,6 +110,14 @@ const lv_font_t *get_header_font();
 lv_obj_t *create_floating_button(lv_event_cb_t event_cb, void* user_data);
 lv_obj_t *create_menu(lv_obj_t *parent, lv_event_cb_t event_cb);
 lv_obj_t *create_radius_button(lv_obj_t *parent, const void *image, lv_event_cb_t event_cb, void* user_data);
+lv_obj_t *create_back_button(lv_obj_t *parent, lv_event_cb_t cb);
+
+/* Show the shared back button on the top status bar (where clock/battery live).
+ * Replaces any previous callback and adds the button to the current default
+ * lv_group so it's keyboard-navigable. Returns the button object so callers
+ * can attach additional event handlers or use it as a focus target. */
+lv_obj_t *ui_show_back_button(lv_event_cb_t cb);
+void ui_hide_back_button(void);
 
 #if LVGL_VERSION_MAJOR == 9
 #define LV_MENU_ROOT_BACK_BTN_ENABLED   LV_MENU_ROOT_BACK_BUTTON_ENABLED

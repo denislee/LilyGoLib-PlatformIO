@@ -26,20 +26,23 @@ static void new_theme_apply_cb(lv_theme_t * th, lv_obj_t * obj)
         inited = true;
     }
 
-    if (lv_obj_check_type(obj, &lv_button_class) || 
-        lv_obj_check_type(obj, &lv_list_button_class) || 
+    if (lv_obj_check_type(obj, &lv_button_class) ||
+        lv_obj_check_type(obj, &lv_list_button_class) ||
         lv_obj_check_type(obj, &lv_menu_cont_class) ||
         lv_obj_check_type(obj, &lv_slider_class) ||
         lv_obj_check_type(obj, &lv_switch_class) ||
-        lv_obj_check_type(obj, &lv_spinbox_class)) {
-        
+        lv_obj_check_type(obj, &lv_spinbox_class) ||
+        lv_obj_check_type(obj, &lv_textarea_class) ||
+        lv_obj_check_type(obj, &lv_dropdown_class) ||
+        lv_obj_check_type(obj, &lv_checkbox_class)) {
+
         static lv_style_t focus_style;
         static bool focus_inited = false;
         if (!focus_inited) {
             lv_style_init(&focus_style);
-            lv_style_set_border_width(&focus_style, 2);
-            lv_style_set_border_color(&focus_style, lv_color_white());
-            lv_style_set_outline_width(&focus_style, 0); // Remove outline
+            lv_style_set_border_width(&focus_style, UI_BORDER_W);
+            lv_style_set_border_color(&focus_style, UI_COLOR_ACCENT);
+            lv_style_set_outline_width(&focus_style, 0);
             focus_inited = true;
         }
         lv_obj_add_style(obj, &focus_style, LV_STATE_FOCUSED);
@@ -155,11 +158,11 @@ static void new_theme_apply_cb(lv_theme_t *th, lv_obj_t *obj)
     } else if (lv_obj_check_type(obj, &lv_dropdownlist_class)) {
 
         static lv_style_t s_style_bg_color;
-        static lv_style_t s_style_focus_bg_color;
 
         lv_style_init(&s_style_bg_color);
-        lv_style_set_bg_color(&s_style_bg_color, lv_color_black());
-        lv_style_set_bg_opa(&s_style_bg_color, 255);
+        lv_style_set_bg_color(&s_style_bg_color, lv_palette_darken(LV_PALETTE_ORANGE, 3));
+        lv_style_set_bg_opa(&s_style_bg_color, LV_OPA_COVER);
+        lv_style_set_text_color(&s_style_bg_color, lv_color_white());
 
         lv_obj_add_style(obj, &s_style_bg_color, LV_PART_SELECTED | LV_STATE_CHECKED);
 

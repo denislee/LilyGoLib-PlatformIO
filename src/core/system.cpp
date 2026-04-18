@@ -88,8 +88,33 @@ void System::setupGlobalUI() {
     lv_obj_set_style_text_color(_statTimeLabel, lv_color_white(), 0);
     lv_obj_set_style_text_font(_statTimeLabel, header_font, 0);
 
-    _statBattLabel = lv_label_create(_statusBar);
-    lv_obj_align(_statBattLabel, LV_ALIGN_RIGHT_MID, -5, 0);
+    // Right-side flex container holding SD, USB and battery indicators.
+    // Flex order: SD, USB, Battery — so hidden icons collapse naturally and
+    // the battery stays pinned to the far right with SD/USB to its left.
+    _statRightCont = lv_obj_create(_statusBar);
+    lv_obj_set_size(_statRightCont, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(_statRightCont, LV_ALIGN_RIGHT_MID, -5, 0);
+    lv_obj_set_flex_flow(_statRightCont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(_statRightCont, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(_statRightCont, 0, 0);
+    lv_obj_set_style_pad_column(_statRightCont, 4, 0);
+    lv_obj_set_style_border_width(_statRightCont, 0, 0);
+    lv_obj_set_style_bg_opa(_statRightCont, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(_statRightCont, LV_OBJ_FLAG_SCROLLABLE);
+
+    _statSDLabel = lv_label_create(_statRightCont);
+    lv_obj_set_style_text_color(_statSDLabel, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_text_font(_statSDLabel, header_font, 0);
+    lv_label_set_text(_statSDLabel, LV_SYMBOL_SD_CARD);
+    lv_obj_add_flag(_statSDLabel, LV_OBJ_FLAG_HIDDEN);
+
+    _statUSBLabel = lv_label_create(_statRightCont);
+    lv_obj_set_style_text_color(_statUSBLabel, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_text_font(_statUSBLabel, header_font, 0);
+    lv_label_set_text(_statUSBLabel, LV_SYMBOL_USB);
+    lv_obj_add_flag(_statUSBLabel, LV_OBJ_FLAG_HIDDEN);
+
+    _statBattLabel = lv_label_create(_statRightCont);
     lv_obj_set_style_text_color(_statBattLabel, lv_color_white(), 0);
     lv_obj_set_style_text_font(_statBattLabel, header_font, 0);
 
@@ -99,19 +124,24 @@ void System::setupGlobalUI() {
     lv_obj_set_style_text_font(_statMemLabel, header_font, 0);
     lv_obj_add_flag(_statMemLabel, LV_OBJ_FLAG_HIDDEN);
 
-    _statSDLabel = lv_label_create(_statusBar);
-    lv_obj_align(_statSDLabel, LV_ALIGN_LEFT_MID, 5, 0);
-    lv_obj_set_style_text_color(_statSDLabel, lv_palette_main(LV_PALETTE_BLUE), 0);
-    lv_obj_set_style_text_font(_statSDLabel, header_font, 0);
-    lv_label_set_text(_statSDLabel, LV_SYMBOL_SD_CARD);
-    lv_obj_add_flag(_statSDLabel, LV_OBJ_FLAG_HIDDEN);
-
-    _statUSBLabel = lv_label_create(_statusBar);
-    lv_obj_align(_statUSBLabel, LV_ALIGN_LEFT_MID, 25, 0); // Next to SD label
-    lv_obj_set_style_text_color(_statUSBLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
-    lv_obj_set_style_text_font(_statUSBLabel, header_font, 0);
-    lv_label_set_text(_statUSBLabel, LV_SYMBOL_USB);
-    lv_obj_add_flag(_statUSBLabel, LV_OBJ_FLAG_HIDDEN);
+    // Back button — hidden until a screen requests it. Sits on the far left
+    // of the status bar; left-aligned icons (SD/USB/MEM) shift right when it's
+    // visible so they don't overlap.
+    _statBackBtn = lv_btn_create(_statusBar);
+    lv_obj_set_size(_statBackBtn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(_statBackBtn, LV_ALIGN_LEFT_MID, 2, 0);
+    lv_obj_set_style_radius(_statBackBtn, 0, 0);
+    lv_obj_set_style_pad_hor(_statBackBtn, 4, 0);
+    lv_obj_set_style_pad_ver(_statBackBtn, 0, 0);
+    lv_obj_set_style_border_width(_statBackBtn, 0, 0);
+    lv_obj_set_style_outline_width(_statBackBtn, 0, 0);
+    lv_obj_set_style_shadow_width(_statBackBtn, 0, 0);
+    lv_obj_set_style_bg_opa(_statBackBtn, LV_OPA_TRANSP, 0);
+    lv_obj_t *back_lbl = lv_label_create(_statBackBtn);
+    lv_label_set_text(back_lbl, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(back_lbl, header_font, 0);
+    lv_obj_set_style_text_color(back_lbl, lv_color_white(), 0);
+    lv_obj_add_flag(_statBackBtn, LV_OBJ_FLAG_HIDDEN);
 
     lv_timer_create([](lv_timer_t *t) {
         System& self = System::getInstance();
@@ -128,6 +158,10 @@ void System::setupGlobalUI() {
             lv_obj_set_style_text_font(self._statMemLabel, cur_font, 0);
             lv_obj_set_style_text_font(self._statSDLabel, cur_font, 0);
             lv_obj_set_style_text_font(self._statUSBLabel, cur_font, 0);
+            if (self._statBackBtn) {
+                lv_obj_t *back_lbl = lv_obj_get_child(self._statBackBtn, 0);
+                if (back_lbl) lv_obj_set_style_text_font(back_lbl, cur_font, 0);
+            }
             if (lv_obj_get_height(self._statusBar) != new_bar_h) {
                 lv_obj_set_height(self._statusBar, new_bar_h);
                 int32_t v_res = lv_display_get_vertical_resolution(NULL);
@@ -154,13 +188,19 @@ void System::setupGlobalUI() {
             lv_label_set_text_fmt(self._statBattLabel, "%s %d%%", batt_sym, params.battery_percent);
         }
 
+        // When the back button is visible, push the memory readout right so
+        // it doesn't overlap.
+        int back_off = 0;
+        if (self._statBackBtn && !lv_obj_has_flag(self._statBackBtn, LV_OBJ_FLAG_HIDDEN)) {
+            back_off = lv_obj_get_width(self._statBackBtn);
+            if (back_off <= 0) back_off = 20;
+            back_off += 4;
+        }
+
         bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
         if (self._statSDLabel) {
-            if (sd_online) {
-                lv_obj_clear_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_add_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
-            }
+            if (sd_online) lv_obj_clear_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
+            else           lv_obj_add_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
         }
 
         if (self._statUSBLabel) {
@@ -171,9 +211,8 @@ void System::setupGlobalUI() {
                 } else if (hw_is_usb_msc_reading()) {
                     lv_obj_set_style_text_color(self._statUSBLabel, lv_palette_main(LV_PALETTE_BLUE), 0);
                 } else {
-                    lv_obj_set_style_text_color(self._statUSBLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+                    lv_obj_set_style_text_color(self._statUSBLabel, UI_COLOR_ACCENT, 0);
                 }
-                lv_obj_set_x(self._statUSBLabel, sd_online ? 25 : 5);
             } else {
                 lv_obj_add_flag(self._statUSBLabel, LV_OBJ_FLAG_HIDDEN);
             }
@@ -187,11 +226,7 @@ void System::setupGlobalUI() {
                 hw_get_heap_info(total, free_h);
                 lv_label_set_text_fmt(self._statMemLabel, "M:%uK", free_h / 1024);
                 lv_obj_clear_flag(self._statMemLabel, LV_OBJ_FLAG_HIDDEN);
-                
-                int x_offset = 5;
-                if (sd_online) x_offset += 20;
-                if (hw_is_usb_msc_mounted()) x_offset += 20;
-                lv_obj_set_x(self._statMemLabel, x_offset);
+                lv_obj_set_x(self._statMemLabel, 5 + back_off);
             } else {
                 lv_obj_add_flag(self._statMemLabel, LV_OBJ_FLAG_HIDDEN);
             }
@@ -226,4 +261,58 @@ void System::loop() {
     AppManager::getInstance().update();
 }
 
+// Drop every event callback currently registered on the status-bar back
+// button. Passing NULL to lv_obj_remove_event_cb matches only callbacks whose
+// cb field is NULL (i.e. nothing), so stale handlers from previously-opened
+// apps would otherwise accumulate and fire alongside the current app's cb.
+//
+// Iterate by a fixed snapshot of the count: during event dispatch LVGL marks
+// handlers for deletion but defers actual removal until traversal ends, so
+// the event count doesn't decrease mid-dispatch. Re-querying in a loop would
+// spin forever when this is called from inside a CLICKED handler (e.g. the
+// back button's own callback tearing down the app).
+static void clear_back_button_events(lv_obj_t *btn) {
+    if (!btn) return;
+    uint32_t n = lv_obj_get_event_count(btn);
+    // Iterate high→low: outside a dispatch the array shifts as items are
+    // removed, and descending indices keep the remaining positions valid.
+    // Inside a dispatch lv_event only marks for deletion (the array is
+    // stable until traversal ends), so either direction works there.
+    for (uint32_t i = n; i > 0; i--) {
+        lv_obj_remove_event(btn, i - 1);
+    }
+}
+
+lv_obj_t* System::showBackButton(lv_event_cb_t cb) {
+    if (!_statBackBtn) return nullptr;
+    clear_back_button_events(_statBackBtn);
+    if (cb) lv_obj_add_event_cb(_statBackBtn, cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_remove_flag(_statBackBtn, LV_OBJ_FLAG_HIDDEN);
+    lv_group_t *g = lv_group_get_default();
+    if (g) {
+        lv_group_remove_obj(_statBackBtn);
+        lv_group_add_obj(g, _statBackBtn);
+    }
+    return _statBackBtn;
+}
+
+void System::hideBackButton() {
+    if (!_statBackBtn) return;
+    clear_back_button_events(_statBackBtn);
+    lv_group_remove_obj(_statBackBtn);
+    lv_obj_add_flag(_statBackBtn, LV_OBJ_FLAG_HIDDEN);
+}
+
 } // namespace core
+
+// Free-function wrappers exposed via ui_define.h so ui_*.cpp files don't need
+// to pull in the core::System singleton directly.
+lv_obj_t *ui_show_back_button(lv_event_cb_t cb)
+{
+    return core::System::getInstance().showBackButton(cb);
+}
+
+void ui_hide_back_button(void)
+{
+    core::System::getInstance().hideBackButton();
+}

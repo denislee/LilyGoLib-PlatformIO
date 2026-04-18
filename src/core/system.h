@@ -29,19 +29,25 @@ public:
     void hideMenu();
     bool isInMenu() const;
 
+    lv_obj_t* showBackButton(lv_event_cb_t cb);
+    void hideBackButton();
+    lv_obj_t* getBackButton() const { return _statBackBtn; }
+
 private:
     System() = default;
-    
+
     lv_obj_t* _mainScreen = nullptr;
     lv_obj_t* _menuPanel = nullptr;
     lv_obj_t* _appPanel = nullptr;
     lv_obj_t* _statusBar = nullptr;
-    
+
     lv_obj_t* _statTimeLabel = nullptr;
     lv_obj_t* _statBattLabel = nullptr;
     lv_obj_t* _statMemLabel = nullptr;
     lv_obj_t* _statSDLabel = nullptr;
     lv_obj_t* _statUSBLabel = nullptr;
+    lv_obj_t* _statRightCont = nullptr;
+    lv_obj_t* _statBackBtn = nullptr;
     
     lv_group_t* _menuGroup = nullptr;
     lv_group_t* _appGroup = nullptr;
