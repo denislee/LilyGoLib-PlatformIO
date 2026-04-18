@@ -916,6 +916,20 @@ static void header_font_size_cb(lv_event_t *e)
     lv_event_stop_processing(e);
 }
 
+static void home_font_face_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.home_font_index = lv_dropdown_get_selected(obj);
+    lv_event_stop_processing(e);
+}
+
+static void home_font_size_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.home_font_size = 10 + lv_dropdown_get_selected(obj) * 2;
+    lv_event_stop_processing(e);
+}
+
 static void build_subpage_fonts(lv_obj_t *menu, lv_obj_t *sub_page)
 {
     lv_obj_set_style_pad_row(sub_page, 2, 0);
@@ -930,13 +944,27 @@ static void build_subpage_fonts(lv_obj_t *menu, lv_obj_t *sub_page)
         lv_obj_set_style_pad_top(header, 6, 0);
         lv_obj_set_style_pad_left(header, 12, 0);
 
-        lv_obj_t *section = lv_menu_section_create(sub_page);
-        lv_obj_t *dd_face = create_dropdown(section, NULL, "Font Face", FONT_FACE_OPTIONS, face_idx, face_cb);
+        lv_obj_t *row = lv_menu_section_create(sub_page);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(row, 4, 0);
+
+        lv_obj_t *dd_face = create_dropdown(row, NULL, "Face", FONT_FACE_OPTIONS, face_idx, face_cb);
+        lv_obj_t *face_cont = lv_obj_get_parent(dd_face);
+        lv_obj_set_width(face_cont, 0);
+        lv_obj_set_flex_grow(face_cont, 1);
+        lv_obj_set_style_pad_hor(face_cont, 6, 0);
         register_subpage_group_obj(sub_page, dd_face);
-        lv_obj_t *dd_size = create_dropdown(section, NULL, "Font Size", FONT_SIZE_OPTIONS, size_to_idx(size), size_cb);
+
+        lv_obj_t *dd_size = create_dropdown(row, NULL, "Size", FONT_SIZE_OPTIONS, size_to_idx(size), size_cb);
+        lv_obj_t *size_cont = lv_obj_get_parent(dd_size);
+        lv_obj_set_width(size_cont, 0);
+        lv_obj_set_flex_grow(size_cont, 1);
+        lv_obj_set_style_pad_hor(size_cont, 6, 0);
         register_subpage_group_obj(sub_page, dd_size);
     };
 
+    add_font_section("Home",     local_param.home_font_index,    local_param.home_font_size,
+                     home_font_face_cb,    home_font_size_cb);
     add_font_section("Editor",   local_param.editor_font_index,  local_param.editor_font_size,
                      editor_font_face_cb,  editor_font_size_cb);
     add_font_section("Journal",  local_param.journal_font_index, local_param.journal_font_size,

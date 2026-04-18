@@ -106,6 +106,7 @@ const lv_font_t *get_small_font();
 const lv_font_t *get_journal_font();
 const lv_font_t *get_md_font();
 const lv_font_t *get_header_font();
+const lv_font_t *get_home_font();
 
 lv_obj_t *create_floating_button(lv_event_cb_t event_cb, void* user_data);
 lv_obj_t *create_menu(lv_obj_t *parent, lv_event_cb_t event_cb);

@@ -635,3 +635,10 @@ const lv_font_t *get_header_font()
     hw_get_user_setting(settings);
     return pick_font(settings.header_font_index, settings.header_font_size);
 }
+
+const lv_font_t *get_home_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    return pick_font(settings.home_font_index, settings.home_font_size);
+}

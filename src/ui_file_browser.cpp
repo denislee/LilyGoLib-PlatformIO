@@ -105,6 +105,12 @@ static void load_entries()
         }
         all_entries.push_back({r.path, r.is_dir, r.mtime});
     }
+
+    std::sort(all_entries.begin(), all_entries.end(),
+              [](const Entry &a, const Entry &b) {
+                  if (a.mtime != b.mtime) return a.mtime > b.mtime;
+                  return a.path < b.path;
+              });
 }
 
 static std::string format_mtime(uint32_t t)

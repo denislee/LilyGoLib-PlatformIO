@@ -18,6 +18,7 @@ void MenuApp::onStart(lv_obj_t* parent) {
     lv_obj_center(_list);
     lv_obj_set_style_bg_color(_list, lv_color_black(), 0);
     lv_obj_set_style_border_width(_list, 0, 0);
+    lv_obj_set_style_text_font(_list, get_home_font(), 0);
 
     createMenuItem("Editor", LV_SYMBOL_KEYBOARD, "Editor");
     createMenuItem("Tasks", LV_SYMBOL_OK, "Tasks");
