@@ -53,10 +53,14 @@ void System::setupGlobalUI() {
     int32_t v_res = lv_display_get_vertical_resolution(NULL);
     if (v_res <= 0) v_res = 222;
 
+    const lv_font_t *header_font = get_header_font();
+    int32_t bar_h = lv_font_get_line_height(header_font) + 8;
+    if (bar_h < 30) bar_h = 30;
+
     // Create Main Screen (TileView)
     _mainScreen = lv_tileview_create(lv_screen_active());
     main_screen = _mainScreen; // Set global pointer
-    lv_obj_set_size(_mainScreen, LV_PCT(100), v_res - 30);
+    lv_obj_set_size(_mainScreen, LV_PCT(100), v_res - bar_h);
     lv_obj_align(_mainScreen, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(_mainScreen, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(_mainScreen, LV_OPA_COVER, 0);
@@ -71,34 +75,67 @@ void System::setupGlobalUI() {
 
     // Create Status Bar
     _statusBar = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(_statusBar, LV_PCT(100), 30);
+    lv_obj_set_size(_statusBar, LV_PCT(100), bar_h);
     lv_obj_align(_statusBar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_color(_statusBar, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(_statusBar, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(_statusBar, 0, 0);
     lv_obj_set_style_radius(_statusBar, 0, 0);
+    lv_obj_set_style_pad_all(_statusBar, 2, 0);
 
     _statTimeLabel = lv_label_create(_statusBar);
     lv_obj_center(_statTimeLabel);
     lv_obj_set_style_text_color(_statTimeLabel, lv_color_white(), 0);
+    lv_obj_set_style_text_font(_statTimeLabel, header_font, 0);
 
     _statBattLabel = lv_label_create(_statusBar);
     lv_obj_align(_statBattLabel, LV_ALIGN_RIGHT_MID, -5, 0);
     lv_obj_set_style_text_color(_statBattLabel, lv_color_white(), 0);
+    lv_obj_set_style_text_font(_statBattLabel, header_font, 0);
 
     _statMemLabel = lv_label_create(_statusBar);
     lv_obj_align(_statMemLabel, LV_ALIGN_LEFT_MID, 5, 0);
     lv_obj_set_style_text_color(_statMemLabel, lv_color_white(), 0);
+    lv_obj_set_style_text_font(_statMemLabel, header_font, 0);
     lv_obj_add_flag(_statMemLabel, LV_OBJ_FLAG_HIDDEN);
 
     _statSDLabel = lv_label_create(_statusBar);
     lv_obj_align(_statSDLabel, LV_ALIGN_LEFT_MID, 5, 0);
     lv_obj_set_style_text_color(_statSDLabel, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_obj_set_style_text_font(_statSDLabel, header_font, 0);
     lv_label_set_text(_statSDLabel, LV_SYMBOL_SD_CARD);
     lv_obj_add_flag(_statSDLabel, LV_OBJ_FLAG_HIDDEN);
 
+    _statUSBLabel = lv_label_create(_statusBar);
+    lv_obj_align(_statUSBLabel, LV_ALIGN_LEFT_MID, 25, 0); // Next to SD label
+    lv_obj_set_style_text_color(_statUSBLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+    lv_obj_set_style_text_font(_statUSBLabel, header_font, 0);
+    lv_label_set_text(_statUSBLabel, LV_SYMBOL_USB);
+    lv_obj_add_flag(_statUSBLabel, LV_OBJ_FLAG_HIDDEN);
+
     lv_timer_create([](lv_timer_t *t) {
         System& self = System::getInstance();
+
+        static const lv_font_t *applied_header_font = nullptr;
+        const lv_font_t *cur_font = get_header_font();
+        if (applied_header_font == nullptr) applied_header_font = cur_font;
+        if (self._statusBar && cur_font != applied_header_font) {
+            applied_header_font = cur_font;
+            int32_t new_bar_h = lv_font_get_line_height(cur_font) + 8;
+            if (new_bar_h < 30) new_bar_h = 30;
+            lv_obj_set_style_text_font(self._statTimeLabel, cur_font, 0);
+            lv_obj_set_style_text_font(self._statBattLabel, cur_font, 0);
+            lv_obj_set_style_text_font(self._statMemLabel, cur_font, 0);
+            lv_obj_set_style_text_font(self._statSDLabel, cur_font, 0);
+            lv_obj_set_style_text_font(self._statUSBLabel, cur_font, 0);
+            if (lv_obj_get_height(self._statusBar) != new_bar_h) {
+                lv_obj_set_height(self._statusBar, new_bar_h);
+                int32_t v_res = lv_display_get_vertical_resolution(NULL);
+                if (v_res <= 0) v_res = 222;
+                lv_obj_set_height(self._mainScreen, v_res - new_bar_h);
+            }
+        }
+
         // Status bar update logic
         struct tm timeinfo;
         hw_get_date_time(timeinfo);
@@ -117,12 +154,28 @@ void System::setupGlobalUI() {
             lv_label_set_text_fmt(self._statBattLabel, "%s %d%%", batt_sym, params.battery_percent);
         }
 
+        bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
         if (self._statSDLabel) {
-            bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
             if (sd_online) {
                 lv_obj_clear_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
             } else {
                 lv_obj_add_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+
+        if (self._statUSBLabel) {
+            if (hw_is_usb_msc_mounted()) {
+                lv_obj_clear_flag(self._statUSBLabel, LV_OBJ_FLAG_HIDDEN);
+                if (hw_is_usb_msc_writing()) {
+                    lv_obj_set_style_text_color(self._statUSBLabel, lv_palette_main(LV_PALETTE_RED), 0);
+                } else if (hw_is_usb_msc_reading()) {
+                    lv_obj_set_style_text_color(self._statUSBLabel, lv_palette_main(LV_PALETTE_BLUE), 0);
+                } else {
+                    lv_obj_set_style_text_color(self._statUSBLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+                }
+                lv_obj_set_x(self._statUSBLabel, sd_online ? 25 : 5);
+            } else {
+                lv_obj_add_flag(self._statUSBLabel, LV_OBJ_FLAG_HIDDEN);
             }
         }
 
@@ -135,9 +188,10 @@ void System::setupGlobalUI() {
                 lv_label_set_text_fmt(self._statMemLabel, "M:%uK", free_h / 1024);
                 lv_obj_clear_flag(self._statMemLabel, LV_OBJ_FLAG_HIDDEN);
                 
-                // Position after SD icon if SD is online
-                bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
-                lv_obj_set_x(self._statMemLabel, sd_online ? 30 : 5);
+                int x_offset = 5;
+                if (sd_online) x_offset += 20;
+                if (hw_is_usb_msc_mounted()) x_offset += 20;
+                lv_obj_set_x(self._statMemLabel, x_offset);
             } else {
                 lv_obj_add_flag(self._statMemLabel, LV_OBJ_FLAG_HIDDEN);
             }

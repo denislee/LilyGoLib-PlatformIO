@@ -610,7 +610,7 @@ void ui_journal_enter(lv_obj_t *parent)
         lv_obj_set_style_text_align(empty_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(empty_label, lv_pct(100));
     } else {
-        const lv_font_t *font = get_small_font();
+        const lv_font_t *font = get_journal_font();
 
         if (current_page > 0) {
             lv_obj_t *prev_cont = lv_menu_cont_create(main_page);

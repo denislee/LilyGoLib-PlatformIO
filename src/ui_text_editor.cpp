@@ -7,6 +7,8 @@
  */
 #include "ui_define.h"
 
+LV_FONT_DECLARE(lv_font_montserrat_12);
+
 static lv_obj_t *menu = NULL;
 static lv_obj_t *text_area = NULL;
 static lv_obj_t *quit_btn = NULL;
@@ -232,7 +234,7 @@ void ui_text_editor_enter(lv_obj_t *parent)
     word_count_label = lv_label_create(exit_cont);
     lv_label_set_text(word_count_label, "0 words | 0 chars");
     lv_obj_set_style_text_color(word_count_label, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_font(word_count_label, get_small_font(), 0);
+    lv_obj_set_style_text_font(word_count_label, &lv_font_montserrat_12, 0);
 
     /* Textarea fills remaining space */
     text_area = lv_textarea_create(main_page);

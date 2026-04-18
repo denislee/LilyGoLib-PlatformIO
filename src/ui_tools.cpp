@@ -489,22 +489,29 @@ LV_FONT_DECLARE(lv_font_unscii_16);
 LV_FONT_DECLARE(ui_font_courier_16);
 LV_FONT_DECLARE(ui_font_courier_20);
 LV_FONT_DECLARE(ui_font_courier_24);
+LV_FONT_DECLARE(font_inter_14);
+LV_FONT_DECLARE(font_inter_16);
+LV_FONT_DECLARE(font_inter_18);
+LV_FONT_DECLARE(font_inter_20);
 
-const lv_font_t *get_editor_font()
+// idx: 0=Montserrat, 1=Unscii 8, 2=Unscii 16, 3=Courier, 4=Inter
+static const lv_font_t *pick_font(uint8_t idx, uint8_t size)
 {
-    user_setting_params_t settings;
-    hw_get_user_setting(settings);
-
-    if (settings.editor_font_index == 1) return &lv_font_unscii_8;
-    if (settings.editor_font_index == 2) return &lv_font_unscii_16;
-    if (settings.editor_font_index == 3) {
-        if (settings.editor_font_size <= 16) return &ui_font_courier_16;
-        if (settings.editor_font_size <= 20) return &ui_font_courier_20;
+    if (idx == 1) return &lv_font_unscii_8;
+    if (idx == 2) return &lv_font_unscii_16;
+    if (idx == 3) {
+        if (size <= 16) return &ui_font_courier_16;
+        if (size <= 20) return &ui_font_courier_20;
         return &ui_font_courier_24;
     }
-
+    if (idx == 4) {
+        if (size <= 14) return &font_inter_14;
+        if (size <= 16) return &font_inter_16;
+        if (size <= 18) return &font_inter_18;
+        return &font_inter_20;
+    }
     // Default to Montserrat
-    switch (settings.editor_font_size) {
+    switch (size) {
     case 10: return &lv_font_montserrat_10;
     case 12: return &lv_font_montserrat_12;
     case 14: return &lv_font_montserrat_14;
@@ -521,35 +528,49 @@ const lv_font_t *get_editor_font()
     }
 }
 
+const lv_font_t *get_editor_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    return pick_font(settings.editor_font_index, settings.editor_font_size);
+}
+
 const lv_font_t *get_small_font()
 {
     user_setting_params_t settings;
     hw_get_user_setting(settings);
 
-    if (settings.editor_font_index == 1) return &lv_font_unscii_8;
-    if (settings.editor_font_index == 2) return &lv_font_unscii_8; // Unscii 16 -> 8
-    if (settings.editor_font_index == 3) {
-        if (settings.editor_font_size <= 20) return &ui_font_courier_16;
-        return &ui_font_courier_20;
-    }
+    uint8_t idx = settings.editor_font_index;
+    uint8_t size = settings.editor_font_size;
 
-    // For Montserrat, go 2 sizes smaller, min 10
-    int size = settings.editor_font_size - 2;
-    if (size < 10) size = 10;
+    if (idx == 2) return &lv_font_unscii_8; // Unscii 16 -> 8
 
-    switch (size) {
-    case 10: return &lv_font_montserrat_10;
-    case 12: return &lv_font_montserrat_12;
-    case 14: return &lv_font_montserrat_14;
-    case 16: return &lv_font_montserrat_16;
-    case 18: return &lv_font_montserrat_18;
-    case 20: return &lv_font_montserrat_20;
-    case 22: return &lv_font_montserrat_22;
-    case 24: return &lv_font_montserrat_24;
-    case 26: return &lv_font_montserrat_26;
-    case 28: return &lv_font_montserrat_28;
-    case 30: return &lv_font_montserrat_30;
-    case 32: return &lv_font_montserrat_32;
-    default: return &lv_font_montserrat_12;
+    // For scalable faces, go 2 sizes smaller, min 10
+    if (idx == 0 || idx == 4) {
+        int s = (int)size - 2;
+        if (s < 10) s = 10;
+        size = (uint8_t)s;
     }
+    return pick_font(idx, size);
+}
+
+const lv_font_t *get_journal_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    return pick_font(settings.journal_font_index, settings.journal_font_size);
+}
+
+const lv_font_t *get_md_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    return pick_font(settings.md_font_index, settings.md_font_size);
+}
+
+const lv_font_t *get_header_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    return pick_font(settings.header_font_index, settings.header_font_size);
 }

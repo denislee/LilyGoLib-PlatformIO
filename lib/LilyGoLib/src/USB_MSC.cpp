@@ -23,6 +23,14 @@ static lock_callback_t mutexUnlock = NULL;
 static lock_callback_t mutexLock = NULL;
 static bool msc_use_sd = false;
 
+volatile bool usb_msc_mounted = false;
+volatile uint32_t last_usb_read_time = 0;
+volatile uint32_t last_usb_write_time = 0;
+
+bool is_usb_msc_reading() { return (millis() - last_usb_read_time) < 1500; }
+bool is_usb_msc_writing() { return (millis() - last_usb_write_time) < 1500; }
+bool is_usb_msc_mounted() { return usb_msc_mounted || is_usb_msc_reading() || is_usb_msc_writing(); }
+
 #if !ARDUINO_USB_MODE
 #include <USB.h>
 #include <USBMSC.h>
@@ -40,6 +48,7 @@ static uint8_t  pdrv = 0; //The default drive number of ESP32 Flash is 0
 
 static int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t *buffer, uint32_t bufsize)
 {
+    last_usb_write_time = millis();
     if (msc_use_sd) {
 #ifdef USING_SD_FAT
         if (mutexLock) {
@@ -79,6 +88,7 @@ static int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t *buffer, uint32_t 
 
 static int32_t onRead(uint32_t lba, uint32_t offset, void *buffer, uint32_t bufsize)
 {
+    last_usb_read_time = millis();
     if (msc_use_sd) {
 #ifdef USING_SD_FAT
         if (mutexLock) {
@@ -116,6 +126,9 @@ static int32_t onRead(uint32_t lba, uint32_t offset, void *buffer, uint32_t bufs
 
 static bool onStartStop(uint8_t power_condition, bool start, bool load_eject)
 {
+    // Only load/eject transitions change the mount state; spin-up/down without
+    // eject (load_eject=false) must not flip the indicator.
+    if (load_eject) usb_msc_mounted = start;
     if (!msc_use_sd) {
 #ifdef USING_FATFS
         if (load_eject) {

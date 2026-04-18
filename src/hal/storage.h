@@ -16,10 +16,14 @@ bool hw_save_internal_file(const char *path, const char *content, std::string *e
 bool hw_delete_file(const char *path);
 bool hw_delete_internal_file(const char *path);
 bool hw_read_file(const char *path, std::string &content);
+size_t hw_get_file_size(const char *path);
+bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::string &content);
 bool hw_read_internal_file(const char *path, std::string &content);
 void hw_get_txt_files(std::vector<std::string> &list);
 void hw_get_internal_txt_files(std::vector<std::string> &list);
 void hw_get_sd_txt_files(std::vector<std::string> &list);
+void hw_get_sd_md_files(std::vector<std::string> &list);
+void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size_t>> &headers, bool (*progress_cb)(size_t, size_t) = nullptr);
 
 // Storage preference: when true, user-facing apps (editor, tasks) route
 // their reads/writes to the SD card. When false (default), they use internal
@@ -32,6 +36,10 @@ void hw_set_storage_prefer_sd(bool prefer_sd);
 // When false (default), the internal memory (FFat) is exposed.
 bool hw_get_msc_prefer_sd();
 void hw_set_msc_prefer_sd(bool prefer_sd);
+
+bool hw_is_usb_msc_reading();
+bool hw_is_usb_msc_writing();
+bool hw_is_usb_msc_mounted();
 
 // Filesystem dirty flag: set to true whenever a file is saved or deleted.
 // Used by high-level apps to invalidate their caches.

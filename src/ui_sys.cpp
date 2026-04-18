@@ -823,6 +823,15 @@ static void settings_exit_cb(lv_event_t *e)
     // menu_show will trigger AppManager::switchApp which calls ui_sys_exit
     menu_show();
 }
+static const char *FONT_FACE_OPTIONS = "Montserrat\nUnscii 8\nUnscii 16\nCourier\nInter";
+static const char *FONT_SIZE_OPTIONS = "10\n12\n14\n16\n18\n20\n22\n24\n26\n28\n30\n32";
+
+static uint8_t size_to_idx(uint8_t size)
+{
+    if (size < 10 || size > 32) return 2; // Default 14
+    return (size - 10) / 2;
+}
+
 static void editor_font_face_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
@@ -833,25 +842,85 @@ static void editor_font_face_cb(lv_event_t *e)
 static void editor_font_size_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    uint16_t index = lv_dropdown_get_selected(obj);
-    local_param.editor_font_size = 10 + index * 2;
+    local_param.editor_font_size = 10 + lv_dropdown_get_selected(obj) * 2;
+    lv_event_stop_processing(e);
+}
+
+static void journal_font_face_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.journal_font_index = lv_dropdown_get_selected(obj);
+    lv_event_stop_processing(e);
+}
+
+static void journal_font_size_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.journal_font_size = 10 + lv_dropdown_get_selected(obj) * 2;
+    lv_event_stop_processing(e);
+}
+
+static void md_font_face_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.md_font_index = lv_dropdown_get_selected(obj);
+    lv_event_stop_processing(e);
+}
+
+static void md_font_size_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.md_font_size = 10 + lv_dropdown_get_selected(obj) * 2;
     lv_event_stop_processing(e);
 }
 
 static void build_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *sub_page)
 {
     lv_obj_set_style_pad_row(sub_page, 2, 0);
-
-    const char *font_options = "Montserrat\nUnscii 8\nUnscii 16\nCourier";
-    lv_obj_t *dd_face = create_dropdown(sub_page, NULL, "Font Face", font_options, local_param.editor_font_index, editor_font_face_cb);
+    lv_obj_t *dd_face = create_dropdown(sub_page, NULL, "Font Face", FONT_FACE_OPTIONS, local_param.editor_font_index, editor_font_face_cb);
     register_subpage_group_obj(sub_page, dd_face);
+    lv_obj_t *dd_size = create_dropdown(sub_page, NULL, "Font Size", FONT_SIZE_OPTIONS, size_to_idx(local_param.editor_font_size), editor_font_size_cb);
+    register_subpage_group_obj(sub_page, dd_size);
+}
 
-    const char *size_options = "10\n12\n14\n16\n18\n20\n22\n24\n26\n28\n30\n32";
-    uint8_t size_idx = 2; // Default 14
-    if (local_param.editor_font_size >= 10 && local_param.editor_font_size <= 32) {
-        size_idx = (local_param.editor_font_size - 10) / 2;
-    }
-    lv_obj_t *dd_size = create_dropdown(sub_page, NULL, "Font Size", size_options, size_idx, editor_font_size_cb);
+static void build_subpage_journal_settings(lv_obj_t *menu, lv_obj_t *sub_page)
+{
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+    lv_obj_t *dd_face = create_dropdown(sub_page, NULL, "Font Face", FONT_FACE_OPTIONS, local_param.journal_font_index, journal_font_face_cb);
+    register_subpage_group_obj(sub_page, dd_face);
+    lv_obj_t *dd_size = create_dropdown(sub_page, NULL, "Font Size", FONT_SIZE_OPTIONS, size_to_idx(local_param.journal_font_size), journal_font_size_cb);
+    register_subpage_group_obj(sub_page, dd_size);
+}
+
+static void build_subpage_md_settings(lv_obj_t *menu, lv_obj_t *sub_page)
+{
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+    lv_obj_t *dd_face = create_dropdown(sub_page, NULL, "Font Face", FONT_FACE_OPTIONS, local_param.md_font_index, md_font_face_cb);
+    register_subpage_group_obj(sub_page, dd_face);
+    lv_obj_t *dd_size = create_dropdown(sub_page, NULL, "Font Size", FONT_SIZE_OPTIONS, size_to_idx(local_param.md_font_size), md_font_size_cb);
+    register_subpage_group_obj(sub_page, dd_size);
+}
+
+static void header_font_face_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.header_font_index = lv_dropdown_get_selected(obj);
+    lv_event_stop_processing(e);
+}
+
+static void header_font_size_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.header_font_size = 10 + lv_dropdown_get_selected(obj) * 2;
+    lv_event_stop_processing(e);
+}
+
+static void build_subpage_header_settings(lv_obj_t *menu, lv_obj_t *sub_page)
+{
+    lv_obj_set_style_pad_row(sub_page, 2, 0);
+    lv_obj_t *dd_face = create_dropdown(sub_page, NULL, "Font Face", FONT_FACE_OPTIONS, local_param.header_font_index, header_font_face_cb);
+    register_subpage_group_obj(sub_page, dd_face);
+    lv_obj_t *dd_size = create_dropdown(sub_page, NULL, "Font Size", FONT_SIZE_OPTIONS, size_to_idx(local_param.header_font_size), header_font_size_cb);
     register_subpage_group_obj(sub_page, dd_size);
 }
 
@@ -861,6 +930,36 @@ static lv_obj_t *create_subpage_editor_settings(lv_obj_t *menu, lv_obj_t *main_p
     style_menu_item_icon(cont, LV_SYMBOL_EDIT, "Editor Settings");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_user_data(sub_page, (void*)build_subpage_editor_settings);
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
+static lv_obj_t *create_subpage_journal_settings(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_LIST, "Journal Settings");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_journal_settings);
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
+static lv_obj_t *create_subpage_md_settings(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_FILE, "MD Viewer Settings");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_md_settings);
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
+static lv_obj_t *create_subpage_header_settings(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_BELL, "Header Settings");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)build_subpage_header_settings);
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
@@ -1247,6 +1346,18 @@ void ui_sys_enter(lv_obj_t *parent)
 
     // //! EDITOR SETTINGS
     cont = create_subpage_editor_settings(menu, main_page);
+    add_main_page_group_item(cont);
+
+    // //! JOURNAL SETTINGS
+    cont = create_subpage_journal_settings(menu, main_page);
+    add_main_page_group_item(cont);
+
+    // //! MD VIEWER SETTINGS
+    cont = create_subpage_md_settings(menu, main_page);
+    add_main_page_group_item(cont);
+
+    // //! HEADER SETTINGS
+    cont = create_subpage_header_settings(menu, main_page);
     add_main_page_group_item(cont);
 
     // //! STORAGE (internal vs SD + copy tool)

@@ -41,6 +41,7 @@ private:
     lv_obj_t* _statBattLabel = nullptr;
     lv_obj_t* _statMemLabel = nullptr;
     lv_obj_t* _statSDLabel = nullptr;
+    lv_obj_t* _statUSBLabel = nullptr;
     
     lv_group_t* _menuGroup = nullptr;
     lv_group_t* _appGroup = nullptr;

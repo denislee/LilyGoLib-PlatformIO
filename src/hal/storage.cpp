@@ -74,6 +74,46 @@ void hw_mount_sd()
 
 static bool filesystem_dirty = false;
 
+extern bool is_usb_msc_reading();
+extern bool is_usb_msc_writing();
+extern bool is_usb_msc_mounted();
+
+bool hw_is_usb_msc_reading() {
+#ifdef ARDUINO
+#if !ARDUINO_USB_MODE
+    return is_usb_msc_reading();
+#else
+    return false;
+#endif
+#else
+    return false;
+#endif
+}
+
+bool hw_is_usb_msc_writing() {
+#ifdef ARDUINO
+#if !ARDUINO_USB_MODE
+    return is_usb_msc_writing();
+#else
+    return false;
+#endif
+#else
+    return false;
+#endif
+}
+
+bool hw_is_usb_msc_mounted() {
+#ifdef ARDUINO
+#if !ARDUINO_USB_MODE
+    return is_usb_msc_mounted();
+#else
+    return false;
+#endif
+#else
+    return false;
+#endif
+}
+
 bool hw_get_filesystem_dirty() { return filesystem_dirty; }
 void hw_set_filesystem_dirty(bool dirty) { filesystem_dirty = dirty; }
 
@@ -240,6 +280,115 @@ bool hw_read_file(const char *path, std::string &content)
 #endif
 }
 
+size_t hw_get_file_size(const char *path)
+{
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    File f;
+    bool lock = false;
+    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
+    size_t size = 0;
+
+    if (is_sd) {
+        instance.lockSPI();
+        f = SD.open(str, FILE_READ);
+        if (f) {
+            lock = true;
+        } else {
+            instance.unlockSPI();
+        }
+    }
+
+    if (!f) {
+        f = FFat.open(str, FILE_READ);
+    }
+
+    if (f) {
+        size = f.size();
+        f.close();
+    }
+    if (lock) instance.unlockSPI();
+    return size;
+#else
+    return 1024;
+#endif
+}
+
+bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::string &content)
+{
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    File f;
+    bool lock = false;
+    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
+
+    if (is_sd) {
+        instance.lockSPI();
+        f = SD.open(str, FILE_READ);
+        if (f) {
+            lock = true;
+        } else {
+            instance.unlockSPI();
+        }
+    }
+
+    if (!f) {
+        f = FFat.open(str, FILE_READ);
+    }
+
+    if (!f) {
+        printf("Failed to open file for reading chunk: %s\n", str.c_str());
+        return false;
+    }
+
+    if (offset > f.size()) {
+        f.close();
+        if (lock) instance.unlockSPI();
+        return false;
+    }
+
+    f.seek(offset);
+    size_t available_size = f.size() - offset;
+    size_t read_size = (size < available_size) ? size : available_size;
+
+    content.resize(read_size);
+    if (read_size > 0) {
+        f.read((uint8_t *)&content[0], read_size);
+    }
+    f.close();
+    if (lock) instance.unlockSPI();
+    
+    // Attempt to slice content neatly at a space or newline so we don't cut words in half
+    // Only if we haven't reached the end of the file.
+    if (read_size == size && read_size > 0) {
+        int cut_pos = read_size - 1;
+        while (cut_pos > 0 && content[cut_pos] != ' ' && content[cut_pos] != '\n' && content[cut_pos] != '\r') {
+            cut_pos--;
+        }
+        if (cut_pos > (int)(size / 2)) {
+            // valid cut point
+            content.resize(cut_pos);
+        } else {
+            // If we couldn't find a space, at least ensure we don't cut a UTF-8 character
+            cut_pos = read_size - 1;
+            while (cut_pos > 0 && (content[cut_pos] & 0xC0) == 0x80) {
+                cut_pos--;
+            }
+            // cut_pos now points to the first byte of a multi-byte char, or a single-byte char
+            // To be safe, just cut before this multi-byte char if it might be incomplete
+            if (cut_pos > 0 && (content[cut_pos] & 0x80) != 0) {
+                content.resize(cut_pos);
+            }
+        }
+    }
+
+    return true;
+#else
+    content = "Dummy chunk content";
+    return true;
+#endif
+}
+
 bool hw_read_internal_file(const char *path, std::string &content)
 {
 #ifdef ARDUINO
@@ -375,6 +524,155 @@ void hw_get_sd_txt_files(std::vector<std::string> &list)
 #else
     list.push_back("sd1.txt");
     list.push_back("sd2.txt");
+#endif
+}
+
+void hw_get_sd_md_files(std::vector<std::string> &list)
+{
+    list.clear();
+#ifdef ARDUINO
+    if (HW_SD_ONLINE & hw_get_device_online()) {
+        std::vector<FileInfo> file_infos;
+        instance.lockSPI();
+        list_files(file_infos, SD, "/md", ".md");
+        instance.unlockSPI();
+
+        std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo & a, const FileInfo & b) {
+            if (a.time != b.time) return a.time > b.time;
+            return a.name > b.name;
+        });
+
+        for (const auto &fi : file_infos) {
+            list.push_back(fi.name);
+        }
+    }
+#else
+    list.push_back("/md/example1.md");
+    list.push_back("/md/example2.md");
+#endif
+}
+
+void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size_t>> &headers, bool (*progress_cb)(size_t, size_t))
+{
+    headers.clear();
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    File f;
+    bool lock = false;
+    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
+
+    if (is_sd) {
+        instance.lockSPI();
+        f = SD.open(str, FILE_READ);
+        if (f) {
+            lock = true;
+        } else {
+            instance.unlockSPI();
+        }
+    }
+
+    if (!f) {
+        f = FFat.open(str, FILE_READ);
+    }
+
+    if (!f) {
+        return;
+    }
+    
+    size_t total_size = f.size();
+
+    const size_t buf_size = 2048;
+    uint8_t *buf = (uint8_t *)malloc(buf_size);
+    if (!buf) {
+        f.close();
+        if (lock) instance.unlockSPI();
+        return;
+    }
+
+    size_t global_offset = 0;
+    std::string current_line;
+    current_line.reserve(128);
+    size_t line_start_offset = 0;
+    bool aborted = false;
+    bool in_code_block = false;
+    // Headers are detected from the line prefix; capture only what's needed to
+    // render (60 chars + ellipsis). Longer raw lines still advance scan state.
+    const size_t MAX_LINE_CAPTURE = 80;
+    bool line_truncated = false;
+
+    while (f.available()) {
+        size_t bytes_read = f.read(buf, buf_size);
+        if (bytes_read == 0) break;
+
+        for (size_t i = 0; i < bytes_read; i++) {
+            char c = buf[i];
+
+            if (c == '\n' || c == '\r') {
+                if (!current_line.empty()) {
+                    if (current_line.compare(0, 3, "```") == 0) {
+                        in_code_block = !in_code_block;
+                    } else if (!in_code_block) {
+                        bool is_hn = (current_line.compare(0, 14, "## [HN-TITLE] ") == 0);
+                        bool is_h1 = (!is_hn && current_line.compare(0, 2, "# ") == 0);
+                        if (is_hn || is_h1) {
+                            std::string header_title = is_hn ? current_line.substr(14) : current_line.substr(2);
+                            if (header_title.length() > 60) {
+                                header_title.resize(57);
+                                header_title += "...";
+                            }
+                            headers.push_back({header_title, line_start_offset});
+                        }
+                    }
+                    current_line.clear();
+                    line_truncated = false;
+                }
+            } else {
+                if (current_line.empty()) {
+                    line_start_offset = global_offset + i;
+                }
+                if (!line_truncated) {
+                    current_line += c;
+                    if (current_line.size() >= MAX_LINE_CAPTURE) line_truncated = true;
+                }
+            }
+        }
+        global_offset += bytes_read;
+
+        if (progress_cb) {
+            // Release SD SPI around the callback: it may run lv_timer_handler()
+            // and other tasks/timers that also acquire the bus.
+            if (lock) instance.unlockSPI();
+            bool keep_going = progress_cb(global_offset, total_size);
+            if (lock) instance.lockSPI();
+            if (!keep_going) {
+                aborted = true;
+                break;
+            }
+        }
+    }
+
+    if (!aborted && !current_line.empty() && !in_code_block) {
+        bool is_hn = (current_line.compare(0, 14, "## [HN-TITLE] ") == 0);
+        bool is_h1 = (!is_hn && current_line.compare(0, 2, "# ") == 0);
+        if (is_hn || is_h1) {
+            std::string header_title = is_hn ? current_line.substr(14) : current_line.substr(2);
+            if (header_title.length() > 60) {
+                header_title.resize(57);
+                header_title += "...";
+            }
+            headers.push_back({header_title, line_start_offset});
+        }
+    }
+
+    if (aborted) {
+        headers.clear();
+    }
+
+    free(buf);
+    f.close();
+    if (lock) instance.unlockSPI();
+#else
+    headers.push_back({"# Header 1", 0});
 #endif
 }
 
