@@ -1,6 +1,7 @@
 /**
  * @file      ui_file_browser.cpp
- * @brief     File browser with source selection and pagination.
+ * @brief     File browser with source selection, extension filter,
+ *            and folder listing.
  */
 #include "ui_define.h"
 #include "core/app_manager.h"
@@ -16,6 +17,32 @@ enum StorageSource {
     SOURCE_SD
 };
 
+enum FileFilter {
+    FILTER_TXT,      // show only .txt files (+ folders)
+    FILTER_NON_TXT,  // show every non-.txt file (+ folders)
+    FILTER_ALL       // show every file (+ folders)
+};
+
+static inline bool ends_with_ci(const std::string &s, const char *suffix)
+{
+    size_t n = strlen(suffix);
+    if (s.size() < n) return false;
+    for (size_t i = 0; i < n; ++i) {
+        char a = s[s.size() - n + i];
+        char b = suffix[i];
+        if (a >= 'A' && a <= 'Z') a = a - 'A' + 'a';
+        if (b >= 'A' && b <= 'Z') b = b - 'A' + 'a';
+        if (a != b) return false;
+    }
+    return true;
+}
+
+struct Entry {
+    std::string path;
+    bool is_dir;
+    uint32_t mtime;
+};
+
 static lv_obj_t *menu = NULL;
 static lv_obj_t *parent_obj = NULL;
 static lv_obj_t *file_list = NULL;
@@ -23,33 +50,58 @@ static lv_obj_t *quit_btn = NULL;
 static lv_obj_t *main_page = NULL;
 static lv_obj_t *src_btn_int = NULL;
 static lv_obj_t *src_btn_sd = NULL;
-static lv_obj_t *footer = NULL;
-static lv_obj_t *prev_btn = NULL;
-static lv_obj_t *next_btn = NULL;
-static lv_obj_t *page_label = NULL;
+static lv_obj_t *filter_btn_txt = NULL;
+static lv_obj_t *filter_btn_non_txt = NULL;
+static lv_obj_t *filter_btn_all = NULL;
 
 static StorageSource current_source = SOURCE_INTERNAL;
-static int current_page = 0;
-#define FILE_PAGE_SIZE 10
+static FileFilter current_filter = FILTER_TXT;
 
-static std::vector<std::string> all_files;
+static std::vector<Entry> all_entries;
+// Backing storage for button user_data — keeps c_str() stable while list is shown.
+static std::vector<std::string> path_store;
 
-static void load_files()
+static void load_entries()
 {
-    all_files.clear();
+    all_entries.clear();
+
+    std::vector<HwDirEntry> raw;
     if (current_source == SOURCE_INTERNAL) {
-        hw_get_internal_txt_files(all_files);
+        hw_list_internal_entries(raw, nullptr);
     } else {
-        hw_get_sd_txt_files(all_files);
+        hw_list_sd_entries(raw, nullptr);
     }
 
-    all_files.erase(std::remove_if(all_files.begin(), all_files.end(),
-                                   [](const std::string &s) {
-                                       return s == "tasks.txt" || s == "/tasks.txt";
-                                   }),
-                    all_files.end());
+    for (const auto &r : raw) {
+        // Hide tasks.txt bookkeeping file from the browser.
+        if (!r.is_dir && (r.path == "tasks.txt" || r.path == "/tasks.txt")) continue;
 
-    std::sort(all_files.begin(), all_files.end());
+        // Apply UI-side filter to files; folders are always shown.
+        if (!r.is_dir) {
+            bool is_txt = ends_with_ci(r.path, ".txt");
+            if (current_filter == FILTER_TXT && !is_txt) continue;
+            if (current_filter == FILTER_NON_TXT && is_txt) continue;
+        }
+        all_entries.push_back({r.path, r.is_dir, r.mtime});
+    }
+}
+
+static std::string format_mtime(uint32_t t)
+{
+    if (t == 0) return std::string("-");
+    time_t tt = (time_t)t;
+    struct tm info;
+#ifdef ARDUINO
+    localtime_r(&tt, &info);
+#else
+    struct tm *p = localtime(&tt);
+    if (!p) return std::string("-");
+    info = *p;
+#endif
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
+             info.tm_year + 1900, info.tm_mon + 1, info.tm_mday);
+    return std::string(buf);
 }
 
 static std::string display_name(const std::string &path)
@@ -73,7 +125,7 @@ static void file_click_cb(lv_event_t *e)
     ui_text_editor_open_file(path.c_str());
 }
 
-static void style_src_btn(lv_obj_t *btn, bool active)
+static void style_toggle_btn(lv_obj_t *btn, bool active)
 {
     if (!btn) return;
     if (active) {
@@ -93,93 +145,71 @@ static void refresh_ui()
 {
     if (!file_list) return;
     lv_obj_clean(file_list);
+    path_store.clear();
+    path_store.reserve(all_entries.size());
 
-    int total_files = (int)all_files.size();
-    int total_pages = (total_files + FILE_PAGE_SIZE - 1) / FILE_PAGE_SIZE;
-    if (total_pages < 1) total_pages = 1;
+    int total = (int)all_entries.size();
 
-    if (current_page >= total_pages) current_page = total_pages - 1;
-    if (current_page < 0) current_page = 0;
+    style_toggle_btn(src_btn_int,        current_source == SOURCE_INTERNAL);
+    style_toggle_btn(src_btn_sd,         current_source == SOURCE_SD);
+    style_toggle_btn(filter_btn_txt,     current_filter == FILTER_TXT);
+    style_toggle_btn(filter_btn_non_txt, current_filter == FILTER_NON_TXT);
+    style_toggle_btn(filter_btn_all,     current_filter == FILTER_ALL);
 
-    int start_idx = current_page * FILE_PAGE_SIZE;
-    int end_idx = std::min(start_idx + FILE_PAGE_SIZE, total_files);
-
-    style_src_btn(src_btn_int, current_source == SOURCE_INTERNAL);
-    style_src_btn(src_btn_sd,  current_source == SOURCE_SD);
-
-    if (total_files == 0) {
+    if (total == 0) {
         lv_obj_t *empty = lv_label_create(file_list);
-        lv_label_set_text(empty,
-            LV_SYMBOL_WARNING "  No text files found\n"
-            "Create a .txt file with the Editor.");
+        lv_label_set_text(empty, LV_SYMBOL_WARNING "  No items");
         lv_obj_set_style_text_color(empty, UI_COLOR_MUTED, 0);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(empty, LV_PCT(100));
         lv_obj_set_style_pad_all(empty, 16, 0);
     } else {
-        for (int i = start_idx; i < end_idx; ++i) {
-            const std::string &full = all_files[i];
-            std::string label = display_name(full);
-            lv_obj_t *btn = lv_list_add_btn(file_list, LV_SYMBOL_FILE, label.c_str());
-            lv_obj_set_user_data(btn, (void *)full.c_str());
-            lv_obj_add_event_cb(btn, file_click_cb, LV_EVENT_CLICKED, NULL);
+        // Pre-size path_store so c_str() pointers stay valid for user_data.
+        for (int i = 0; i < total; ++i) path_store.push_back(all_entries[i].path);
+
+        for (int i = 0; i < total; ++i) {
+            const Entry &ent = all_entries[i];
+            std::string label = display_name(ent.path);
+            const char *icon = ent.is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_FILE;
+            lv_obj_t *btn = lv_list_add_btn(file_list, icon, label.c_str());
+            lv_obj_set_user_data(btn, (void *)path_store[i].c_str());
+            if (!ent.is_dir) {
+                lv_obj_add_event_cb(btn, file_click_cb, LV_EVENT_CLICKED, NULL);
+            } else {
+                // Folder entries are shown but not navigable yet.
+                lv_obj_set_style_text_color(btn, UI_COLOR_MUTED, LV_PART_MAIN);
+            }
             lv_group_add_obj(lv_group_get_default(), btn);
 
             lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-            lv_obj_t *icon = lv_obj_get_child(btn, 0);
+            lv_obj_t *icon_obj = lv_obj_get_child(btn, 0);
             lv_obj_t *lbl = lv_obj_get_child(btn, 1);
-            if (icon) {
-                lv_obj_set_width(icon, 20);
-                lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
+            if (icon_obj) {
+                lv_obj_set_width(icon_obj, 20);
+                lv_obj_set_style_text_align(icon_obj, LV_TEXT_ALIGN_CENTER, 0);
             }
             if (lbl) {
                 lv_obj_set_width(lbl, 0);
                 lv_obj_set_flex_grow(lbl, 1);
                 lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
             }
+
+            // Trailing column: last-modified date (dirs without a meaningful
+            // timestamp show "-").
+            lv_obj_t *date_lbl = lv_label_create(btn);
+            std::string date_txt = format_mtime(ent.mtime);
+            lv_label_set_text(date_lbl, date_txt.c_str());
+            lv_obj_set_style_text_color(date_lbl, UI_COLOR_MUTED, 0);
+            lv_obj_set_style_text_font(date_lbl, get_small_font(), 0);
+            lv_obj_set_style_pad_left(date_lbl, 8, 0);
         }
     }
 
-    // Pagination footer: show only when there is more than one page.
-    bool multi_page = total_pages > 1;
     lv_obj_t *to_focus = NULL;
-
-    if (multi_page) {
-        lv_obj_remove_flag(footer, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(prev_btn, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(next_btn, LV_OBJ_FLAG_HIDDEN);
-
-        if (current_page == 0) {
-            lv_obj_add_state(prev_btn, LV_STATE_DISABLED);
-        } else {
-            lv_obj_remove_state(prev_btn, LV_STATE_DISABLED);
-        }
-        if (current_page >= total_pages - 1) {
-            lv_obj_add_state(next_btn, LV_STATE_DISABLED);
-        } else {
-            lv_obj_remove_state(next_btn, LV_STATE_DISABLED);
-        }
-
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d / %d", current_page + 1, total_pages);
-        lv_label_set_text(page_label, buf);
-
-        lv_group_remove_obj(prev_btn);
-        lv_group_remove_obj(next_btn);
-        lv_group_add_obj(lv_group_get_default(), prev_btn);
-        lv_group_add_obj(lv_group_get_default(), next_btn);
-    } else {
-        lv_obj_add_flag(footer, LV_OBJ_FLAG_HIDDEN);
-        lv_group_remove_obj(prev_btn);
-        lv_group_remove_obj(next_btn);
-    }
-
-    if (lv_obj_get_child_count(file_list) > 0) {
+    if (total > 0 && lv_obj_get_child_count(file_list) > 0) {
         to_focus = lv_obj_get_child(file_list, 0);
-        // Skip past the empty-state label, which isn't focusable.
-        if (total_files == 0) to_focus = NULL;
     }
     if (to_focus) {
         lv_group_focus_obj(to_focus);
@@ -193,27 +223,19 @@ static void source_click_cb(lv_event_t *e)
     StorageSource s = (StorageSource)(uintptr_t)lv_event_get_user_data(e);
     if (current_source != s) {
         current_source = s;
-        current_page = 0;
-        load_files();
+        load_entries();
     }
     refresh_ui();
 }
 
-static void prev_click_cb(lv_event_t *e)
+static void filter_click_cb(lv_event_t *e)
 {
-    if (current_page > 0) {
-        current_page--;
-        refresh_ui();
+    FileFilter f = (FileFilter)(uintptr_t)lv_event_get_user_data(e);
+    if (current_filter != f) {
+        current_filter = f;
+        load_entries();
     }
-}
-
-static void next_click_cb(lv_event_t *e)
-{
-    int total_pages = ((int)all_files.size() + FILE_PAGE_SIZE - 1) / FILE_PAGE_SIZE;
-    if (current_page < total_pages - 1) {
-        current_page++;
-        refresh_ui();
-    }
+    refresh_ui();
 }
 
 static void back_event_handler(lv_event_t *e)
@@ -231,40 +253,38 @@ static void exit_btn_cb(lv_event_t *e)
     menu_show();
 }
 
-static lv_obj_t *make_source_btn(lv_obj_t *parent, const char *icon, const char *txt, StorageSource src)
+static lv_obj_t *make_side_btn(lv_obj_t *parent, const char *icon, const char *txt,
+                               lv_event_cb_t cb, void *user_data)
 {
     lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_height(btn, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(btn, UI_RADIUS, LV_PART_MAIN);
-    lv_obj_set_style_pad_ver(btn, 2, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(btn, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(btn, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(btn, 6, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
 
     lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text_fmt(lbl, "%s %s", icon, txt);
-    lv_obj_center(lbl);
+    if (icon && icon[0]) {
+        lv_label_set_text_fmt(lbl, "%s %s", icon, txt);
+    } else {
+        lv_label_set_text(lbl, txt);
+    }
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(lbl, LV_PCT(100));
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
 
-    lv_obj_add_event_cb(btn, source_click_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)src);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
     lv_group_add_obj(lv_group_get_default(), btn);
     return btn;
 }
 
-static lv_obj_t *make_nav_btn(lv_obj_t *parent, const char *txt, lv_event_cb_t cb)
+static lv_obj_t *make_section_label(lv_obj_t *parent, const char *txt)
 {
-    lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_style_radius(btn, UI_RADIUS, LV_PART_MAIN);
-    lv_obj_set_style_pad_ver(btn, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(btn, 14, LV_PART_MAIN);
-    lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
-    lv_obj_set_style_text_color(btn, lv_palette_darken(LV_PALETTE_GREY, 3),
-                                LV_PART_MAIN | LV_STATE_DISABLED);
-
-    lv_obj_t *lbl = lv_label_create(btn);
+    lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, txt);
-    lv_obj_center(lbl);
-
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
-    return btn;
+    lv_obj_set_style_text_color(lbl, UI_COLOR_MUTED, 0);
+    return lbl;
 }
 
 void ui_file_browser_enter(lv_obj_t *parent)
@@ -284,67 +304,60 @@ void ui_file_browser_enter(lv_obj_t *parent)
     lv_obj_set_style_pad_all(main_page, 0, 0);
     lv_obj_set_style_pad_row(main_page, 6, 0);
 
-    // Back button lives on the status bar.
     ui_show_back_button(exit_btn_cb);
 
-    // Header row: source selector only (back button moved to status bar).
-    lv_obj_t *header = lv_obj_create(main_page);
-    lv_obj_set_size(header, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(header, 0, 0);
-    lv_obj_set_style_pad_column(header, 6, 0);
-    lv_obj_set_style_border_width(header, 0, 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    // Body: two frames side-by-side — left sidebar (controls), right file list.
+    lv_obj_t *body = lv_obj_create(main_page);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_flex_grow(body, 1);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_all(body, 0, 0);
+    lv_obj_set_style_pad_column(body, 6, 0);
+    lv_obj_set_style_border_width(body, 0, 0);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(body, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Source selector — segmented control, fills the header row.
-    lv_obj_t *src_bar = lv_obj_create(header);
-    lv_obj_set_flex_grow(src_bar, 1);
-    lv_obj_set_height(src_bar, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(src_bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(src_bar, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(src_bar, 2, 0);
-    lv_obj_set_style_pad_column(src_bar, 6, 0);
-    lv_obj_set_style_border_width(src_bar, 1, 0);
-    lv_obj_set_style_border_color(src_bar, UI_COLOR_MUTED, 0);
-    lv_obj_set_style_radius(src_bar, UI_RADIUS, 0);
-    lv_obj_set_style_bg_opa(src_bar, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(src_bar, LV_OBJ_FLAG_SCROLLABLE);
+    // Left sidebar: storage + filter stacked vertically.
+    lv_obj_t *sidebar = lv_obj_create(body);
+    lv_obj_set_width(sidebar, LV_PCT(22));
+    lv_obj_set_height(sidebar, LV_PCT(100));
+    lv_obj_set_flex_flow(sidebar, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(sidebar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(sidebar, 4, 0);
+    lv_obj_set_style_pad_row(sidebar, 3, 0);
+    lv_obj_set_style_border_width(sidebar, 1, 0);
+    lv_obj_set_style_border_color(sidebar, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_radius(sidebar, UI_RADIUS, 0);
+    lv_obj_set_style_bg_opa(sidebar, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_text_font(sidebar, get_small_font(), 0);
 
-    src_btn_int = make_source_btn(src_bar, LV_SYMBOL_DRIVE, "Internal", SOURCE_INTERNAL);
+    make_section_label(sidebar, "---");
+    src_btn_int = make_side_btn(sidebar, LV_SYMBOL_DRIVE, "Internal",
+                                source_click_cb, (void *)(uintptr_t)SOURCE_INTERNAL);
     if (sd_online) {
-        src_btn_sd = make_source_btn(src_bar, LV_SYMBOL_SD_CARD, "SD Card", SOURCE_SD);
+        src_btn_sd = make_side_btn(sidebar, LV_SYMBOL_SD_CARD, "SD Card",
+                                   source_click_cb, (void *)(uintptr_t)SOURCE_SD);
     } else {
         src_btn_sd = NULL;
     }
 
-    // File list — fills remaining space.
-    file_list = lv_list_create(main_page);
-    lv_obj_set_width(file_list, LV_PCT(100));
+    make_section_label(sidebar, "---");
+    filter_btn_txt = make_side_btn(sidebar, NULL, ".txt only",
+                                   filter_click_cb, (void *)(uintptr_t)FILTER_TXT);
+    filter_btn_non_txt = make_side_btn(sidebar, NULL, "No .txt",
+                                       filter_click_cb, (void *)(uintptr_t)FILTER_NON_TXT);
+    filter_btn_all = make_side_btn(sidebar, NULL, "All",
+                                   filter_click_cb, (void *)(uintptr_t)FILTER_ALL);
+
+    // Right side: file list.
+    file_list = lv_list_create(body);
     lv_obj_set_flex_grow(file_list, 1);
+    lv_obj_set_height(file_list, LV_PCT(100));
     lv_obj_set_style_radius(file_list, UI_RADIUS, 0);
     lv_obj_set_style_pad_all(file_list, 2, 0);
 
-    // Pagination footer — hidden unless >1 page.
-    footer = lv_obj_create(main_page);
-    lv_obj_set_size(footer, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(footer, 2, 0);
-    lv_obj_set_style_border_width(footer, 0, 0);
-    lv_obj_set_style_bg_opa(footer, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(footer, LV_OBJ_FLAG_SCROLLABLE);
-
-    prev_btn = make_nav_btn(footer, LV_SYMBOL_LEFT " Prev", prev_click_cb);
-
-    page_label = lv_label_create(footer);
-    lv_label_set_text(page_label, "1 / 1");
-    lv_obj_set_style_text_color(page_label, UI_COLOR_MUTED, 0);
-
-    next_btn = make_nav_btn(footer, "Next " LV_SYMBOL_RIGHT, next_click_cb);
-
-    load_files();
+    load_entries();
     refresh_ui();
 
     lv_menu_set_page(menu, main_page);
@@ -374,10 +387,11 @@ void ui_file_browser_exit(lv_obj_t *parent)
     main_page = NULL;
     src_btn_int = NULL;
     src_btn_sd = NULL;
-    footer = NULL;
-    prev_btn = NULL;
-    next_btn = NULL;
-    page_label = NULL;
+    filter_btn_txt = NULL;
+    filter_btn_non_txt = NULL;
+    filter_btn_all = NULL;
+    path_store.clear();
+    all_entries.clear();
 }
 
 } // namespace

@@ -527,6 +527,100 @@ void hw_get_sd_txt_files(std::vector<std::string> &list)
 #endif
 }
 
+#ifdef ARDUINO
+static void list_entries(std::vector<HwDirEntry> &list, fs::FS &fs,
+                         const char *dirname, const char *filter_ext)
+{
+    File root = fs.open(dirname);
+    if (!root || !root.isDirectory()) return;
+
+    bool has_filter = filter_ext && filter_ext[0] != '\0';
+    std::vector<HwDirEntry> dirs;
+    std::vector<HwDirEntry> files;
+
+    File entry = root.openNextFile();
+    while (entry) {
+        String name = entry.name();
+        if (entry.isDirectory()) {
+            dirs.push_back({std::string(name.c_str()), true, (uint32_t)entry.getLastWrite()});
+        } else {
+            if (!has_filter || name.endsWith(filter_ext)) {
+                files.push_back({std::string(name.c_str()), false, (uint32_t)entry.getLastWrite()});
+            }
+        }
+        entry.close();
+        entry = root.openNextFile();
+    }
+    root.close();
+
+    auto by_path = [](const HwDirEntry &a, const HwDirEntry &b) { return a.path < b.path; };
+    std::sort(dirs.begin(), dirs.end(), by_path);
+    std::sort(files.begin(), files.end(), by_path);
+
+    list.insert(list.end(), dirs.begin(), dirs.end());
+    list.insert(list.end(), files.begin(), files.end());
+}
+#endif
+
+void hw_list_internal_entries(std::vector<HwDirEntry> &list, const char *filter_ext)
+{
+    list.clear();
+#ifdef ARDUINO
+    list_entries(list, FFat, "/", filter_ext);
+#else
+    bool all = !(filter_ext && filter_ext[0]);
+    list.push_back({"/notes",         true,  1710000000});
+    list.push_back({"/drafts",        true,  1711000000});
+    list.push_back({"/internal1.txt", false, 1712000000});
+    list.push_back({"/internal2.txt", false, 1713000000});
+    if (all) {
+        list.push_back({"/readme.md", false, 1714000000});
+        list.push_back({"/data.bin",  false, 1715000000});
+    }
+#endif
+}
+
+void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext)
+{
+    list.clear();
+#ifdef ARDUINO
+    if (HW_SD_ONLINE & hw_get_device_online()) {
+        instance.lockSPI();
+        list_entries(list, SD, "/", filter_ext);
+        instance.unlockSPI();
+    }
+#else
+    bool all = !(filter_ext && filter_ext[0]);
+    list.push_back({"/md",      true,  1710500000});
+    list.push_back({"/photos",  true,  1711500000});
+    list.push_back({"/sd1.txt", false, 1712500000});
+    list.push_back({"/sd2.txt", false, 1713500000});
+    if (all) {
+        list.push_back({"/track.mp3", false, 1714500000});
+        list.push_back({"/image.jpg", false, 1715500000});
+    }
+#endif
+}
+
+uint32_t hw_count_internal_files()
+{
+#ifdef ARDUINO
+    uint32_t count = 0;
+    File root = FFat.open("/");
+    if (!root || !root.isDirectory()) return 0;
+    File entry = root.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory()) count++;
+        entry.close();
+        entry = root.openNextFile();
+    }
+    root.close();
+    return count;
+#else
+    return 4;
+#endif
+}
+
 void hw_get_sd_md_files(std::vector<std::string> &list)
 {
     list.clear();

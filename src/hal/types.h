@@ -203,6 +203,7 @@ typedef struct {
     uint8_t speaker_enable;
     uint8_t haptic_enable;
     uint8_t show_mem_usage;
+    uint8_t show_file_count;
     uint16_t cpu_freq_mhz;
     uint8_t storage_prefer_sd;
     uint8_t msc_prefer_sd;

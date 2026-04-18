@@ -303,6 +303,7 @@ void hw_load_setting()
     user_setting.speaker_enable = 0;
     user_setting.haptic_enable = 1;
     user_setting.show_mem_usage = 0;
+    user_setting.show_file_count = 0;
     user_setting.cpu_freq_mhz = 240;
     user_setting.storage_prefer_sd = 0;
     user_setting.msc_prefer_sd = 0;

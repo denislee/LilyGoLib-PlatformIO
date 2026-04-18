@@ -343,6 +343,19 @@ static void show_mem_usage_cb(lv_event_t *e)
     }
 }
 
+static void show_file_count_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        bool turnOn = lv_obj_has_state(obj, LV_STATE_CHECKED);
+        lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
+        local_param.show_file_count = turnOn;
+        hw_set_user_setting(local_param);
+        if (label) lv_label_set_text(label, turnOn ? " On " : " Off ");
+    }
+}
+
 static void spinbox_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -557,6 +570,9 @@ static void build_subpage_backlight(lv_obj_t *menu, lv_obj_t *sub_page)
     register_subpage_group_obj(sub_page, slider);
 
     lv_obj_t *btn = create_toggle_btn_row(sub_page, "Show Memory", local_param.show_mem_usage, show_mem_usage_cb);
+    register_subpage_group_obj(sub_page, btn);
+
+    btn = create_toggle_btn_row(sub_page, "Show File Count", local_param.show_file_count, show_file_count_cb);
     register_subpage_group_obj(sub_page, btn);
 }
 

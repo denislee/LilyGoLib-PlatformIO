@@ -102,6 +102,14 @@ void System::setupGlobalUI() {
     lv_obj_set_style_bg_opa(_statRightCont, LV_OPA_TRANSP, 0);
     lv_obj_remove_flag(_statRightCont, LV_OBJ_FLAG_SCROLLABLE);
 
+    // File-count indicator — added first so it sits at the leftmost position
+    // inside the right-side cluster; styled gray per spec.
+    _statFileCountLabel = lv_label_create(_statRightCont);
+    lv_obj_set_style_text_color(_statFileCountLabel, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_text_font(_statFileCountLabel, header_font, 0);
+    lv_label_set_text(_statFileCountLabel, "");
+    lv_obj_add_flag(_statFileCountLabel, LV_OBJ_FLAG_HIDDEN);
+
     _statSDLabel = lv_label_create(_statRightCont);
     lv_obj_set_style_text_color(_statSDLabel, UI_COLOR_ACCENT, 0);
     lv_obj_set_style_text_font(_statSDLabel, header_font, 0);
@@ -158,6 +166,9 @@ void System::setupGlobalUI() {
             lv_obj_set_style_text_font(self._statMemLabel, cur_font, 0);
             lv_obj_set_style_text_font(self._statSDLabel, cur_font, 0);
             lv_obj_set_style_text_font(self._statUSBLabel, cur_font, 0);
+            if (self._statFileCountLabel) {
+                lv_obj_set_style_text_font(self._statFileCountLabel, cur_font, 0);
+            }
             if (self._statBackBtn) {
                 lv_obj_t *back_lbl = lv_obj_get_child(self._statBackBtn, 0);
                 if (back_lbl) lv_obj_set_style_text_font(back_lbl, cur_font, 0);
@@ -220,6 +231,23 @@ void System::setupGlobalUI() {
 
         user_setting_params_t settings;
         hw_get_user_setting(settings);
+
+        // Internal file count — refreshed only every few ticks so the FFat
+        // walk stays cheap. Tick counter is local to this timer.
+        if (self._statFileCountLabel) {
+            if (settings.show_file_count) {
+                static uint8_t file_count_tick = 0;
+                static uint32_t cached_file_count = UINT32_MAX;
+                if (cached_file_count == UINT32_MAX || (file_count_tick++ % 5) == 0) {
+                    cached_file_count = hw_count_internal_files();
+                }
+                lv_label_set_text_fmt(self._statFileCountLabel, "%u", (unsigned)cached_file_count);
+                lv_obj_clear_flag(self._statFileCountLabel, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(self._statFileCountLabel, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+
         if (self._statMemLabel) {
             if (settings.show_mem_usage) {
                 uint32_t total, free_h;
