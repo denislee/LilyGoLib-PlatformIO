@@ -307,7 +307,9 @@ lv_obj_t *create_slider(lv_obj_t *parent, const char *icon, const char *txt, int
     lv_obj_t *obj = create_text(parent, icon, txt, LV_MENU_ITEM_BUILDER_VARIANT_2);
 
     lv_obj_t *slider = lv_slider_create(obj);
+    lv_obj_set_style_outline_width(slider, 0, 0);
     lv_obj_set_style_outline_width(slider, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(slider, 0, 0);
     lv_obj_set_style_border_width(slider, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_border_width(slider, 0, LV_STATE_FOCUSED);
     lv_obj_set_flex_grow(slider, 1);
@@ -329,7 +331,9 @@ lv_obj_t *create_switch(lv_obj_t *parent, const char *icon, const char *txt, boo
     lv_obj_t *obj = create_text(parent, icon, txt, LV_MENU_ITEM_BUILDER_VARIANT_1);
 
     lv_obj_t *sw = lv_switch_create(obj);
+    lv_obj_set_style_outline_width(sw, 0, 0);
     lv_obj_set_style_outline_width(sw, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(sw, 0, 0);
     lv_obj_set_style_border_width(sw, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_border_width(sw, 0, LV_STATE_FOCUSED);
     lv_obj_add_state(sw, chk ? LV_STATE_CHECKED : LV_STATE_DEFAULT);
@@ -370,8 +374,9 @@ lv_obj_t *create_dropdown(lv_obj_t *parent, const char *icon, const char *txt, c
     lv_dropdown_set_options(dd, options);
     lv_dropdown_set_selected(dd, default_sel);
 
-    lv_obj_add_event_cb(dd, child_focus_cb, LV_EVENT_FOCUSED, NULL);
-    lv_obj_add_event_cb(dd, child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+    // The dropdown already shows its own focus highlight via the theme,
+    // so don't propagate focus to the parent row — avoids a redundant
+    // selection bubble around the whole row.
 
     if (cb) {
         lv_obj_add_event_cb(dd, cb, LV_EVENT_VALUE_CHANGED, NULL);

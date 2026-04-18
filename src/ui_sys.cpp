@@ -1115,7 +1115,9 @@ static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool i
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE); 
     if (initial_state) lv_obj_add_state(btn, LV_STATE_CHECKED);
     
+    lv_obj_set_style_outline_width(btn, 0, 0);
     lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(btn, 0, 0);
     lv_obj_set_style_border_width(btn, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_bg_color(btn, UI_COLOR_ACCENT, LV_STATE_CHECKED);
     
@@ -1147,7 +1149,9 @@ static void build_subpage_storage(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_obj_add_flag(msc_btn, LV_OBJ_FLAG_CHECKABLE);
     bool msc_sd = local_param.msc_prefer_sd;
     if (msc_sd) lv_obj_add_state(msc_btn, LV_STATE_CHECKED);
+    lv_obj_set_style_outline_width(msc_btn, 0, 0);
     lv_obj_set_style_outline_width(msc_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(msc_btn, 0, 0);
     lv_obj_set_style_border_width(msc_btn, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_bg_color(msc_btn, UI_COLOR_ACCENT, LV_STATE_CHECKED);
     lv_obj_set_width(msc_btn, 60);
@@ -1169,10 +1173,13 @@ static void build_subpage_storage(lv_obj_t *menu, lv_obj_t *sub_page)
 
     lv_obj_t *copy_btn = lv_btn_create(copy_row);
     lv_obj_set_width(copy_btn, 60);
+    lv_obj_set_style_outline_width(copy_btn, 0, 0);
     lv_obj_set_style_outline_width(copy_btn, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_outline_width(copy_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(copy_btn, 0, 0);
     lv_obj_set_style_border_width(copy_btn, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_border_width(copy_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(copy_btn, 0, 0);
     lv_obj_set_style_shadow_width(copy_btn, 0, LV_STATE_FOCUSED);
     lv_obj_set_style_shadow_width(copy_btn, 0, LV_STATE_FOCUS_KEY);
 
@@ -1189,10 +1196,13 @@ static void build_subpage_storage(lv_obj_t *menu, lv_obj_t *sub_page)
 
     lv_obj_t *prune_btn = lv_btn_create(prune_row);
     lv_obj_set_width(prune_btn, 60);
+    lv_obj_set_style_outline_width(prune_btn, 0, 0);
     lv_obj_set_style_outline_width(prune_btn, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_outline_width(prune_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(prune_btn, 0, 0);
     lv_obj_set_style_border_width(prune_btn, 0, LV_STATE_FOCUS_KEY);
     lv_obj_set_style_border_width(prune_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(prune_btn, 0, 0);
     lv_obj_set_style_shadow_width(prune_btn, 0, LV_STATE_FOCUSED);
     lv_obj_set_style_shadow_width(prune_btn, 0, LV_STATE_FOCUS_KEY);
 

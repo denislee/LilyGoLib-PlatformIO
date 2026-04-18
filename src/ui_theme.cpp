@@ -36,15 +36,25 @@ static void new_theme_apply_cb(lv_theme_t * th, lv_obj_t * obj)
         lv_obj_check_type(obj, &lv_dropdown_class) ||
         lv_obj_check_type(obj, &lv_checkbox_class)) {
 
+        // Reserve border space in the default state (transparent) so that
+        // toggling focus only swaps the border color — the object's layout
+        // size never changes and sibling list items don't shift.
+        static lv_style_t default_border_style;
         static lv_style_t focus_style;
         static bool focus_inited = false;
         if (!focus_inited) {
+            lv_style_init(&default_border_style);
+            lv_style_set_border_width(&default_border_style, UI_BORDER_W);
+            lv_style_set_border_opa(&default_border_style, LV_OPA_TRANSP);
+
             lv_style_init(&focus_style);
             lv_style_set_border_width(&focus_style, UI_BORDER_W);
             lv_style_set_border_color(&focus_style, UI_COLOR_ACCENT);
+            lv_style_set_border_opa(&focus_style, LV_OPA_COVER);
             lv_style_set_outline_width(&focus_style, 0);
             focus_inited = true;
         }
+        lv_obj_add_style(obj, &default_border_style, LV_PART_MAIN);
         lv_obj_add_style(obj, &focus_style, LV_STATE_FOCUSED);
         lv_obj_add_style(obj, &focus_style, LV_STATE_FOCUS_KEY);
     }
