@@ -25,6 +25,7 @@ static lv_obj_t *main_page = NULL;
 static lv_obj_t *add_ta = NULL;
 static lv_obj_t *task_container = NULL;
 static lv_obj_t *quit_btn = NULL;
+static int32_t add_ta_expanded_h = 0;
 static vector<TaskItem> tasks;
 
 static const char *tasks_file_path = "/tasks.txt";
@@ -97,16 +98,20 @@ static void task_event_cb(lv_event_t *e) {
 static void set_add_ta_collapsed(lv_obj_t *ta, bool collapsed) {
     if (!ta) return;
     if (collapsed) {
+        if (add_ta_expanded_h == 0) {
+            lv_obj_update_layout(ta);
+            add_ta_expanded_h = lv_obj_get_height(ta);
+        }
         lv_obj_set_height(ta, 0);
         lv_obj_set_style_pad_ver(ta, 0, 0);
         lv_obj_set_style_border_width(ta, 0, 0);
         lv_obj_set_style_opa(ta, LV_OPA_TRANSP, 0);
     } else {
-        lv_obj_set_height(ta, LV_SIZE_CONTENT);
+        lv_obj_set_height(ta, add_ta_expanded_h > 0 ? add_ta_expanded_h : LV_SIZE_CONTENT);
         lv_obj_remove_local_style_prop(ta, LV_STYLE_PAD_TOP, 0);
         lv_obj_remove_local_style_prop(ta, LV_STYLE_PAD_BOTTOM, 0);
         lv_obj_remove_local_style_prop(ta, LV_STYLE_BORDER_WIDTH, 0);
-        lv_obj_set_style_opa(ta, LV_OPA_COVER, 0);
+        lv_obj_remove_local_style_prop(ta, LV_STYLE_OPA, 0);
     }
 }
 
@@ -378,6 +383,7 @@ void ui_tasks_exit(lv_obj_t *parent) {
     main_page = NULL;
     add_ta = NULL;
     task_container = NULL;
+    add_ta_expanded_h = 0;
     tasks.clear();
 }
 

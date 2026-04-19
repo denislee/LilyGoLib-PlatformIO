@@ -46,6 +46,7 @@ private:
     lv_obj_t* _statMemLabel = nullptr;
     lv_obj_t* _statSDLabel = nullptr;
     lv_obj_t* _statUSBLabel = nullptr;
+    lv_obj_t* _statBTLabel = nullptr;
     lv_obj_t* _statFileCountLabel = nullptr;
     lv_obj_t* _statRightCont = nullptr;
     lv_obj_t* _statBackBtn = nullptr;

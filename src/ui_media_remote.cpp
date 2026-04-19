@@ -16,6 +16,8 @@ namespace {
 static lv_obj_t *status_label = nullptr;
 static lv_obj_t *ble_switch = nullptr;
 static lv_obj_t *kb_switch = nullptr;
+static lv_obj_t *volume_btn = nullptr;
+static lv_obj_t *volume_label = nullptr;
 static lv_timer_t *status_timer = nullptr;
 static bool last_connected = false;
 static bool last_bt_enabled = false;
@@ -106,6 +108,65 @@ static void send_key_cb(lv_event_t *e)
     media_key_value_t key = (media_key_value_t)(intptr_t)lv_event_get_user_data(e);
     hw_feedback();
     hw_set_ble_key(key);
+}
+
+static bool volume_is_active()
+{
+    if (!volume_btn) return false;
+    lv_group_t *g = lv_obj_get_group(volume_btn);
+    return g && lv_group_get_editing(g) && lv_group_get_focused(g) == volume_btn;
+}
+
+static void refresh_volume_visual()
+{
+    if (!volume_btn || !volume_label) return;
+    bool active = volume_is_active();
+    if (active) {
+        lv_label_set_text(volume_label,
+            LV_SYMBOL_MINUS "  " LV_SYMBOL_VOLUME_MAX "  " LV_SYMBOL_PLUS);
+        lv_obj_set_style_bg_color(volume_btn, lv_color_hex(0x3a2200), 0);
+        lv_obj_set_style_border_opa(volume_btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(volume_btn, 2, 0);
+    } else {
+        lv_label_set_text(volume_label, LV_SYMBOL_VOLUME_MAX "  Volume");
+        lv_obj_set_style_bg_color(volume_btn, lv_color_hex(0x151515), 0);
+        lv_obj_set_style_border_opa(volume_btn, LV_OPA_40, 0);
+        lv_obj_set_style_border_width(volume_btn, 1, 0);
+    }
+}
+
+static void volume_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
+    lv_group_t *g = lv_obj_get_group(btn);
+    if (!g) return;
+
+    // Encoder press on a non-editable widget fires both LV_EVENT_KEY (ENTER)
+    // and LV_EVENT_CLICKED. Handle the toggle in CLICKED only (works for
+    // touch too) and ignore ENTER in the key branch to avoid double-toggle.
+    if (code == LV_EVENT_CLICKED) {
+        lv_group_set_editing(g, !lv_group_get_editing(g));
+        hw_feedback();
+        refresh_volume_visual();
+    } else if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        if (key == LV_KEY_ENTER) return;
+        if (!lv_group_get_editing(g)) return;
+        if (key == LV_KEY_RIGHT || key == LV_KEY_UP || key == LV_KEY_NEXT) {
+            hw_feedback();
+            hw_set_ble_key(MEDIA_VOLUME_UP);
+            lv_event_stop_processing(e);
+        } else if (key == LV_KEY_LEFT || key == LV_KEY_DOWN
+                   || key == LV_KEY_PREV) {
+            hw_feedback();
+            hw_set_ble_key(MEDIA_VOLUME_DOWN);
+            lv_event_stop_processing(e);
+        }
+    } else if (code == LV_EVENT_DEFOCUSED) {
+        lv_group_set_editing(g, false);
+        refresh_volume_visual();
+    }
 }
 
 static void back_btn_cb(lv_event_t *e)
@@ -252,20 +313,43 @@ static void ui_media_remote_enter(lv_obj_t *parent)
 
     // Transport row: prev / play-pause / next. lv_pct fills remaining space.
     lv_obj_t *row1 = make_btn_row(parent, 44);
-    lv_obj_t *first = make_key_button(row1, LV_SYMBOL_PREV,
-                                      MEDIA_PREVIOUS, grp);
-    make_key_button(row1, LV_SYMBOL_PLAY, MEDIA_PLAY_PAUSE, grp);
+    lv_obj_t *prev_btn = make_key_button(row1, LV_SYMBOL_PREV,
+                                         MEDIA_PREVIOUS, grp);
+    lv_obj_t *play_btn = make_key_button(row1,
+                                         LV_SYMBOL_PLAY " " LV_SYMBOL_PAUSE,
+                                         MEDIA_PLAY_PAUSE, grp);
     make_key_button(row1, LV_SYMBOL_NEXT, MEDIA_NEXT, grp);
 
-    // Volume row: down / up.
-    lv_obj_t *row2 = make_btn_row(parent, 38);
-    make_key_button(row2, LV_SYMBOL_VOLUME_MID " " LV_SYMBOL_MINUS,
-                    MEDIA_VOLUME_DOWN, grp);
-    make_key_button(row2, LV_SYMBOL_VOLUME_MAX " " LV_SYMBOL_PLUS,
-                    MEDIA_VOLUME_UP, grp);
+    // Volume: click to capture scroll wheel, rotate to send vol±, click again to release.
+    volume_btn = lv_btn_create(parent);
+    lv_obj_set_width(volume_btn, lv_pct(100));
+    lv_obj_set_height(volume_btn, 38);
+    lv_obj_set_style_radius(volume_btn, UI_RADIUS, 0);
+    lv_obj_set_style_bg_color(volume_btn, lv_color_hex(0x151515), 0);
+    lv_obj_set_style_bg_opa(volume_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(volume_btn, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_border_width(volume_btn, 1, 0);
+    lv_obj_set_style_border_opa(volume_btn, LV_OPA_40, 0);
+    lv_obj_set_style_border_width(volume_btn, 2, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_opa(volume_btn, LV_OPA_COVER, LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_color(volume_btn, lv_color_hex(0x2a1a00), LV_STATE_FOCUSED);
+
+    volume_label = lv_label_create(volume_btn);
+    lv_obj_set_style_text_color(volume_label, UI_COLOR_FG, 0);
+    lv_obj_set_style_text_font(volume_label, lv_theme_get_font_large(volume_label), 0);
+    lv_obj_center(volume_label);
+
+    lv_obj_add_event_cb(volume_btn, volume_event_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(volume_btn, volume_event_cb, LV_EVENT_KEY, nullptr);
+    lv_obj_add_event_cb(volume_btn, volume_event_cb, LV_EVENT_DEFOCUSED, nullptr);
+    if (grp) lv_group_add_obj(grp, volume_btn);
+    refresh_volume_visual();
 
     refresh_status();
-    if (grp && first) lv_group_focus_obj(first);
+    if (grp) {
+        lv_obj_t *focus = (last_connected && play_btn) ? play_btn : prev_btn;
+        if (focus) lv_group_focus_obj(focus);
+    }
 
     status_timer = lv_timer_create(status_timer_cb, 500, nullptr);
 }
@@ -279,9 +363,13 @@ static void ui_media_remote_exit(lv_obj_t *parent)
         status_timer = nullptr;
     }
     install_kb_forward(false);
+    lv_group_t *g = lv_group_get_default();
+    if (g) lv_group_set_editing(g, false);
     status_label = nullptr;
     ble_switch = nullptr;
     kb_switch = nullptr;
+    volume_btn = nullptr;
+    volume_label = nullptr;
 }
 
 class MediaRemoteApp : public core::App {

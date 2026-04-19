@@ -652,6 +652,7 @@ void hw_get_sd_md_files(std::vector<std::string> &list)
         std::vector<FileInfo> file_infos;
         instance.lockSPI();
         list_files(file_infos, SD, "/md", ".md");
+        list_files(file_infos, SD, "/md", ".txt");
         instance.unlockSPI();
 
         std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo & a, const FileInfo & b) {
@@ -717,6 +718,14 @@ void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size
     const size_t MAX_LINE_CAPTURE = 80;
     bool line_truncated = false;
 
+    // Plain .txt files don't use markdown headers. Instead, index lines that
+    // begin "N. " where N is the next expected post number (1, 2, 3, ...).
+    // Gating on monotonic numbering avoids matching numbered lists inside
+    // article bodies.
+    size_t plen = str.length();
+    bool is_txt = (plen >= 4 && str.substring(plen - 4).equalsIgnoreCase(".txt"));
+    int expected_post_num = 1;
+
     while (f.available()) {
         size_t bytes_read = f.read(buf, buf_size);
         if (bytes_read == 0) break;
@@ -726,7 +735,23 @@ void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size
 
             if (c == '\n' || c == '\r') {
                 if (!current_line.empty()) {
-                    if (current_line.compare(0, 3, "```") == 0) {
+                    if (is_txt) {
+                        size_t k = 0;
+                        while (k < current_line.size() && current_line[k] >= '0' && current_line[k] <= '9') ++k;
+                        if (k > 0 && k + 1 < current_line.size() &&
+                            current_line[k] == '.' && current_line[k + 1] == ' ') {
+                            int num = atoi(current_line.substr(0, k).c_str());
+                            if (num == expected_post_num) {
+                                std::string header_title = current_line.substr(k + 2);
+                                if (header_title.length() > 60) {
+                                    header_title.resize(57);
+                                    header_title += "...";
+                                }
+                                headers.push_back({header_title, line_start_offset});
+                                expected_post_num++;
+                            }
+                        }
+                    } else if (current_line.compare(0, 3, "```") == 0) {
                         in_code_block = !in_code_block;
                     } else if (!in_code_block) {
                         bool is_hn = (current_line.compare(0, 14, "## [HN-TITLE] ") == 0);

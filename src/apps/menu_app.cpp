@@ -19,14 +19,25 @@ struct HomeItem {
     lv_palette_t palette;
 };
 
+enum HomeItemId {
+    ITEM_EDITOR,
+    ITEM_TASKS,
+    ITEM_NOTES,
+    ITEM_JOURNAL,
+    ITEM_REMOTE,
+    ITEM_MARKDOWN,
+    ITEM_FILES,
+    ITEM_SETTINGS,
+};
+
 static const HomeItem kItems[] = {
-    {"Editor",   LV_SYMBOL_KEYBOARD,  "Editor",    LV_PALETTE_ORANGE},
-    {"Tasks",    LV_SYMBOL_OK,        "Tasks",     LV_PALETTE_GREEN},
-    {"Notes",    LV_SYMBOL_AUDIO,     "Notes",     LV_PALETTE_PURPLE},
-    {"Journal",  LV_SYMBOL_DIRECTORY, "Journal",   LV_PALETTE_CYAN},
-    {"Markdown", LV_SYMBOL_EYE_OPEN,  "MD Viewer", LV_PALETTE_BLUE},
-    {"Files",    LV_SYMBOL_FILE,      "Files",        LV_PALETTE_YELLOW},
+    {"Editor",   LV_SYMBOL_KEYBOARD,  "Editor",       LV_PALETTE_ORANGE},
+    {"Tasks",    LV_SYMBOL_OK,        "Tasks",        LV_PALETTE_GREEN},
+    {"Notes",    LV_SYMBOL_AUDIO,     "Notes",        LV_PALETTE_PURPLE},
+    {"Journal",  LV_SYMBOL_DIRECTORY, "Journal",      LV_PALETTE_CYAN},
     {"Remote",   LV_SYMBOL_BLUETOOTH, "Media Remote", LV_PALETTE_INDIGO},
+    {"Markdown", LV_SYMBOL_EYE_OPEN,  "MD Viewer",    LV_PALETTE_BLUE},
+    {"Files",    LV_SYMBOL_FILE,      "Files",        LV_PALETTE_YELLOW},
     {"Settings", LV_SYMBOL_SETTINGS,  "Settings",     LV_PALETTE_GREY},
 };
 constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
@@ -90,8 +101,22 @@ void MenuApp::onStart(lv_obj_t* parent) {
     const lv_font_t* label_font = get_home_font();
     lv_group_t* grp = lv_group_get_default();
 
-    for (int i = 0; i < kItemCount; i++) {
-        const HomeItem& item = kItems[i];
+    // Promote Remote to the first slot when a BLE HID host is already paired —
+    // otherwise keep it in its default position right after Journal.
+    int order[kItemCount];
+    if (hw_get_ble_kb_connected()) {
+        order[0] = ITEM_REMOTE;
+        int w = 1;
+        for (int i = 0; i < kItemCount; i++) {
+            if (i == ITEM_REMOTE) continue;
+            order[w++] = i;
+        }
+    } else {
+        for (int i = 0; i < kItemCount; i++) order[i] = i;
+    }
+
+    for (int oi = 0; oi < kItemCount; oi++) {
+        const HomeItem& item = kItems[order[oi]];
         lv_color_t accent = lv_palette_main(item.palette);
 
         lv_obj_t* tile = lv_btn_create(parent);

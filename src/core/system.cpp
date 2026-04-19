@@ -122,6 +122,12 @@ void System::setupGlobalUI() {
     lv_label_set_text(_statUSBLabel, LV_SYMBOL_USB);
     lv_obj_add_flag(_statUSBLabel, LV_OBJ_FLAG_HIDDEN);
 
+    _statBTLabel = lv_label_create(_statRightCont);
+    lv_obj_set_style_text_color(_statBTLabel, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_text_font(_statBTLabel, header_font, 0);
+    lv_label_set_text(_statBTLabel, LV_SYMBOL_BLUETOOTH);
+    lv_obj_add_flag(_statBTLabel, LV_OBJ_FLAG_HIDDEN);
+
     _statBattLabel = lv_label_create(_statRightCont);
     lv_obj_set_style_text_color(_statBattLabel, lv_color_white(), 0);
     lv_obj_set_style_text_font(_statBattLabel, header_font, 0);
@@ -166,6 +172,9 @@ void System::setupGlobalUI() {
             lv_obj_set_style_text_font(self._statMemLabel, cur_font, 0);
             lv_obj_set_style_text_font(self._statSDLabel, cur_font, 0);
             lv_obj_set_style_text_font(self._statUSBLabel, cur_font, 0);
+            if (self._statBTLabel) {
+                lv_obj_set_style_text_font(self._statBTLabel, cur_font, 0);
+            }
             if (self._statFileCountLabel) {
                 lv_obj_set_style_text_font(self._statFileCountLabel, cur_font, 0);
             }
@@ -212,6 +221,14 @@ void System::setupGlobalUI() {
         if (self._statSDLabel) {
             if (sd_online) lv_obj_clear_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
             else           lv_obj_add_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
+        }
+
+        if (self._statBTLabel) {
+            if (hw_get_ble_kb_connected()) {
+                lv_obj_clear_flag(self._statBTLabel, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(self._statBTLabel, LV_OBJ_FLAG_HIDDEN);
+            }
         }
 
         if (self._statUSBLabel) {
