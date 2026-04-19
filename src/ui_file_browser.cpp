@@ -110,6 +110,7 @@ static void load_entries()
 
     std::sort(all_entries.begin(), all_entries.end(),
               [](const Entry &a, const Entry &b) {
+                  if (a.is_dir != b.is_dir) return a.is_dir;
                   if (a.mtime != b.mtime) return a.mtime > b.mtime;
                   return a.path < b.path;
               });
@@ -169,7 +170,7 @@ static void file_click_cb(lv_event_t *e)
     if (path.empty()) return;
     if (path[0] != '/') path = "/" + path;
 
-    core::AppManager::getInstance().switchApp("Editor", parent_obj);
+    core::AppManager::getInstance().switchApp("Notes", parent_obj);
     ui_text_editor_open_file(path.c_str());
 }
 

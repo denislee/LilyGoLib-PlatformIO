@@ -1,5 +1,5 @@
 /**
- * @file      ui_sys.cpp
+ * @file      ui_settings.cpp
  * @author    Lewis He (lewishe@outlook.com)
  * @license   MIT
  * @copyright Copyright (c) 2025  ShenZhen XinYuan Electronic Technology Co., Ltd
@@ -996,11 +996,11 @@ static void build_subpage_fonts(lv_obj_t *menu, lv_obj_t *sub_page)
 
     add_font_section("Home",     local_param.home_font_index,    local_param.home_font_size,
                      home_font_face_cb,    home_font_size_cb);
-    add_font_section("Editor",   local_param.editor_font_index,  local_param.editor_font_size,
+    add_font_section("Notes",    local_param.editor_font_index,  local_param.editor_font_size,
                      editor_font_face_cb,  editor_font_size_cb);
     add_font_section("Journal",  local_param.journal_font_index, local_param.journal_font_size,
                      journal_font_face_cb, journal_font_size_cb);
-    add_font_section("Markdown", local_param.md_font_index,      local_param.md_font_size,
+    add_font_section("News",     local_param.md_font_index,      local_param.md_font_size,
                      md_font_face_cb,      md_font_size_cb);
     add_font_section("Header",   local_param.header_font_index,  local_param.header_font_size,
                      header_font_face_cb,  header_font_size_cb);

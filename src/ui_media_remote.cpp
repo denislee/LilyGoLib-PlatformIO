@@ -374,7 +374,7 @@ static void ui_media_remote_exit(lv_obj_t *parent)
 
 class MediaRemoteApp : public core::App {
 public:
-    MediaRemoteApp() : core::App("Media Remote") {}
+    MediaRemoteApp() : core::App("Remote") {}
     void onStart(lv_obj_t *parent) override {
         setRoot(parent);
         ui_media_remote_enter(parent);

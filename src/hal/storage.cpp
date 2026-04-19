@@ -644,15 +644,14 @@ uint32_t hw_count_internal_files()
 #endif
 }
 
-void hw_get_sd_md_files(std::vector<std::string> &list)
+void hw_get_sd_news_files(std::vector<std::string> &list)
 {
     list.clear();
 #ifdef ARDUINO
     if (HW_SD_ONLINE & hw_get_device_online()) {
         std::vector<FileInfo> file_infos;
         instance.lockSPI();
-        list_files(file_infos, SD, "/md", ".md");
-        list_files(file_infos, SD, "/md", ".txt");
+        list_files(file_infos, SD, "/news", ".txt");
         instance.unlockSPI();
 
         std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo & a, const FileInfo & b) {
@@ -665,12 +664,12 @@ void hw_get_sd_md_files(std::vector<std::string> &list)
         }
     }
 #else
-    list.push_back("/md/example1.md");
-    list.push_back("/md/example2.md");
+    list.push_back("/news/example1.txt");
+    list.push_back("/news/example2.txt");
 #endif
 }
 
-void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size_t>> &headers, bool (*progress_cb)(size_t, size_t))
+void hw_get_news_headers(const char *path, std::vector<std::pair<std::string, size_t>> &headers, bool (*progress_cb)(size_t, size_t))
 {
     headers.clear();
 #ifdef ARDUINO
@@ -696,7 +695,7 @@ void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size
     if (!f) {
         return;
     }
-    
+
     size_t total_size = f.size();
 
     const size_t buf_size = 2048;
@@ -709,22 +708,19 @@ void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size
 
     size_t global_offset = 0;
     std::string current_line;
-    current_line.reserve(128);
+    current_line.reserve(256);
     size_t line_start_offset = 0;
     bool aborted = false;
-    bool in_code_block = false;
-    // Headers are detected from the line prefix; capture only what's needed to
-    // render (60 chars + ellipsis). Longer raw lines still advance scan state.
-    const size_t MAX_LINE_CAPTURE = 80;
+    // Capture generously so long HN-style titles survive intact; the UI
+    // list truncates visually with long-mode scroll on focus.
+    const size_t MAX_LINE_CAPTURE = 256;
     bool line_truncated = false;
 
-    // Plain .txt files don't use markdown headers. Instead, index lines that
-    // begin "N. " where N is the next expected post number (1, 2, 3, ...).
-    // Gating on monotonic numbering avoids matching numbered lists inside
-    // article bodies.
-    size_t plen = str.length();
-    bool is_txt = (plen >= 4 && str.substring(plen - 4).equalsIgnoreCase(".txt"));
+    // A "N. " title is accepted only at a post boundary: file start, or
+    // immediately following a separator line of dashes (------). This avoids
+    // matching "1. foo" or similar patterns that appear inside article bodies.
     int expected_post_num = 1;
+    bool at_post_boundary = true;
 
     while (f.available()) {
         size_t bytes_read = f.read(buf, buf_size);
@@ -735,36 +731,34 @@ void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size
 
             if (c == '\n' || c == '\r') {
                 if (!current_line.empty()) {
-                    if (is_txt) {
+                    // Detect dash-separator line (3+ dashes, only dashes).
+                    bool is_separator = (current_line.size() >= 3);
+                    if (is_separator) {
+                        for (char lc : current_line) {
+                            if (lc != '-') { is_separator = false; break; }
+                        }
+                    }
+
+                    // Post 1 is always allowed (header/preamble lines before
+                    // it don't count as an article body). Posts 2+ require a
+                    // preceding dash separator to avoid matching stray
+                    // "N. text" inside an article.
+                    if (expected_post_num == 1 || at_post_boundary) {
                         size_t k = 0;
                         while (k < current_line.size() && current_line[k] >= '0' && current_line[k] <= '9') ++k;
                         if (k > 0 && k + 1 < current_line.size() &&
                             current_line[k] == '.' && current_line[k + 1] == ' ') {
                             int num = atoi(current_line.substr(0, k).c_str());
                             if (num == expected_post_num) {
-                                std::string header_title = current_line.substr(k + 2);
-                                if (header_title.length() > 60) {
-                                    header_title.resize(57);
-                                    header_title += "...";
-                                }
-                                headers.push_back({header_title, line_start_offset});
+                                headers.push_back({current_line.substr(k + 2), line_start_offset});
                                 expected_post_num++;
                             }
                         }
-                    } else if (current_line.compare(0, 3, "```") == 0) {
-                        in_code_block = !in_code_block;
-                    } else if (!in_code_block) {
-                        bool is_hn = (current_line.compare(0, 14, "## [HN-TITLE] ") == 0);
-                        bool is_h1 = (!is_hn && current_line.compare(0, 2, "# ") == 0);
-                        if (is_hn || is_h1) {
-                            std::string header_title = is_hn ? current_line.substr(14) : current_line.substr(2);
-                            if (header_title.length() > 60) {
-                                header_title.resize(57);
-                                header_title += "...";
-                            }
-                            headers.push_back({header_title, line_start_offset});
-                        }
                     }
+
+                    // Update boundary state for the NEXT non-empty line.
+                    at_post_boundary = is_separator;
+
                     current_line.clear();
                     line_truncated = false;
                 }
@@ -781,8 +775,6 @@ void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size
         global_offset += bytes_read;
 
         if (progress_cb) {
-            // Release SD SPI around the callback: it may run lv_timer_handler()
-            // and other tasks/timers that also acquire the bus.
             if (lock) instance.unlockSPI();
             bool keep_going = progress_cb(global_offset, total_size);
             if (lock) instance.lockSPI();
@@ -790,19 +782,6 @@ void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size
                 aborted = true;
                 break;
             }
-        }
-    }
-
-    if (!aborted && !current_line.empty() && !in_code_block) {
-        bool is_hn = (current_line.compare(0, 14, "## [HN-TITLE] ") == 0);
-        bool is_h1 = (!is_hn && current_line.compare(0, 2, "# ") == 0);
-        if (is_hn || is_h1) {
-            std::string header_title = is_hn ? current_line.substr(14) : current_line.substr(2);
-            if (header_title.length() > 60) {
-                header_title.resize(57);
-                header_title += "...";
-            }
-            headers.push_back({header_title, line_start_offset});
         }
     }
 
@@ -814,7 +793,8 @@ void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size
     f.close();
     if (lock) instance.unlockSPI();
 #else
-    headers.push_back({"# Header 1", 0});
+    headers.push_back({"Example title 1", 0});
+    headers.push_back({"Example title 2", 100});
 #endif
 }
 

@@ -23,7 +23,7 @@ static void deferred_switch_timer_cb(lv_timer_t *t)
 
     // Use the AppManager to handle the switch safely. 
     // This will call onStop() on the current app and onStart() on the Editor.
-    core::AppManager::getInstance().switchApp("Editor", app_panel);
+    core::AppManager::getInstance().switchApp("Notes", app_panel);
 
     if (isinMenu()) {
         menu_hidden();

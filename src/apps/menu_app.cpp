@@ -20,25 +20,25 @@ struct HomeItem {
 };
 
 enum HomeItemId {
-    ITEM_EDITOR,
-    ITEM_TASKS,
     ITEM_NOTES,
+    ITEM_TASKS,
+    ITEM_RECORDER,
     ITEM_JOURNAL,
     ITEM_REMOTE,
-    ITEM_MARKDOWN,
+    ITEM_NEWS,
     ITEM_FILES,
     ITEM_SETTINGS,
 };
 
 static const HomeItem kItems[] = {
-    {"Editor",   LV_SYMBOL_KEYBOARD,  "Editor",       LV_PALETTE_ORANGE},
-    {"Tasks",    LV_SYMBOL_OK,        "Tasks",        LV_PALETTE_GREEN},
-    {"Notes",    LV_SYMBOL_AUDIO,     "Notes",        LV_PALETTE_PURPLE},
-    {"Journal",  LV_SYMBOL_DIRECTORY, "Journal",      LV_PALETTE_CYAN},
-    {"Remote",   LV_SYMBOL_BLUETOOTH, "Media Remote", LV_PALETTE_INDIGO},
-    {"Markdown", LV_SYMBOL_EYE_OPEN,  "MD Viewer",    LV_PALETTE_BLUE},
-    {"Files",    LV_SYMBOL_FILE,      "Files",        LV_PALETTE_YELLOW},
-    {"Settings", LV_SYMBOL_SETTINGS,  "Settings",     LV_PALETTE_GREY},
+    {"Notes",    LV_SYMBOL_EDIT,      "Notes",    LV_PALETTE_ORANGE},
+    {"Tasks",    LV_SYMBOL_OK,        "Tasks",    LV_PALETTE_GREEN},
+    {"Recorder", LV_SYMBOL_AUDIO,     "Recorder", LV_PALETTE_PURPLE},
+    {"Journal",  LV_SYMBOL_BARS,      "Journal",  LV_PALETTE_CYAN},
+    {"Remote",   LV_SYMBOL_BLUETOOTH, "Remote",   LV_PALETTE_INDIGO},
+    {"News",     LV_SYMBOL_LIST,      "News",     LV_PALETTE_BLUE},
+    {"Files",    LV_SYMBOL_DIRECTORY, "Files",    LV_PALETTE_YELLOW},
+    {"Settings", LV_SYMBOL_SETTINGS,  "Settings", LV_PALETTE_GREY},
 };
 constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
 

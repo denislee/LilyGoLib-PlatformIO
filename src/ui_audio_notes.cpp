@@ -637,7 +637,7 @@ static void ui_notes_exit(lv_obj_t *parent)
 namespace apps {
 class AudioNotesApp : public core::App {
 public:
-    AudioNotesApp() : core::App("Notes") {}
+    AudioNotesApp() : core::App("Recorder") {}
     void onStart(lv_obj_t *parent) override { ui_notes_enter(parent); }
     void onStop() override {
         ui_notes_exit(getRoot());

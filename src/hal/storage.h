@@ -40,8 +40,8 @@ void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
 // Cheap non-allocating count of files (not directories) in the internal FFat
 // root. Intended for the status-bar indicator — does not recurse.
 uint32_t hw_count_internal_files();
-void hw_get_sd_md_files(std::vector<std::string> &list);
-void hw_get_md_headers(const char *path, std::vector<std::pair<std::string, size_t>> &headers, bool (*progress_cb)(size_t, size_t) = nullptr);
+void hw_get_sd_news_files(std::vector<std::string> &list);
+void hw_get_news_headers(const char *path, std::vector<std::pair<std::string, size_t>> &headers, bool (*progress_cb)(size_t, size_t) = nullptr);
 
 // Storage preference: when true, user-facing apps (editor, tasks) route
 // their reads/writes to the SD card. When false (default), they use internal

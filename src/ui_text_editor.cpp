@@ -331,7 +331,7 @@ void ui_text_editor_exit(lv_obj_t *parent)
 namespace {
 class TextEditorApp : public core::App {
 public:
-    TextEditorApp() : core::App("Editor") {}
+    TextEditorApp() : core::App("Notes") {}
     void onStart(lv_obj_t *parent) override { ui_text_editor_enter(parent); }
     void onStop() override {
         ui_text_editor_exit(getRoot());
