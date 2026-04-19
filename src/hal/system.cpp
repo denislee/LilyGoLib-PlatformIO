@@ -544,9 +544,11 @@ void hw_power_down_all()
     instance.powerControl(POWER_KEYBOARD, false);
     hw_disable_keyboard();
     // SD Card is left on to avoid mount/unmount overhead and potential filesystem issues
-    
-    // Lower CPU frequency to 40MHz for power saving during fake sleep
-    setCpuFrequencyMhz(40);
+
+    // Lower CPU frequency for power saving during fake sleep. BLE needs at
+    // least 80MHz — dropping to 40MHz while a BLE client is connected severs
+    // the link, so hold at 80MHz in that case.
+    setCpuFrequencyMhz(hw_get_ble_kb_connected() ? 80 : 40);
 #endif
 }
 

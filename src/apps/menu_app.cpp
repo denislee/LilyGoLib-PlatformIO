@@ -15,20 +15,19 @@ namespace {
 struct HomeItem {
     const char* label;
     const char* symbol;
-    const char* appName;    // nullptr means shutdown
+    const char* appName;
     lv_palette_t palette;
 };
 
-// Order is deliberate: most-used apps first, destructive action last.
 static const HomeItem kItems[] = {
     {"Editor",   LV_SYMBOL_KEYBOARD,  "Editor",    LV_PALETTE_ORANGE},
     {"Tasks",    LV_SYMBOL_OK,        "Tasks",     LV_PALETTE_GREEN},
     {"Notes",    LV_SYMBOL_AUDIO,     "Notes",     LV_PALETTE_PURPLE},
     {"Journal",  LV_SYMBOL_DIRECTORY, "Journal",   LV_PALETTE_CYAN},
     {"Markdown", LV_SYMBOL_EYE_OPEN,  "MD Viewer", LV_PALETTE_BLUE},
-    {"Files",    LV_SYMBOL_FILE,      "Files",     LV_PALETTE_YELLOW},
-    {"Settings", LV_SYMBOL_SETTINGS,  "Settings",  LV_PALETTE_GREY},
-    {"Power",    LV_SYMBOL_POWER,     nullptr,     LV_PALETTE_RED},
+    {"Files",    LV_SYMBOL_FILE,      "Files",        LV_PALETTE_YELLOW},
+    {"Remote",   LV_SYMBOL_BLUETOOTH, "Media Remote", LV_PALETTE_INDIGO},
+    {"Settings", LV_SYMBOL_SETTINGS,  "Settings",     LV_PALETTE_GREY},
 };
 constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
 
@@ -47,16 +46,11 @@ const lv_font_t* pick_icon_font(int32_t tile_h) {
 void tile_click_cb(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     const HomeItem* item = (const HomeItem*)lv_event_get_user_data(e);
-    if (!item) return;
+    if (!item || !item->appName) return;
     hw_feedback();
-    if (item->appName) {
-        core::System::getInstance().hideMenu();
-        core::AppManager::getInstance().switchApp(item->appName,
-            core::System::getInstance().getAppPanel());
-    } else {
-        lv_delay_ms(200);
-        hw_shutdown();
-    }
+    core::System::getInstance().hideMenu();
+    core::AppManager::getInstance().switchApp(item->appName,
+        core::System::getInstance().getAppPanel());
 }
 
 } // namespace

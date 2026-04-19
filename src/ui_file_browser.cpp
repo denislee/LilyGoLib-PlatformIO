@@ -12,6 +12,7 @@
 #include <algorithm>
 
 LV_FONT_DECLARE(lv_font_montserrat_14);
+LV_FONT_DECLARE(lv_font_montserrat_10);
 
 namespace {
 
@@ -44,6 +45,7 @@ struct Entry {
     std::string path;
     bool is_dir;
     uint32_t mtime;
+    uint32_t size;
 };
 
 static lv_obj_t *menu = NULL;
@@ -103,7 +105,7 @@ static void load_entries()
             if (current_filter == FILTER_TXT && !is_txt) continue;
             if (current_filter == FILTER_NON_TXT && is_txt) continue;
         }
-        all_entries.push_back({r.path, r.is_dir, r.mtime});
+        all_entries.push_back({r.path, r.is_dir, r.mtime, r.size});
     }
 
     std::sort(all_entries.begin(), all_entries.end(),
@@ -128,6 +130,23 @@ static std::string format_mtime(uint32_t t)
     char buf[16];
     snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
              info.tm_year + 1900, info.tm_mon + 1, info.tm_mday);
+    return std::string(buf);
+}
+
+static std::string format_size(uint32_t bytes)
+{
+    char buf[8];
+    if (bytes < 1024u) {
+        snprintf(buf, sizeof(buf), "%uB", (unsigned)bytes);
+    } else if (bytes < 1024u * 1024u) {
+        unsigned kb10 = (bytes * 10u + 512u) / 1024u;
+        if (kb10 < 100u) snprintf(buf, sizeof(buf), "%u.%uK", kb10 / 10u, kb10 % 10u);
+        else             snprintf(buf, sizeof(buf), "%uK", (bytes + 512u) / 1024u);
+    } else {
+        unsigned mb10 = (bytes * 10u + (1u << 19)) / (1u << 20);
+        if (mb10 < 100u) snprintf(buf, sizeof(buf), "%u.%uM", mb10 / 10u, mb10 % 10u);
+        else             snprintf(buf, sizeof(buf), "%uM", (bytes + (1u << 19)) / (1u << 20));
+    }
     return std::string(buf);
 }
 
@@ -252,13 +271,19 @@ static void refresh_ui()
                 lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
             }
 
-            // Trailing column: last-modified date (dirs without a meaningful
-            // timestamp show "-").
+            // Trailing columns: size (files only) then last-modified date.
+            if (!ent.is_dir) {
+                lv_obj_t *size_lbl = lv_label_create(btn);
+                lv_label_set_text(size_lbl, format_size(ent.size).c_str());
+                lv_obj_set_style_text_color(size_lbl, UI_COLOR_MUTED, 0);
+                lv_obj_set_style_text_font(size_lbl, &lv_font_montserrat_10, 0);
+                lv_obj_set_style_pad_left(size_lbl, 8, 0);
+            }
             lv_obj_t *date_lbl = lv_label_create(btn);
             std::string date_txt = format_mtime(ent.mtime);
             lv_label_set_text(date_lbl, date_txt.c_str());
             lv_obj_set_style_text_color(date_lbl, UI_COLOR_MUTED, 0);
-            lv_obj_set_style_text_font(date_lbl, get_small_font(), 0);
+            lv_obj_set_style_text_font(date_lbl, &lv_font_montserrat_10, 0);
             lv_obj_set_style_pad_left(date_lbl, 8, 0);
         }
     }

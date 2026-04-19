@@ -30,6 +30,7 @@ struct HwDirEntry {
     std::string path;
     bool is_dir;
     uint32_t mtime;
+    uint32_t size;  // bytes; 0 for directories
 };
 void hw_list_internal_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
                               const char *dirname = "/");

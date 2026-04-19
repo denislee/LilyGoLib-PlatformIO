@@ -21,6 +21,7 @@ std::shared_ptr<core::App> make_file_browser_app();
 std::shared_ptr<core::App> make_journal_app();
 std::shared_ptr<core::App> make_md_viewer_app();
 std::shared_ptr<core::App> make_audio_notes_app();
+std::shared_ptr<core::App> make_media_remote_app();
 
 void register_all();
 

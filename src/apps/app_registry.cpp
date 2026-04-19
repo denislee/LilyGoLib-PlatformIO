@@ -15,6 +15,7 @@ void register_all() {
     am.registerApp(make_journal_app());
     am.registerApp(make_md_viewer_app());
     am.registerApp(make_audio_notes_app());
+    am.registerApp(make_media_remote_app());
 }
 
 } // namespace apps

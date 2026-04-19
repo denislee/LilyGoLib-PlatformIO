@@ -137,9 +137,12 @@ void loop()
 
         static uint32_t last_freq = 0;
         if (ui_is_fake_sleep()) {
-            if (last_freq != 40) {
-                setCpuFrequencyMhz(40);
-                last_freq = 40;
+            // BLE needs ≥80MHz; hold there while a client is connected so the
+            // fake-sleep power saving doesn't drop the BT link.
+            uint32_t fake_sleep_freq = hw_get_ble_kb_connected() ? 80 : 40;
+            if (last_freq != fake_sleep_freq) {
+                setCpuFrequencyMhz(fake_sleep_freq);
+                last_freq = fake_sleep_freq;
             }
         } else {
             uint32_t inactive_time = lv_display_get_inactive_time(NULL);

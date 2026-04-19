@@ -811,6 +811,28 @@ static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
     return cont;
 }
 
+static void power_off_click_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    hw_feedback();
+    lv_delay_ms(200);
+    hw_shutdown();
+}
+
+static lv_obj_t *create_power_off_item(lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    style_menu_item_icon(cont, LV_SYMBOL_POWER, "Power Off");
+    lv_obj_t *icon_label = lv_obj_get_child(cont, 0);
+    if (icon_label) {
+        lv_obj_set_style_text_color(icon_label,
+                                    lv_palette_main(LV_PALETTE_RED), 0);
+    }
+    lv_obj_add_event_cb(cont, power_off_click_cb, LV_EVENT_CLICKED, NULL);
+    return cont;
+}
+
 
 typedef void (*subpage_builder_t)(lv_obj_t *menu, lv_obj_t *page);
 
@@ -1393,10 +1415,20 @@ void ui_sys_enter(lv_obj_t *parent)
     cont = create_subpage_performance(menu, main_page);  add_grid_item(cont);
     cont = create_subpage_info(menu, main_page);         add_grid_item(cont);
     cont = create_device_probe(menu, main_page);         add_grid_item(cont);
+    cont = create_power_off_item(main_page);             add_grid_item(cont);
 
     settings_main_page = main_page;
     lv_menu_set_page(menu, main_page);
     lv_obj_add_event_cb(menu, settings_page_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    // Without this the encoder has no focus anchor on the very first entry
+    // (the menu tiles that used to hold focus were just cleaned up by
+    // switchApp), so rotation does nothing until something is touched.
+    if (main_page_group_count > 0) {
+        lv_group_focus_obj(main_page_group_items[0]);
+    } else if (settings_exit_btn) {
+        lv_group_focus_obj(settings_exit_btn);
+    }
 
 #ifdef USING_TOUCHPAD
     quit_btn = create_floating_button([](lv_event_t *e) {

@@ -94,12 +94,32 @@ static void task_event_cb(lv_event_t *e) {
     }
 }
 
+static void set_add_ta_collapsed(lv_obj_t *ta, bool collapsed) {
+    if (!ta) return;
+    if (collapsed) {
+        lv_obj_set_height(ta, 0);
+        lv_obj_set_style_pad_ver(ta, 0, 0);
+        lv_obj_set_style_border_width(ta, 0, 0);
+        lv_obj_set_style_opa(ta, LV_OPA_TRANSP, 0);
+    } else {
+        lv_obj_set_height(ta, LV_SIZE_CONTENT);
+        lv_obj_remove_local_style_prop(ta, LV_STYLE_PAD_TOP, 0);
+        lv_obj_remove_local_style_prop(ta, LV_STYLE_PAD_BOTTOM, 0);
+        lv_obj_remove_local_style_prop(ta, LV_STYLE_BORDER_WIDTH, 0);
+        lv_obj_set_style_opa(ta, LV_OPA_COVER, 0);
+    }
+}
+
 static void add_ta_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *ta = (lv_obj_t *)lv_event_get_target(e);
     lv_group_t *g = (lv_group_t *)lv_obj_get_group(ta);
 
-    if (code == LV_EVENT_CLICKED) {
+    if (code == LV_EVENT_FOCUSED) {
+        set_add_ta_collapsed(ta, false);
+    } else if (code == LV_EVENT_DEFOCUSED) {
+        set_add_ta_collapsed(ta, true);
+    } else if (code == LV_EVENT_CLICKED) {
         // Ensure focus but explicitly stay out of editing mode
         lv_group_focus_obj(ta);
         lv_group_set_editing(g, false);

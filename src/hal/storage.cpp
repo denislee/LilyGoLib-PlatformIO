@@ -545,10 +545,10 @@ static void list_entries(std::vector<HwDirEntry> &list, fs::FS &fs,
         int slash = name.lastIndexOf('/');
         if (slash >= 0) name = name.substring(slash + 1);
         if (entry.isDirectory()) {
-            dirs.push_back({std::string(name.c_str()), true, (uint32_t)entry.getLastWrite()});
+            dirs.push_back({std::string(name.c_str()), true, (uint32_t)entry.getLastWrite(), 0u});
         } else {
             if (!has_filter || name.endsWith(filter_ext)) {
-                files.push_back({std::string(name.c_str()), false, (uint32_t)entry.getLastWrite()});
+                files.push_back({std::string(name.c_str()), false, (uint32_t)entry.getLastWrite(), (uint32_t)entry.size()});
             }
         }
         entry.close();
@@ -576,19 +576,19 @@ void hw_list_internal_entries(std::vector<HwDirEntry> &list, const char *filter_
     bool all = !(filter_ext && filter_ext[0]);
     bool at_root = (strcmp(dirname, "/") == 0);
     if (at_root) {
-        list.push_back({"notes",         true,  1710000000});
-        list.push_back({"drafts",        true,  1711000000});
-        list.push_back({"internal1.txt", false, 1712000000});
-        list.push_back({"internal2.txt", false, 1713000000});
+        list.push_back({"notes",         true,  1710000000, 0u});
+        list.push_back({"drafts",        true,  1711000000, 0u});
+        list.push_back({"internal1.txt", false, 1712000000, 256u});
+        list.push_back({"internal2.txt", false, 1713000000, 4096u});
         if (all) {
-            list.push_back({"readme.md", false, 1714000000});
-            list.push_back({"data.bin",  false, 1715000000});
+            list.push_back({"readme.md", false, 1714000000, 1536u});
+            list.push_back({"data.bin",  false, 1715000000, 1572864u});
         }
     } else if (strcmp(dirname, "/notes") == 0) {
-        list.push_back({"hello.txt",  false, 1712100000});
-        list.push_back({"ideas.txt",  false, 1712200000});
+        list.push_back({"hello.txt",  false, 1712100000, 42u});
+        list.push_back({"ideas.txt",  false, 1712200000, 812u});
     } else if (strcmp(dirname, "/drafts") == 0) {
-        list.push_back({"wip.txt",    false, 1711100000});
+        list.push_back({"wip.txt",    false, 1711100000, 128u});
     }
 #endif
 }
@@ -608,19 +608,19 @@ void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
     bool all = !(filter_ext && filter_ext[0]);
     bool at_root = (strcmp(dirname, "/") == 0);
     if (at_root) {
-        list.push_back({"md",      true,  1710500000});
-        list.push_back({"photos",  true,  1711500000});
-        list.push_back({"sd1.txt", false, 1712500000});
-        list.push_back({"sd2.txt", false, 1713500000});
+        list.push_back({"md",      true,  1710500000, 0u});
+        list.push_back({"photos",  true,  1711500000, 0u});
+        list.push_back({"sd1.txt", false, 1712500000, 320u});
+        list.push_back({"sd2.txt", false, 1713500000, 2048u});
         if (all) {
-            list.push_back({"track.mp3", false, 1714500000});
-            list.push_back({"image.jpg", false, 1715500000});
+            list.push_back({"track.mp3", false, 1714500000, 4194304u});
+            list.push_back({"image.jpg", false, 1715500000, 524288u});
         }
     } else if (strcmp(dirname, "/md") == 0) {
-        list.push_back({"note1.md", false, 1710600000});
-        list.push_back({"note2.md", false, 1710700000});
+        list.push_back({"note1.md", false, 1710600000, 640u});
+        list.push_back({"note2.md", false, 1710700000, 1280u});
     } else if (strcmp(dirname, "/photos") == 0) {
-        list.push_back({"pic1.jpg", false, 1711600000});
+        list.push_back({"pic1.jpg", false, 1711600000, 262144u});
     }
 #endif
 }

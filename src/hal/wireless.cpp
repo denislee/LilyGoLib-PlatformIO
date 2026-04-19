@@ -4,6 +4,7 @@
  */
 #include "wireless.h"
 #include "internal.h"
+#include "board_config.h"
 
 #ifdef ARDUINO
 #include <LilyGoLib.h>
@@ -189,14 +190,14 @@ size_t hw_get_ble_message(char *buffer, size_t buffer_size)
 
 const char *hw_get_ble_kb_name()
 {
-    return "Keyboard";
+    return "lilygo-pager";
 }
 
 void hw_set_ble_kb_enable()
 {
 #if defined(ARDUINO) && defined(USING_BLE_KEYBOARD)
 #ifdef CONFIG_BLE_KEYBOARD
-    bleKeyboard.setName("Keyboard");
+    bleKeyboard.setName("lilygo-pager");
     bleKeyboard.begin();
 #endif
 #endif
