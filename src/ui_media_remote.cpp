@@ -347,7 +347,9 @@ static void ui_media_remote_enter(lv_obj_t *parent)
 
     refresh_status();
     if (grp) {
-        lv_obj_t *focus = (last_connected && play_btn) ? play_btn : prev_btn;
+        lv_obj_t *focus = last_connected ? play_btn
+                        : (!last_bt_enabled && ble_switch) ? ble_switch
+                        : prev_btn;
         if (focus) lv_group_focus_obj(focus);
     }
 

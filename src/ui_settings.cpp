@@ -194,6 +194,18 @@ static long map_r(long x, long in_min, long in_max, long out_min, long out_max)
 }
 
 
+static void invert_scroll_key_cb(lv_event_t *e)
+{
+    lv_indev_t *indev = lv_indev_get_act();
+    if (!indev || lv_indev_get_type(indev) != LV_INDEV_TYPE_ENCODER) return;
+    uint32_t *key = (uint32_t *)lv_event_get_param(e);
+    if (!key) return;
+    switch (*key) {
+    case LV_KEY_LEFT:  *key = LV_KEY_RIGHT; break;
+    case LV_KEY_RIGHT: *key = LV_KEY_LEFT;  break;
+    }
+}
+
 static void display_brightness_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
@@ -457,6 +469,8 @@ static void build_subpage_datetime(lv_obj_t *menu, lv_obj_t *sub_page)
         lv_spinbox_set_value(sb, val);
         lv_obj_set_width(sb, digits == 4 ? 70 : 50);
         lv_obj_add_event_cb(sb, spinbox_event_cb, LV_EVENT_ALL, NULL);
+        lv_obj_add_event_cb(sb, invert_scroll_key_cb,
+                            (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS), NULL);
         register_subpage_group_obj(sub_page, sb);
         return sb;
     };
@@ -534,10 +548,14 @@ static void build_subpage_backlight(lv_obj_t *menu, lv_obj_t *sub_page)
 
     add_slider("Screen", min_brightness, max_brightness,
                local_param.brightness_level, display_brightness_cb, "%d%%");
+    lv_obj_add_event_cb(slider, invert_scroll_key_cb,
+                        (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS), NULL);
 
     if (hw_has_keyboard()) {
         add_slider("Keyboard", 0, 255,
                    local_param.keyboard_bl_level, keyboard_brightness_cb, "%d%%");
+        lv_obj_add_event_cb(slider, invert_scroll_key_cb,
+                            (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS), NULL);
     }
 
     if (hw_has_indicator_led()) {
@@ -556,6 +574,8 @@ static void build_subpage_backlight(lv_obj_t *menu, lv_obj_t *sub_page)
     }
     lv_obj_set_user_data(slider, slider_label);
     register_subpage_group_obj(sub_page, slider);
+    lv_obj_add_event_cb(slider, invert_scroll_key_cb,
+                        (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS), NULL);
 
     slider = create_slider(sub_page, NULL, "Sleep Mode", 0, 1,
                            local_param.sleep_mode, sleep_mode_cb, LV_EVENT_VALUE_CHANGED);
@@ -612,6 +632,8 @@ static void build_subpage_otg(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_label_set_text_fmt(slider_label, "%umA", local_param.charger_current);
     lv_obj_set_user_data(slider, slider_label);
     register_subpage_group_obj(sub_page, slider);
+    lv_obj_add_event_cb(slider, invert_scroll_key_cb,
+                        (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS), NULL);
 
     btn = create_toggle_btn_row(sub_page, "Limit 80%", local_param.charge_limit_en, charge_limit_cb);
     register_subpage_group_obj(sub_page, btn);
