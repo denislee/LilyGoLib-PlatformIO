@@ -1105,6 +1105,8 @@ static lv_obj_t *create_files_item(lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
     lv_obj_add_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     style_menu_item_icon(cont, LV_SYMBOL_DIRECTORY, "Files");
     lv_obj_add_event_cb(cont, files_click_cb, LV_EVENT_CLICKED, NULL);
     return cont;
@@ -1122,6 +1124,8 @@ static lv_obj_t *create_power_off_item(lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
     lv_obj_add_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     style_menu_item_icon(cont, LV_SYMBOL_POWER, "Power Off");
     lv_obj_t *icon_label = lv_obj_get_child(cont, 0);
     if (icon_label) {

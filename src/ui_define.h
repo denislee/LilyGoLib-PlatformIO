@@ -85,8 +85,6 @@ void theme_init();
 void disable_input_devices();
 void enable_input_devices();
 
-void set_low_power_mode_flag(bool enable);
-
 void disable_keyboard();
 void enable_keyboard();
 

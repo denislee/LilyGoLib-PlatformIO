@@ -16,14 +16,10 @@ static void msgbox_event(lv_event_t *e)
     printf("msgbox event destroy\n");
     destroy_msgbox(msgbox);
     msgbox = NULL;
-    set_low_power_mode_flag(true);
 }
 
 void ui_msg_pop_up(const char *title_txt, const char *msg_txt)
 {
-
-    set_low_power_mode_flag(false);
-
     static const char *btns[] = {"Close", ""};
     if (msgbox) {
         printf("msg box has create!\n");
@@ -89,8 +85,6 @@ static void _ui_process_bar_cb(lv_timer_t*t)
                 break;
             }
         }
-
-        set_low_power_mode_flag(true);
 
         return ;
     }
