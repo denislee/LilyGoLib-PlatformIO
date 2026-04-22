@@ -1,240 +1,89 @@
 /**
  * @file      hw_sx1262.cpp
- * @author    Lewis He (lewishe@outlook.com)
- * @license   MIT
- * @copyright Copyright (c) 2025  ShenZhen XinYuan Electronic Technology Co., Ltd
- * @date      2025-04-24
+ * @brief     SX1262 (sub-GHz LoRa) — per-chip programming.
  *
+ * The shared ISR/event-group/TX/RX/listening logic lives in
+ * hal/radio_common.cpp; this file only owns the chip-specific pieces:
+ * RadioLib `radio.set*()` calls, mode entry, default params, and the
+ * frequency/bandwidth/power option tables exposed via `radio_get_*_list`.
  */
 
 #include "hal_interface.h"
+#include "hal/radio_chip.h"
 
 #ifdef ARDUINO_LILYGO_LORA_SX1262
 
 #ifdef ARDUINO
 #include <LilyGoLib.h>
-
-static EventGroupHandle_t radioEvent = NULL;
-static uint32_t last_send_millis = 0;
-
-#define LORA_ISR_FLAG                  _BV(0)
-
-static void hw_radio_isr()
-{
-    BaseType_t xHigherPriorityTaskWoken, xResult;
-    xHigherPriorityTaskWoken = pdFALSE;
-    xResult = xEventGroupSetBitsFromISR(
-                  radioEvent,
-                  LORA_ISR_FLAG,
-                  &xHigherPriorityTaskWoken);
-    if ( xResult == pdPASS ) {
-        portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
-    }
-}
-
-void hw_radio_begin()
-{
-    radioEvent = xEventGroupCreate();
-
-    // Radio  register isr event
-    radio.setPacketSentAction(hw_radio_isr);
-}
 #endif
 
-int16_t hw_set_radio_params(radio_params_t &params)
-{
-    RADIO_LOG("Set radio params:\n");
-    RADIO_LOG("Frequency:%.2f MHz\n", params.freq);
-    RADIO_LOG("Bandwidth:%.2f KHz\n", params.bandwidth);
-    RADIO_LOG("TxPower:%u dBm\n", params.power);
-    RADIO_LOG("Interval:%u ms\n", params.interval);
-    RADIO_LOG("CR:%u \n", params.cr);
-    RADIO_LOG("SF:%u \n", params.sf);
-    RADIO_LOG("SyncWord:%u \n", params.syncWord);
-    RADIO_LOG("Mode: ");
-    switch (params.mode) {
-    case RADIO_DISABLE:
-        RADIO_LOG("RADIO_DISABLE\n");
-        break;
-    case RADIO_TX:
-        RADIO_LOG("RADIO_TX\n");
-        break;
-    case RADIO_RX:
-        RADIO_LOG("RADIO_RX\n");
-        break;
-    case RADIO_CW:
-        RADIO_LOG("RADIO_CW\n");
-        break;
-    default:
-        break;
-    }
+namespace radio_chip {
 
+void default_params(radio_params_t &params)
+{
+    params.bandwidth = 125.0;
+    params.freq      = RADIO_DEFAULT_FREQUENCY;
+    params.cr        = 5;
+    params.isRunning = false;
+    params.mode      = RADIO_DISABLE;
+    params.sf        = 12;
+    params.power     = 22;
+    params.interval  = 3000;
+    params.syncWord  = 0xCD;
+}
+
+int16_t configure(const radio_params_t &params)
+{
 #ifdef ARDUINO
-    int16_t state = 0;
-    instance.lockSPI();
-    state = radio.setFrequency(params.freq);
+    int16_t state = radio.setFrequency(params.freq);
     if (state == RADIOLIB_ERR_INVALID_FREQUENCY) {
         Serial.println(F("Selected frequency is invalid for this module!"));
     }
-    // set bandwidth
     state = radio.setBandwidth(params.bandwidth);
     if (state == RADIOLIB_ERR_INVALID_BANDWIDTH) {
         Serial.println(F("Selected bandwidth is invalid for this module!"));
     }
-    // set spreading factor
     state = radio.setSpreadingFactor(params.sf);
-    if ( state == RADIOLIB_ERR_INVALID_SPREADING_FACTOR) {
+    if (state == RADIOLIB_ERR_INVALID_SPREADING_FACTOR) {
         Serial.println(F("Selected spreading factor is invalid for this module!"));
     }
-    // set coding rate
     state = radio.setCodingRate(params.cr);
     if (state == RADIOLIB_ERR_INVALID_CODING_RATE) {
         Serial.println(F("Selected coding rate is invalid for this module!"));
     }
-    // set LoRa sync word
     state = radio.setSyncWord(params.syncWord);
-    if (state  != RADIOLIB_ERR_NONE) {
+    if (state != RADIOLIB_ERR_NONE) {
         Serial.println(F("Unable to set sync word!"));
     }
-    // set output power
     state = radio.setOutputPower(params.power);
-    if (state  == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
+    if (state == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
         Serial.println(F("Selected output power is invalid for this module!"));
     }
-
-    // Set Current Limit
     state = radio.setCurrentLimit(140);
     if (state == RADIOLIB_ERR_INVALID_CURRENT_LIMIT) {
         Serial.println(F("Selected current limit is invalid for this module!"));
     }
 
     switch (params.mode) {
-    case RADIO_DISABLE:
-        state =  radio.standby();
-        break;
-    case RADIO_TX:
-        state =  radio.startTransmit("");
-        break;
-    case RADIO_RX:
-        state =  radio.startReceive();
-        break;
-    case RADIO_CW:
-        break;
-    default:
-        break;
+    case RADIO_DISABLE: state = radio.standby();          break;
+    case RADIO_TX:      state = radio.startTransmit(""); break;
+    case RADIO_RX:      state = radio.startReceive();    break;
+    case RADIO_CW:                                        break;
+    default:                                              break;
     }
-    instance.unlockSPI();
     return state;
 #else
+    (void)params;
     return 0;
 #endif
 }
 
-void hw_get_radio_params(radio_params_t &params)
-{
-    params.bandwidth = 125.0;
-    params.freq = RADIO_DEFAULT_FREQUENCY;
-    params.cr = 5;
-    params.isRunning = false;
-    params.mode = RADIO_DISABLE;
-    params.sf  = 12;
-    params.power = 22;
-    params.interval = 3000;
-    params.syncWord = 0xCD;
-}
-
-void hw_set_radio_default()
-{
-    radio_params_t params ;
-    hw_get_radio_params(params);
-    hw_set_radio_params(params);
-}
-
-void hw_set_radio_listening()
-{
-#ifdef ARDUINO
-    instance.lockSPI();
-    // Start next packet recv
-    radio.startReceive();
-    instance.unlockSPI();
-#endif
-}
-
-void hw_set_radio_tx(radio_tx_params_t &params, bool continuous)
-{
-#ifdef ARDUINO
-    if (continuous) {
-        EventBits_t  eventBits = xEventGroupWaitBits(radioEvent,
-                                 LORA_ISR_FLAG, pdTRUE, pdTRUE, pdTICKS_TO_MS(2));
-        if ((eventBits & LORA_ISR_FLAG) != LORA_ISR_FLAG) {
-            params.state = -1;
-            return;
-        }
-    }
-
-    radio.finishTransmit();
-
-    if (!params.data) {
-        params.state = -1;
-        return;
-    }
-
-    instance.lockSPI();
-    params.state = radio.startTransmit(params.data, params.length);
-    instance.unlockSPI();
-
-#endif
-}
-
-void hw_get_radio_rx(radio_rx_params_t &params)
-{
-#ifdef ARDUINO
-    EventBits_t  eventBits = xEventGroupWaitBits(radioEvent, LORA_ISR_FLAG, pdTRUE, pdTRUE, pdTICKS_TO_MS(2));
-    if ((eventBits & LORA_ISR_FLAG) != LORA_ISR_FLAG) {
-        params.state = -1;
-        return;
-    }
-
-    if (!params.data) {
-        params.state = -1;
-        printf("Rx data buffer is empty\n");
-        return;
-    }
-
-    instance.lockSPI();
-    params.length = radio.getPacketLength();
-    params.state = radio.readData(params.data, params.length);
-    params.rssi = radio.getRSSI();
-    params.snr = radio.getSNR();
-    // Start next packet recv
-    radio.startReceive();
-    instance.unlockSPI();
-
-    if (last_send_millis + 200 > millis()) {
-        // avoid showing own sent messages
-        params.length = 0;
-        return;
-    }
-
-    params.data[params.length] = '\0';
-#else
-    params.length = 0;
-#endif
-}
-
-bool radio_transmit(const uint8_t *data, size_t length)
-{
-#ifdef ARDUINO
-    int state = radio.transmit(data, length);
-    last_send_millis = millis();
-    return (state == RADIOLIB_ERR_NONE);
-#else
-    return true;
-#endif
-}
+} // namespace radio_chip
 
 
-static const float bandwidth_list[] = {41.7, 62.5, 125.0, 250.0, 500.0};
+// ----- Option tables -----
+
+static const float bandwidth_list[]   = {41.7, 62.5, 125.0, 250.0, 500.0};
 static const float power_level_list[] = {2, 5, 10, 12, 17, 20, 22};
 #ifdef RADIO_FIXED_FREQUENCY
 static const float freq_list[] = {RADIO_FIXED_FREQUENCY};
@@ -242,20 +91,9 @@ static const float freq_list[] = {RADIO_FIXED_FREQUENCY};
 static const float freq_list[] = {433.0, 470.0, 842.0, 850, 868.0, 915.0, 923.0, 945.0};
 #endif
 
-uint16_t radio_get_freq_length()
-{
-    return (sizeof(freq_list) / sizeof(freq_list[0]));
-}
-
-uint16_t radio_get_bandwidth_length()
-{
-    return (sizeof(bandwidth_list) / sizeof(bandwidth_list[0]));
-}
-
-uint16_t radio_get_tx_power_length()
-{
-    return (sizeof(power_level_list) / sizeof(power_level_list[0]));
-}
+uint16_t radio_get_freq_length()      { return sizeof(freq_list)        / sizeof(freq_list[0]); }
+uint16_t radio_get_bandwidth_length() { return sizeof(bandwidth_list)   / sizeof(bandwidth_list[0]); }
+uint16_t radio_get_tx_power_length()  { return sizeof(power_level_list) / sizeof(power_level_list[0]); }
 
 const char *radio_get_freq_list()
 {
@@ -268,38 +106,30 @@ const char *radio_get_freq_list()
 
 float radio_get_freq_from_index(uint8_t index)
 {
-    if (index >= radio_get_freq_length()) {
-        return RADIO_DEFAULT_FREQUENCY;
-    }
+    if (index >= radio_get_freq_length()) return RADIO_DEFAULT_FREQUENCY;
     return freq_list[index];
 }
 
-const char *radio_get_bandwidth_list(bool high_freq)
+const char *radio_get_bandwidth_list(bool)
 {
     return "41.7KHz\n""62.5KHz\n""125KHz\n""250KHz\n""500KHz";
 }
 
 float radio_get_bandwidth_from_index(uint8_t index)
 {
-    if (index >= radio_get_bandwidth_length()) {
-        return 125.0;
-    }
+    if (index >= radio_get_bandwidth_length()) return 125.0;
     return bandwidth_list[index];
 }
 
-const char *radio_get_tx_power_list(bool high_freq)
+const char *radio_get_tx_power_list(bool)
 {
-    return  "2dBm\n""5dBm\n""10dBm\n""12dBm\n""17dBm\n""20dBm\n""22dBm";
+    return "2dBm\n""5dBm\n""10dBm\n""12dBm\n""17dBm\n""20dBm\n""22dBm";
 }
 
 float radio_get_tx_power_from_index(uint8_t index)
 {
-    if (index >= radio_get_tx_power_length()) {
-        return 22;
-    }
+    if (index >= radio_get_tx_power_length()) return 22;
     return power_level_list[index];
 }
 
-
-#endif
-
+#endif  // ARDUINO_LILYGO_LORA_SX1262
