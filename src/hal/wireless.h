@@ -17,9 +17,52 @@ bool hw_get_wifi_scanning();
 void hw_get_wifi_scan_result(std::vector<wifi_scan_params_t> &list);
 void hw_set_wifi_connect(wifi_conn_params_t &params);
 bool hw_get_wifi_connected();
+void hw_set_wifi_disconnect();
 
 bool hw_get_wifi_enable();
 void hw_set_wifi_enable(bool en);
+
+// --- WiFi saved credentials (persistent across reboots) ---
+// Favorites list: every network the user has successfully connected to is
+// stored; the most recent lands at index 0.
+bool hw_wifi_has_saved();
+bool hw_wifi_get_saved_ssid(std::string &ssid);  // most recent
+bool hw_wifi_get_saved_password(const std::string &ssid, std::string &password);
+void hw_wifi_get_saved_list(std::vector<std::string> &ssids);
+void hw_wifi_add_saved(const std::string &ssid, const std::string &password);
+void hw_wifi_forget();  // drop every saved network
+
+// --- HTTP (blocking; require an active WiFi connection) ---
+// GET the URL and append the body to `out`. Returns true on 2xx response.
+// `error` (optional) receives a short diagnostic on failure.
+bool hw_http_get_string(const char *url, std::string &out, std::string *error = nullptr);
+
+// Flexible HTTP call. Set `method` to "GET", "POST", etc. A `body` != nullptr
+// is sent verbatim with `content_type`. `auth_header` (e.g. "Bearer abc123")
+// is added as the Authorization header when non-null.
+//
+// On completion `status_code` (optional) receives the HTTP status regardless
+// of success. The function returns true only on 2xx responses; non-2xx sets
+// `error` to "HTTP <code>" and returns false but still populates `out` so
+// callers can inspect error bodies if they care.
+bool hw_http_request(const char *url,
+                     const char *method,
+                     const char *body,
+                     size_t body_len,
+                     const char *content_type,
+                     const char *auth_header,
+                     std::string &out,
+                     int *status_code = nullptr,
+                     std::string *error = nullptr);
+
+// GET the URL and stream the body to `abs_path` (absolute path on SD or FFat).
+// On success returns true and `bytes_written` (optional) gets the byte count.
+// `progress_cb` is invoked periodically with (downloaded, total_or_0). Return
+// false from the callback to abort — the partial file is then removed.
+bool hw_http_download_to_file(const char *url, const char *abs_path,
+                              size_t *bytes_written = nullptr,
+                              bool (*progress_cb)(size_t, size_t) = nullptr,
+                              std::string *error = nullptr);
 
 // --- BLE ---
 bool hw_get_bt_enable();

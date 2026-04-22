@@ -7,6 +7,7 @@
 #include "core/app_manager.h"
 #include "hal/system.h"
 #include "hal/storage.h"
+#include "hal/notes_crypto.h"
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -160,6 +161,19 @@ static std::string display_name(const std::string &path)
 
 static void refresh_ui();
 
+static void file_click_open_now(const std::string &path)
+{
+    core::AppManager::getInstance().switchApp("Editor", parent_obj);
+    ui_text_editor_open_file(path.c_str());
+}
+
+static void file_click_after_unlock(bool ok, void *ud)
+{
+    std::string *p = (std::string *)ud;
+    if (ok && p) file_click_open_now(*p);
+    delete p;
+}
+
 static void file_click_cb(lv_event_t *e)
 {
     lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
@@ -170,8 +184,16 @@ static void file_click_cb(lv_event_t *e)
     if (path.empty()) return;
     if (path[0] != '/') path = "/" + path;
 
-    core::AppManager::getInstance().switchApp("Notes", parent_obj);
-    ui_text_editor_open_file(path.c_str());
+    /* Gate the open behind the unlock modal when encryption is enabled and
+     * the current session hasn't been unlocked yet. Decryption in the editor
+     * would otherwise produce an empty file. */
+    if (notes_crypto_is_enabled() && !notes_crypto_is_unlocked() &&
+        notes_crypto_path_is_protected(path.c_str())) {
+        ui_passphrase_unlock(file_click_after_unlock, new std::string(path));
+        return;
+    }
+
+    file_click_open_now(path);
 }
 
 static void folder_click_cb(lv_event_t *e)
@@ -377,6 +399,12 @@ static lv_obj_t *make_divider(lv_obj_t *parent)
     return line;
 }
 
+struct DeleteCtx {
+    std::string path;
+    bool is_dir;
+    bool use_sd;
+};
+
 static void delete_msgbox_cb(lv_event_t *e)
 {
     lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
@@ -385,37 +413,40 @@ static void delete_msgbox_cb(lv_event_t *e)
     bool confirmed = (strcmp(text, "Yes") == 0);
     lv_obj_t *mbox_to_del = lv_obj_get_parent(lv_obj_get_parent(btn));
 
-    const char *path = (const char *)lv_event_get_user_data(e);
+    DeleteCtx *ctx = (DeleteCtx *)lv_event_get_user_data(e);
 
-    if (confirmed && path) {
-        if (hw_delete_file(path)) {
+    if (confirmed && ctx) {
+        if (hw_delete_path(ctx->path.c_str(), ctx->use_sd)) {
             load_entries();
             refresh_ui();
         } else {
-            ui_msg_pop_up("Error", "Failed to delete file.");
+            ui_msg_pop_up("Error", ctx->is_dir ? "Failed to delete folder."
+                                               : "Failed to delete file.");
         }
     }
 
     destroy_msgbox(mbox_to_del);
-    if (path) lv_mem_free((void *)path);
+    delete ctx;
 }
 
-static void show_delete_confirm(const std::string &path)
+static void show_delete_confirm(const std::string &path, bool is_dir)
 {
     static const char *btns[] = {"Yes", "No", ""};
-    char msg[160];
-    snprintf(msg, sizeof(msg), "Delete this file?\n%s", path.c_str());
+    char msg[200];
+    if (is_dir) {
+        snprintf(msg, sizeof(msg), "Delete folder and all contents?\n%s", path.c_str());
+    } else {
+        snprintf(msg, sizeof(msg), "Delete this file?\n%s", path.c_str());
+    }
 
-    char *path_dup = (char *)lv_mem_alloc(path.size() + 1);
-    strcpy(path_dup, path.c_str());
-
-    create_msgbox(NULL, "Confirm", msg, btns, delete_msgbox_cb, path_dup);
+    DeleteCtx *ctx = new DeleteCtx{path, is_dir, current_source == SOURCE_SD};
+    create_msgbox(NULL, "Confirm", msg, btns, delete_msgbox_cb, ctx);
 }
 
 static void file_list_key_cb(lv_event_t *e)
 {
     uint32_t key = lv_event_get_key(e);
-    if (key != LV_KEY_BACKSPACE) return;
+    if (key != LV_KEY_BACKSPACE && key != 'd' && key != 'D') return;
 
     lv_group_t *g = lv_group_get_default();
     lv_obj_t *focused = lv_group_get_focused(g);
@@ -427,7 +458,7 @@ static void file_list_key_cb(lv_event_t *e)
     std::string path_str = full;
     for (const auto &ent : all_entries) {
         if (join_path(current_dir, ent.path) == path_str) {
-            if (!ent.is_dir) show_delete_confirm(path_str);
+            show_delete_confirm(path_str, ent.is_dir);
             return;
         }
     }
@@ -440,7 +471,7 @@ void ui_file_browser_enter(lv_obj_t *parent)
     enable_keyboard();
 
     bool sd_online = (HW_SD_ONLINE & hw_get_device_online()) != 0;
-    if (!sd_online && current_source == SOURCE_SD) current_source = SOURCE_INTERNAL;
+    current_source = SOURCE_INTERNAL;
     current_dir = "/";
 
     menu = create_menu(parent, back_event_handler);

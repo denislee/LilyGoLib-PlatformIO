@@ -15,10 +15,24 @@ bool hw_save_file(const char *path, const char *content, std::string *error = nu
 bool hw_save_internal_file(const char *path, const char *content, std::string *error = nullptr);
 bool hw_delete_file(const char *path);
 bool hw_delete_internal_file(const char *path);
+
+// Delete a file or directory (recursive for directories) on the chosen
+// filesystem. Returns true on success.
+bool hw_delete_path(const char *path, bool use_sd);
 bool hw_read_file(const char *path, std::string &content);
 size_t hw_get_file_size(const char *path);
 bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::string &content);
 bool hw_read_internal_file(const char *path, std::string &content);
+
+// Raw byte read from internal FFat, bypassing the notes-crypto decode path.
+// Callers that want to ship the ciphertext as-is (e.g. the GitHub notes
+// sync, which commits the opaque Salted__ blob and decrypts host-side)
+// rely on this to avoid triggering an unlock or altering the bytes.
+bool hw_read_internal_bytes_raw(const char *path, std::vector<uint8_t> &buf);
+
+// Raw byte read from the SD card, same semantics as the internal variant.
+// Returns false when the card is not mounted or the file is missing.
+bool hw_read_sd_bytes_raw(const char *path, std::vector<uint8_t> &buf);
 void hw_get_txt_files(std::vector<std::string> &list);
 void hw_get_internal_txt_files(std::vector<std::string> &list);
 void hw_get_sd_txt_files(std::vector<std::string> &list);

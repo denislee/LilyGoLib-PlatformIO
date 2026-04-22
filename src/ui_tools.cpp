@@ -349,7 +349,23 @@ lv_obj_t *create_button(lv_obj_t *parent, const char *icon, const char *txt, lv_
 {
     lv_obj_t *obj = create_text(parent, icon, txt, LV_MENU_ITEM_BUILDER_VARIANT_1);
     lv_obj_t *btn = lv_btn_create(obj);
-    lv_obj_set_size(btn, lv_pct(10), lv_pct(100));
+
+    lv_obj_set_style_outline_width(btn, 0, 0);
+    lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_border_width(btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_bg_color(btn, UI_COLOR_ACCENT, 0);
+
+    lv_obj_set_width(btn, 60);
+    lv_obj_set_flex_grow(btn, 0);
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, LV_SYMBOL_RIGHT);
+    lv_obj_center(label);
+
+    lv_obj_add_event_cb(btn, child_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(btn, child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+
     if (cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
     }
@@ -559,6 +575,29 @@ LV_FONT_DECLARE(font_inter_14);
 LV_FONT_DECLARE(font_inter_16);
 LV_FONT_DECLARE(font_inter_18);
 LV_FONT_DECLARE(font_inter_20);
+LV_FONT_DECLARE(font_emoji_16);
+LV_FONT_DECLARE(font_emoji_20);
+
+// Inter-with-emoji-fallback variants used only by the Telegram app. The
+// base Inter fonts are const and shared across other apps, so we keep a
+// mutable copy per size here with .fallback set to the emoji font. 14/16
+// fall back to emoji_16; 18/20 fall back to emoji_20 to keep line heights
+// roughly aligned.
+static lv_font_t s_inter_emoji_14;
+static lv_font_t s_inter_emoji_16;
+static lv_font_t s_inter_emoji_18;
+static lv_font_t s_inter_emoji_20;
+static bool s_inter_emoji_ready = false;
+
+static void init_inter_emoji_fonts()
+{
+    if (s_inter_emoji_ready) return;
+    s_inter_emoji_14 = font_inter_14; s_inter_emoji_14.fallback = &font_emoji_16;
+    s_inter_emoji_16 = font_inter_16; s_inter_emoji_16.fallback = &font_emoji_16;
+    s_inter_emoji_18 = font_inter_18; s_inter_emoji_18.fallback = &font_emoji_20;
+    s_inter_emoji_20 = font_inter_20; s_inter_emoji_20.fallback = &font_emoji_20;
+    s_inter_emoji_ready = true;
+}
 
 // idx: 0=Montserrat, 1=Unscii 8, 2=Unscii 16, 3=Courier, 4=Inter
 static const lv_font_t *pick_font(uint8_t idx, uint8_t size)
@@ -646,4 +685,50 @@ const lv_font_t *get_home_font()
     user_setting_params_t settings;
     hw_get_user_setting(settings);
     return pick_font(settings.home_font_index, settings.home_font_size);
+}
+
+const lv_font_t *get_system_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    return pick_font(settings.system_font_index, settings.system_font_size);
+}
+
+const lv_font_t *get_weather_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    return pick_font(settings.weather_font_index, settings.weather_font_size);
+}
+
+const lv_font_t *get_telegram_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    if (settings.telegram_font_index == 4) {
+        init_inter_emoji_fonts();
+        uint8_t size = settings.telegram_font_size;
+        if (size <= 14) return &s_inter_emoji_14;
+        if (size <= 16) return &s_inter_emoji_16;
+        if (size <= 18) return &s_inter_emoji_18;
+        return &s_inter_emoji_20;
+    }
+    return pick_font(settings.telegram_font_index, settings.telegram_font_size);
+}
+
+const lv_font_t *get_telegram_list_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    // Chat list items render with a noticeably larger font than the body
+    // text — the list is the main nav, names need to be thumb-legible.
+    uint8_t size = settings.telegram_font_size + 6;
+    if (settings.telegram_font_index == 4) {
+        init_inter_emoji_fonts();
+        if (size <= 14) return &s_inter_emoji_14;
+        if (size <= 16) return &s_inter_emoji_16;
+        if (size <= 18) return &s_inter_emoji_18;
+        return &s_inter_emoji_20;
+    }
+    return pick_font(settings.telegram_font_index, size);
 }

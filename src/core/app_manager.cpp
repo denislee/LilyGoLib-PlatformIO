@@ -52,7 +52,20 @@ void AppManager::switchApp(const std::string& name, lv_obj_t* parent) {
     }
 }
 
+void AppManager::queueSwitchApp(const std::string& name, lv_obj_t* parent) {
+    _hasPendingSwitch = true;
+    _pendingName = name;
+    _pendingParent = parent;
+}
+
 void AppManager::update() {
+    if (_hasPendingSwitch) {
+        _hasPendingSwitch = false;
+        std::string name = std::move(_pendingName);
+        lv_obj_t* parent = _pendingParent;
+        _pendingParent = nullptr;
+        switchApp(name, parent);
+    }
     if (_activeApp) {
         _activeApp->onUpdate();
     }

@@ -14,6 +14,7 @@ class MenuApp : public core::App {
 public:
     MenuApp();
     void onStart(lv_obj_t* parent) override;
+    void onStop() override;
 };
 
 } // namespace apps

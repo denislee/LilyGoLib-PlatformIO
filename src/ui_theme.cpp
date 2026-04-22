@@ -68,11 +68,13 @@ static void new_theme_apply_cb(lv_theme_t * th, lv_obj_t * obj)
 void theme_init()
 {
     lv_display_t * disp = lv_display_get_default();
-    lv_theme_t * th = lv_theme_default_init(disp, 
-                                            lv_color_black(), 
-                                            lv_palette_main(LV_PALETTE_GREY), 
-                                            true, 
-                                            MAIN_FONT);
+    const lv_font_t *font = get_system_font();
+    if (!font) font = MAIN_FONT;
+    lv_theme_t * th = lv_theme_default_init(disp,
+                                            lv_color_black(),
+                                            lv_palette_main(LV_PALETTE_GREY),
+                                            true,
+                                            font);
     lv_theme_set_apply_cb(th, new_theme_apply_cb);
     lv_display_set_theme(disp, th);
 }

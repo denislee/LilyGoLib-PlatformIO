@@ -16,7 +16,7 @@
 #define USING_EXTERN_NRF2401
 #endif
 
-#define MAIN_FONT   &lv_font_montserrat_16
+#define MAIN_FONT   &lv_font_montserrat_20
 #define NFC_TIPS_STRING "Place the NFC card close to the center of the arrow on the back. It will vibrate when the card is detected; otherwise, it will not display anything if it cannot be resolved."
 #define DEVICE_KEYBOARD_TYPE    KEYBOARD_TYPE_1
 
@@ -52,6 +52,6 @@
 #endif
 
 #define NFC_TIPS_STRING "No NFC devices"
-#define MAIN_FONT   &lv_font_montserrat_12
+#define MAIN_FONT   &lv_font_montserrat_16
 
 #endif

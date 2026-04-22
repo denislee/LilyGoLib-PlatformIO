@@ -5,8 +5,11 @@
 #include "ui_define.h"
 #include "core/app_manager.h"
 #include "hal/storage.h"
+#include "hal/wireless.h"
 #include <vector>
 #include <string>
+
+static const char *NEWS_REMOTE_BASE = "https://denislee.github.io/hn/";
 
 namespace {
 
@@ -38,14 +41,209 @@ static size_t current_page_len = 0;
 static const size_t NEWS_CHUNK_SIZE = 2048;
 static std::vector<size_t> page_offsets;
 
+static lv_obj_t *download_page = NULL;
+static lv_obj_t *download_list = NULL;
+static std::vector<std::pair<std::string, std::string>> remote_entries; // (filename, size_str)
+
+static lv_obj_t *progress_popup = NULL;
+static lv_obj_t *progress_popup_lbl = NULL;
+static size_t progress_last_percent = 101;
+static bool progress_cancelled = false;
+
 void ui_news_exit(lv_obj_t *parent);
 static void refresh_ui();
 static void sync_menu_header();
+static void show_download_page();
 
 static void load_files()
 {
     news_files.clear();
     hw_get_sd_news_files(news_files);
+}
+
+// --- Remote news download ---------------------------------------------
+
+// Parse href="YYYY-MM-DD.txt" patterns out of the listing page. Returns the
+// filenames along with any "NNN.N KiB" size string shown next to the link.
+static void parse_remote_index(const std::string &html,
+                               std::vector<std::pair<std::string, std::string>> &out)
+{
+    out.clear();
+    const char *needle = ".txt\">TXT</a>";
+    size_t pos = 0;
+    while ((pos = html.find(needle, pos)) != std::string::npos) {
+        // Walk back to the opening href=".
+        size_t href_end = pos + 4;  // ".txt"
+        size_t href_start = html.rfind("href=\"", pos);
+        if (href_start == std::string::npos) { pos++; continue; }
+        href_start += 6;
+        std::string fname = html.substr(href_start, href_end - href_start);
+
+        // Basic sanity: YYYY-MM-DD.txt
+        if (fname.size() != 14 || fname[4] != '-' || fname[7] != '-') {
+            pos++;
+            continue;
+        }
+
+        // Size string follows the link inside <span class="size">...</span>.
+        std::string size_str;
+        size_t size_open = html.find("<span class=\"size\">", pos);
+        if (size_open != std::string::npos && size_open - pos < 64) {
+            size_open += 19;
+            size_t size_close = html.find("</span>", size_open);
+            if (size_close != std::string::npos) {
+                size_str = html.substr(size_open, size_close - size_open);
+            }
+        }
+        out.push_back({fname, size_str});
+        pos = href_end;
+    }
+}
+
+static void progress_popup_close()
+{
+    if (progress_popup) {
+        ui_popup_destroy(progress_popup);
+        progress_popup = NULL;
+        progress_popup_lbl = NULL;
+    }
+    progress_last_percent = 101;
+    progress_cancelled = false;
+}
+
+static bool download_progress_cb(size_t done, size_t total)
+{
+    if (progress_popup_lbl) {
+        int percent = total > 0 ? (int)((uint64_t)done * 100 / total) : -1;
+        if ((size_t)percent != progress_last_percent) {
+            progress_last_percent = percent;
+            char buf[64];
+            if (percent >= 0) {
+                snprintf(buf, sizeof(buf), "%d%%  (%u / %u KB)",
+                         percent, (unsigned)(done / 1024), (unsigned)(total / 1024));
+            } else {
+                snprintf(buf, sizeof(buf), "%u KB", (unsigned)(done / 1024));
+            }
+            lv_label_set_text(progress_popup_lbl, buf);
+        }
+    }
+    lv_timer_handler();
+    return !progress_cancelled;
+}
+
+static void download_file(const std::string &fname)
+{
+    std::string url = NEWS_REMOTE_BASE;
+    url += fname;
+    std::string dest = "/news/" + fname;
+
+    progress_popup = ui_popup_create("Downloading");
+    lv_obj_t *sub = lv_label_create(progress_popup);
+    lv_label_set_text(sub, fname.c_str());
+    lv_obj_set_style_text_color(sub, UI_COLOR_MUTED, 0);
+
+    progress_popup_lbl = lv_label_create(progress_popup);
+    lv_label_set_text(progress_popup_lbl, "0%");
+    lv_obj_set_style_text_color(progress_popup_lbl, UI_COLOR_FG, 0);
+
+    lv_refr_now(NULL);
+
+    std::string err;
+    size_t written = 0;
+    bool ok = hw_http_download_to_file(url.c_str(), dest.c_str(),
+                                       &written, download_progress_cb, &err);
+    progress_popup_close();
+
+    if (!ok) {
+        std::string msg = "Download failed: " + (err.empty() ? std::string("unknown") : err);
+        ui_msg_pop_up("Error", msg.c_str());
+        return;
+    }
+
+    // Return to the main news file list and refresh.
+    lv_menu_set_page(menu, main_page);
+    sync_menu_header();
+    load_files();
+    refresh_ui();
+}
+
+static void remote_click_cb(lv_event_t *e)
+{
+    size_t idx = (size_t)lv_event_get_user_data(e);
+    if (idx >= remote_entries.size()) return;
+    download_file(remote_entries[idx].first);
+}
+
+static void show_download_page()
+{
+    lv_obj_clean(download_list);
+    lv_group_t *g = lv_group_get_default();
+
+    if (remote_entries.empty()) {
+        lv_list_add_text(download_list, "No downloads available.");
+    } else {
+        for (size_t i = 0; i < remote_entries.size(); i++) {
+            char label[96];
+            const auto &e = remote_entries[i];
+            if (!e.second.empty()) {
+                snprintf(label, sizeof(label), "%s  (%s)",
+                         e.first.c_str(), e.second.c_str());
+            } else {
+                snprintf(label, sizeof(label), "%s", e.first.c_str());
+            }
+            lv_obj_t *btn = lv_list_add_btn(download_list, LV_SYMBOL_DOWNLOAD, label);
+            lv_obj_add_event_cb(btn, remote_click_cb, LV_EVENT_CLICKED, (void *)i);
+            lv_group_add_obj(g, btn);
+        }
+    }
+
+    if (lv_obj_get_child_count(download_list) > 0) {
+        lv_group_focus_obj(lv_obj_get_child(download_list, 0));
+    }
+
+    lv_menu_set_page(menu, download_page);
+    sync_menu_header();
+}
+
+static void start_remote_browse()
+{
+    if (!hw_get_wifi_enable()) {
+        ui_msg_pop_up("WiFi off", "Enable WiFi in Settings first.");
+        return;
+    }
+    if (!hw_get_wifi_connected()) {
+        ui_msg_pop_up("No connection", "WiFi is not connected.");
+        return;
+    }
+
+    lv_obj_t *loading = ui_popup_create("Fetching index");
+    lv_obj_t *sub = lv_label_create(loading);
+    lv_label_set_text(sub, NEWS_REMOTE_BASE);
+    lv_obj_set_style_text_color(sub, UI_COLOR_MUTED, 0);
+    lv_refr_now(NULL);
+
+    std::string html, err;
+    bool ok = hw_http_get_string(NEWS_REMOTE_BASE, html, &err);
+    ui_popup_destroy(loading);
+
+    if (!ok) {
+        std::string msg = "Fetch failed: " + (err.empty() ? std::string("unknown") : err);
+        ui_msg_pop_up("Error", msg.c_str());
+        return;
+    }
+
+    parse_remote_index(html, remote_entries);
+    if (remote_entries.empty()) {
+        ui_msg_pop_up("Empty", "No news files on the server.");
+        return;
+    }
+
+    show_download_page();
+}
+
+static void download_btn_cb(lv_event_t *e)
+{
+    start_remote_browse();
 }
 
 static void back_event_handler(lv_event_t *e)
@@ -66,6 +264,9 @@ static void news_view_back_cb(lv_event_t *e)
         lv_menu_set_page(menu, target);
         sync_menu_header();
     } else if (cur == index_page) {
+        lv_menu_set_page(menu, main_page);
+        sync_menu_header();
+    } else if (cur == download_page) {
         lv_menu_set_page(menu, main_page);
         sync_menu_header();
     } else {
@@ -235,6 +436,8 @@ static void file_list_key_cb(lv_event_t *e)
 
     const char *filename = lv_list_get_button_text(file_list, focused);
     if (!filename) return;
+    // The top "Download from internet" entry is not a file.
+    if (strcmp(filename, "Download from internet") == 0) return;
 
     show_delete_confirm(resolve_news_path(filename));
 }
@@ -354,7 +557,6 @@ static void file_click_cb(lv_event_t *e)
     lv_obj_del(loading_cont);
 
     if (news_headers.empty()) {
-        // No index — open the file directly.
         jump_to_range(0, current_file_size);
     } else {
         show_index_page();
@@ -365,6 +567,20 @@ static void refresh_ui()
 {
     if (!file_list) return;
     lv_obj_clean(file_list);
+
+    // Always offer an internet-download entry at the top.
+    {
+        lv_obj_t *dl_btn = lv_list_add_btn(file_list, LV_SYMBOL_DOWNLOAD,
+                                           "Download from internet");
+        lv_obj_add_event_cb(dl_btn, download_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_group_add_obj(lv_group_get_default(), dl_btn);
+        lv_obj_t *lbl = lv_obj_get_child(dl_btn, 1);
+        if (lbl) {
+            lv_obj_set_width(lbl, 0);
+            lv_obj_set_flex_grow(lbl, 1);
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+        }
+    }
 
     if (news_files.empty()) {
         lv_list_add_text(file_list, "No files found in /news");
@@ -497,6 +713,13 @@ void ui_news_enter(lv_obj_t *parent)
     lv_obj_set_width(index_list, LV_PCT(100));
     lv_obj_set_flex_grow(index_list, 1);
 
+    download_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_flex_flow(download_page, LV_FLEX_FLOW_COLUMN);
+
+    download_list = lv_list_create(download_page);
+    lv_obj_set_width(download_list, LV_PCT(100));
+    lv_obj_set_flex_grow(download_list, 1);
+
     lv_group_add_obj(lv_group_get_default(), scroll_wrapper);
 
     load_files();
@@ -519,9 +742,14 @@ void ui_news_exit(lv_obj_t *parent)
     view_page = NULL;
     index_page = NULL;
     index_list = NULL;
+    download_page = NULL;
+    download_list = NULL;
     scroll_wrapper = NULL;
     text_area = NULL;
     lbl_progress = NULL;
+    progress_popup = NULL;
+    progress_popup_lbl = NULL;
+    remote_entries.clear();
 }
 
 } // namespace

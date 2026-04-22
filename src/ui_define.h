@@ -92,6 +92,34 @@ void enable_keyboard();
 
 void ui_text_editor_open_file(const char *path);
 void ui_text_editor_new_document();
+
+/* Notes-encryption passphrase prompts (see ui_lock.cpp). */
+typedef void (*ui_passphrase_result_cb)(const char *pw, void *ud);
+typedef void (*ui_passphrase_unlock_cb)(bool ok, void *ud);
+
+/* Runs the session-unlock flow. Fires `cb(true, ud)` immediately if crypto
+ * is disabled or already unlocked; otherwise shows the passphrase modal
+ * and calls `cb` with the outcome. */
+void ui_passphrase_unlock(ui_passphrase_unlock_cb cb, void *ud);
+
+/* Low-level prompt. `cb` receives the typed passphrase (non-null, only valid
+ * during the callback) on OK, or NULL on Cancel. With `confirm=true`, a second
+ * confirmation field is shown and only matching entries proceed. */
+void ui_passphrase_prompt(const char *title, const char *subtitle,
+                          bool confirm,
+                          ui_passphrase_result_cb cb, void *ud);
+
+/* Plain-text modal prompt. Same look as ui_passphrase_prompt but with no
+ * password masking. `initial` pre-fills the field (NULL = empty). `cb` fires
+ * with the typed text on OK (only valid during the callback) or NULL on
+ * Cancel. */
+void ui_text_prompt(const char *title, const char *subtitle,
+                    const char *initial,
+                    ui_passphrase_result_cb cb, void *ud);
+
+/* Modal WiFi picker: scan / list / connect / forget. Self-contained overlay
+ * on lv_layer_top. See ui_wifi.cpp. */
+void ui_wifi_networks_open();
 void ui_request_editor_switch();
 void ui_resume_timers();
 void ui_pause_timers();
@@ -107,6 +135,10 @@ const lv_font_t *get_journal_font();
 const lv_font_t *get_md_font();
 const lv_font_t *get_header_font();
 const lv_font_t *get_home_font();
+const lv_font_t *get_system_font();
+const lv_font_t *get_weather_font();
+const lv_font_t *get_telegram_font();
+const lv_font_t *get_telegram_list_font();
 
 lv_obj_t *create_floating_button(lv_event_cb_t event_cb, void* user_data);
 lv_obj_t *create_menu(lv_obj_t *parent, lv_event_cb_t event_cb);
@@ -119,6 +151,7 @@ lv_obj_t *create_back_button(lv_obj_t *parent, lv_event_cb_t cb);
  * can attach additional event handlers or use it as a focus target. */
 lv_obj_t *ui_show_back_button(lv_event_cb_t cb);
 void ui_hide_back_button(void);
+lv_event_cb_t ui_get_back_button_cb(void);
 
 #if LVGL_VERSION_MAJOR == 9
 #define LV_MENU_ROOT_BACK_BTN_ENABLED   LV_MENU_ROOT_BACK_BUTTON_ENABLED

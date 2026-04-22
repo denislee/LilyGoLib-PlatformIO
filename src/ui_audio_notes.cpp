@@ -223,15 +223,12 @@ static void build_list_view()
             lv_obj_set_style_text_font(meta, get_small_font(), 0);
             lv_obj_set_style_pad_left(meta, 8, 0);
         }
-        if (lv_obj_get_child_count(list) > 0) {
-            lv_group_focus_obj(lv_obj_get_child(list, 0));
-        }
     }
 
-    if (!mic_ok && notes.empty()) {
-        // Nothing to focus — fine.
-    } else if (mic_ok && notes.empty()) {
+    if (mic_ok) {
         lv_group_focus_obj(rec_btn);
+    } else if (!notes.empty()) {
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
     }
 }
 

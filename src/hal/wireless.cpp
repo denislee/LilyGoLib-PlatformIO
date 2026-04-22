@@ -5,15 +5,60 @@
 #include "wireless.h"
 #include "internal.h"
 #include "board_config.h"
+#include "system.h"
+#include "storage.h"
 
 #ifdef ARDUINO
 #include <LilyGoLib.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <SD.h>
+#include <FFat.h>
+#include <Preferences.h>
 #define CONFIG_BLE_KEYBOARD
 #if defined(USING_BLE_KEYBOARD)
 #include <BleKeyboard.h>
 static BleKeyboard bleKeyboard;
 #endif
+
+#define WIFI_PREFS_NS     "wifi_cred"
+#define WIFI_PREFS_COUNT  "count"
+#define WIFI_MAX_SAVED    16
+
+// NVS key names are capped at 15 chars; "s0".."s15" / "p0".."p15" stay well
+// under that, so max-saved could be raised later if needed.
+static void wifi_key_ssid(int i, char out[8]) { snprintf(out, 8, "s%d", i); }
+static void wifi_key_pass(int i, char out[8]) { snprintf(out, 8, "p%d", i); }
+
+static int wifi_saved_count_ro(Preferences &p)
+{
+    int n = p.getUChar(WIFI_PREFS_COUNT, 0);
+    if (n > WIFI_MAX_SAVED) n = WIFI_MAX_SAVED;
+    return n;
+}
+
+static bool wifi_load_at(int i, std::string &ssid, std::string &password)
+{
+    Preferences p;
+    if (!p.begin(WIFI_PREFS_NS, true)) return false;
+    char sk[8], pk[8];
+    wifi_key_ssid(i, sk);
+    wifi_key_pass(i, pk);
+    String s = p.getString(sk, "");
+    String pw = p.getString(pk, "");
+    p.end();
+    if (s.length() == 0) return false;
+    ssid = s.c_str();
+    password = pw.c_str();
+    return true;
+}
+
+// Most recent saved credential (index 0). Returns false if nothing is saved.
+static bool wifi_load_saved(std::string &ssid, std::string &password)
+{
+    return wifi_load_at(0, ssid, password);
+}
 #else
 #include <cstring>
 #endif
@@ -26,6 +71,11 @@ void hw_set_wifi_enable(bool en) {
 #ifdef ARDUINO
     if (en) {
         WiFi.mode(WIFI_STA);
+        // Auto-reconnect using the last successful credentials.
+        std::string s, pw;
+        if (!WiFi.isConnected() && wifi_load_saved(s, pw)) {
+            WiFi.begin(s.c_str(), pw.c_str());
+        }
     } else {
         WiFi.disconnect(true);
         WiFi.mode(WIFI_OFF);
@@ -135,7 +185,13 @@ void hw_set_wifi_connect(wifi_conn_params_t &params)
     String password = params.password.c_str();
     Serial.print("SSID :"); Serial.println(ssid);
     Serial.print("PWD :"); Serial.println(password);
+    if (WiFi.getMode() == WIFI_OFF) {
+        WiFi.mode(WIFI_STA);
+    }
+    WiFi.disconnect(false, false);
     WiFi.begin(ssid, password);
+    // Saving is deferred to hw_wifi_add_saved(), called by the UI only after
+    // association succeeds — that way bad passwords don't pollute favorites.
 #endif
 }
 
@@ -145,6 +201,367 @@ bool hw_get_wifi_connected()
     return WiFi.isConnected();
 #endif
     return false;
+}
+
+void hw_set_wifi_disconnect()
+{
+#ifdef ARDUINO
+    WiFi.disconnect(false, true);
+#endif
+}
+
+bool hw_wifi_has_saved()
+{
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin(WIFI_PREFS_NS, true)) return false;
+    int n = wifi_saved_count_ro(p);
+    p.end();
+    return n > 0;
+#else
+    return false;
+#endif
+}
+
+bool hw_wifi_get_saved_ssid(std::string &ssid)
+{
+#ifdef ARDUINO
+    std::string pw;
+    return wifi_load_saved(ssid, pw);
+#else
+    (void)ssid;
+    return false;
+#endif
+}
+
+bool hw_wifi_get_saved_password(const std::string &ssid, std::string &password)
+{
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin(WIFI_PREFS_NS, true)) return false;
+    int n = wifi_saved_count_ro(p);
+    for (int i = 0; i < n; ++i) {
+        char sk[8], pk[8];
+        wifi_key_ssid(i, sk);
+        wifi_key_pass(i, pk);
+        String s = p.getString(sk, "");
+        if (s.length() == 0) continue;
+        if (ssid == s.c_str()) {
+            String pw = p.getString(pk, "");
+            password = pw.c_str();
+            p.end();
+            return true;
+        }
+    }
+    p.end();
+    return false;
+#else
+    (void)ssid; (void)password;
+    return false;
+#endif
+}
+
+void hw_wifi_get_saved_list(std::vector<std::string> &ssids)
+{
+    ssids.clear();
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin(WIFI_PREFS_NS, true)) return;
+    int n = wifi_saved_count_ro(p);
+    for (int i = 0; i < n; ++i) {
+        char sk[8];
+        wifi_key_ssid(i, sk);
+        String s = p.getString(sk, "");
+        if (s.length() > 0) ssids.emplace_back(s.c_str());
+    }
+    p.end();
+#endif
+}
+
+void hw_wifi_add_saved(const std::string &ssid, const std::string &password)
+{
+#ifdef ARDUINO
+    if (ssid.empty()) return;
+
+    // Read the existing list, dedup the incoming SSID, then prepend it.
+    // Keeps most-recent at index 0 so hw_wifi_get_saved_ssid() stays useful
+    // for auto-reconnect on boot.
+    std::vector<std::pair<std::string, std::string>> kept;
+    kept.reserve(WIFI_MAX_SAVED);
+    kept.emplace_back(ssid, password);
+
+    Preferences p;
+    if (!p.begin(WIFI_PREFS_NS, false)) return;
+    int n = wifi_saved_count_ro(p);
+    for (int i = 0; i < n && (int)kept.size() < WIFI_MAX_SAVED; ++i) {
+        char sk[8], pk[8];
+        wifi_key_ssid(i, sk);
+        wifi_key_pass(i, pk);
+        String s = p.getString(sk, "");
+        if (s.length() == 0) continue;
+        if (ssid == s.c_str()) continue;  // dedup — we just prepended it
+        String pw = p.getString(pk, "");
+        kept.emplace_back(s.c_str(), pw.c_str());
+    }
+
+    for (size_t i = 0; i < kept.size(); ++i) {
+        char sk[8], pk[8];
+        wifi_key_ssid((int)i, sk);
+        wifi_key_pass((int)i, pk);
+        p.putString(sk, kept[i].first.c_str());
+        p.putString(pk, kept[i].second.c_str());
+    }
+    // Clear any trailing slots that used to be populated.
+    for (size_t i = kept.size(); i < (size_t)n + 1 && i < WIFI_MAX_SAVED; ++i) {
+        char sk[8], pk[8];
+        wifi_key_ssid((int)i, sk);
+        wifi_key_pass((int)i, pk);
+        p.remove(sk);
+        p.remove(pk);
+    }
+    p.putUChar(WIFI_PREFS_COUNT, (uint8_t)kept.size());
+    p.end();
+#else
+    (void)ssid; (void)password;
+#endif
+}
+
+void hw_wifi_forget()
+{
+#ifdef ARDUINO
+    Preferences p;
+    if (p.begin(WIFI_PREFS_NS, false)) {
+        p.clear();
+        p.end();
+    }
+    WiFi.disconnect(false, true);
+#endif
+}
+
+// --- HTTP --------------------------------------------------------------
+
+#ifdef ARDUINO
+namespace {
+struct HttpClients {
+    WiFiClientSecure secure;
+    WiFiClient plain;
+    HTTPClient http;
+};
+
+// Follows redirects; returns true with `http` begin()'d on the final 2xx.
+static bool http_open(HttpClients &c, const char *url, std::string *error)
+{
+    if (!WiFi.isConnected()) {
+        if (error) *error = "WiFi not connected.";
+        return false;
+    }
+    c.secure.setInsecure();  // GitHub Pages — we don't ship a root CA bundle.
+    c.http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    c.http.setTimeout(15000);
+    c.http.setConnectTimeout(10000);
+    c.http.setUserAgent("LilyGoLib/1.0");
+
+    bool ok;
+    String u = url;
+    if (u.startsWith("https://")) {
+        ok = c.http.begin(c.secure, u);
+    } else {
+        ok = c.http.begin(c.plain, u);
+    }
+    if (!ok) {
+        if (error) *error = "begin() failed.";
+        return false;
+    }
+    int code = c.http.GET();
+    if (code < 200 || code >= 300) {
+        if (error) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "HTTP %d", code);
+            *error = buf;
+        }
+        c.http.end();
+        return false;
+    }
+    return true;
+}
+} // namespace
+#endif
+
+bool hw_http_get_string(const char *url, std::string &out, std::string *error)
+{
+#ifdef ARDUINO
+    HttpClients c;
+    if (!http_open(c, url, error)) return false;
+    String body = c.http.getString();
+    out.append(body.c_str(), body.length());
+    c.http.end();
+    return true;
+#else
+    (void)url; (void)out; (void)error;
+    return false;
+#endif
+}
+
+bool hw_http_request(const char *url,
+                     const char *method,
+                     const char *body,
+                     size_t body_len,
+                     const char *content_type,
+                     const char *auth_header,
+                     std::string &out,
+                     int *status_code,
+                     std::string *error)
+{
+#ifdef ARDUINO
+    if (!WiFi.isConnected()) {
+        if (error) *error = "WiFi not connected.";
+        if (status_code) *status_code = 0;
+        return false;
+    }
+    HttpClients c;
+    c.secure.setInsecure();
+    c.http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    c.http.setTimeout(15000);
+    c.http.setConnectTimeout(10000);
+    c.http.setUserAgent("LilyGoLib/1.0");
+
+    String u = url;
+    bool begun = u.startsWith("https://") ? c.http.begin(c.secure, u)
+                                           : c.http.begin(c.plain, u);
+    if (!begun) {
+        if (error) *error = "begin() failed.";
+        if (status_code) *status_code = 0;
+        return false;
+    }
+    if (auth_header && *auth_header) {
+        c.http.addHeader("Authorization", auth_header);
+    }
+    if (content_type && *content_type && body) {
+        c.http.addHeader("Content-Type", content_type);
+    }
+
+    int code;
+    const char *m = method && *method ? method : "GET";
+    if (body) {
+        code = c.http.sendRequest(m, (uint8_t *)body, body_len);
+    } else {
+        code = c.http.sendRequest(m);
+    }
+    if (status_code) *status_code = code;
+
+    // Always capture the body so callers can read error payloads too.
+    String rbody = c.http.getString();
+    out.append(rbody.c_str(), rbody.length());
+    c.http.end();
+
+    if (code < 200 || code >= 300) {
+        if (error) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "HTTP %d", code);
+            *error = buf;
+        }
+        return false;
+    }
+    return true;
+#else
+    (void)url; (void)method; (void)body; (void)body_len;
+    (void)content_type; (void)auth_header; (void)out;
+    if (status_code) *status_code = 0;
+    if (error) *error = "Not supported on emulator.";
+    return false;
+#endif
+}
+
+bool hw_http_download_to_file(const char *url, const char *abs_path,
+                              size_t *bytes_written,
+                              bool (*progress_cb)(size_t, size_t),
+                              std::string *error)
+{
+#ifdef ARDUINO
+    HttpClients c;
+    if (!http_open(c, url, error)) return false;
+
+    int total = c.http.getSize();  // -1 if unknown
+    WiFiClient *stream = c.http.getStreamPtr();
+    if (!stream) {
+        if (error) *error = "No stream.";
+        c.http.end();
+        return false;
+    }
+
+    String path = (abs_path[0] == '/') ? String(abs_path) : ("/" + String(abs_path));
+    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
+
+    // Ensure the parent directory exists (e.g. "/news" on first download).
+    int last_slash = path.lastIndexOf('/');
+    if (last_slash > 0) {
+        String dir = path.substring(0, last_slash);
+        if (is_sd) {
+            instance.lockSPI();
+            if (!SD.exists(dir)) SD.mkdir(dir);
+            instance.unlockSPI();
+        }
+        if (!FFat.exists(dir)) FFat.mkdir(dir);
+    }
+
+    File f;
+    bool lock = false;
+    if (is_sd) {
+        instance.lockSPI();
+        f = SD.open(path, "w");
+        if (f) {
+            lock = true;
+        } else {
+            instance.unlockSPI();
+        }
+    }
+    if (!f) f = FFat.open(path, "w");
+    if (!f) {
+        if (error) *error = "Cannot open destination file.";
+        c.http.end();
+        return false;
+    }
+
+    uint8_t buf[1024];
+    size_t written = 0;
+    bool aborted = false;
+
+    while (c.http.connected() && (total < 0 || (int)written < total)) {
+        size_t avail = stream->available();
+        if (avail) {
+            size_t to_read = avail < sizeof(buf) ? avail : sizeof(buf);
+            int n = stream->readBytes(buf, to_read);
+            if (n <= 0) break;
+            if (f.write(buf, n) != (size_t)n) {
+                if (error) *error = "Write failed (full?).";
+                aborted = true;
+                break;
+            }
+            written += n;
+            if (progress_cb && !progress_cb(written, total > 0 ? (size_t)total : 0)) {
+                aborted = true;
+                break;
+            }
+        } else {
+            delay(5);
+        }
+    }
+
+    f.close();
+    if (lock) instance.unlockSPI();
+    c.http.end();
+
+    if (aborted) {
+        hw_delete_file(abs_path);
+        return false;
+    }
+    if (bytes_written) *bytes_written = written;
+    return true;
+#else
+    (void)url; (void)abs_path; (void)bytes_written;
+    (void)progress_cb; (void)error;
+    return false;
+#endif
 }
 
 // --- BLE (UART) -------------------------------------------------------

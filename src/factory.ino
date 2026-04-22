@@ -49,6 +49,7 @@ static void time_available(struct timeval *t)
     if (instance.getDeviceProbe() & HW_RTC_ONLINE) {
         instance.rtc.hwClockWrite();
     }
+    hw_notify_time_sync_completed();
 }
 
 // WARNING: This function is called from a separate FreeRTOS task (thread)!
@@ -137,9 +138,10 @@ void loop()
 
         static uint32_t last_freq = 0;
         if (ui_is_fake_sleep()) {
-            // BLE needs ≥80MHz; hold there while a client is connected so the
-            // fake-sleep power saving doesn't drop the BT link.
-            uint32_t fake_sleep_freq = hw_get_ble_kb_connected() ? 80 : 40;
+            // BLE and WiFi both need ≥80MHz; hold there while either link is
+            // up so the fake-sleep power saving doesn't drop them.
+            bool hold_80 = hw_get_ble_kb_connected() || hw_get_wifi_connected();
+            uint32_t fake_sleep_freq = hold_80 ? 80 : 40;
             if (last_freq != fake_sleep_freq) {
                 setCpuFrequencyMhz(fake_sleep_freq);
                 last_freq = fake_sleep_freq;

@@ -153,14 +153,16 @@ static void volume_event_cb(lv_event_t *e)
         uint32_t key = lv_event_get_key(e);
         if (key == LV_KEY_ENTER) return;
         if (!lv_group_get_editing(g)) return;
+        // Scroll wheel: clockwise (NEXT/RIGHT/UP) decreases volume on the
+        // LilyGo encoder — swap to match the physical scroll direction.
         if (key == LV_KEY_RIGHT || key == LV_KEY_UP || key == LV_KEY_NEXT) {
             hw_feedback();
-            hw_set_ble_key(MEDIA_VOLUME_UP);
+            hw_set_ble_key(MEDIA_VOLUME_DOWN);
             lv_event_stop_processing(e);
         } else if (key == LV_KEY_LEFT || key == LV_KEY_DOWN
                    || key == LV_KEY_PREV) {
             hw_feedback();
-            hw_set_ble_key(MEDIA_VOLUME_DOWN);
+            hw_set_ble_key(MEDIA_VOLUME_UP);
             lv_event_stop_processing(e);
         }
     } else if (code == LV_EVENT_DEFOCUSED) {

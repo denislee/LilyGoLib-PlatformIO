@@ -5,6 +5,9 @@
 #include "storage.h"
 #include "system.h"
 #include "internal.h"
+#include "notes_crypto.h"
+
+#include <cstring>
 
 #ifdef ARDUINO
 #include <algorithm>
@@ -12,6 +15,55 @@
 #include <SD.h>
 #include <FFat.h>
 #endif
+
+/* When notes_crypto is enabled+unlocked, the text I/O wrappers below
+ * transparently encrypt on save and decrypt on load for any path that
+ * `notes_crypto_path_is_protected()` matches. On a locked session, a read
+ * that hits encrypted content fails so callers don't show ciphertext. */
+static bool content_has_salted_magic(const char *buf, size_t len)
+{
+    return len >= 8 && memcmp(buf, "Salted__", 8) == 0;
+}
+
+/* Returns true if the encoded bytes were written into `out`. Either a
+ * passthrough (plaintext copy) or the ciphertext. Returns false only if the
+ * caller should abort the save — i.e. crypto is enabled for this path but the
+ * session is locked, which would otherwise silently leak plaintext to disk. */
+static bool encode_for_write(const char *path, const char *content,
+                              std::vector<uint8_t> &out, std::string *error)
+{
+    size_t n = content ? strlen(content) : 0;
+    bool protect = notes_crypto_path_is_protected(path);
+    bool enabled = notes_crypto_is_enabled();
+
+    if (protect && enabled) {
+        if (!notes_crypto_is_unlocked()) {
+            if (error) *error = "Notes are locked. Unlock first.";
+            return false;
+        }
+        if (!notes_crypto_encrypt_buffer((const uint8_t *)content, n, out)) {
+            if (error) *error = "Encryption failed.";
+            return false;
+        }
+        return true;
+    }
+    out.assign((const uint8_t *)content, (const uint8_t *)content + n);
+    return true;
+}
+
+/* If the just-read string begins with the OpenSSL magic, decrypt it in place.
+ * Returns false only if the magic was present but decryption failed; callers
+ * treat that as a read error so the user never sees ciphertext as text. */
+static bool decode_after_read(std::string &content)
+{
+    if (!content_has_salted_magic(content.data(), content.size())) return true;
+    if (!notes_crypto_is_unlocked()) return false;
+    std::string plain;
+    if (!notes_crypto_decrypt_buffer((const uint8_t *)content.data(),
+                                     content.size(), plain)) return false;
+    content = std::move(plain);
+    return true;
+}
 
 float hw_get_sd_size()
 {
@@ -121,6 +173,9 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
 {
     filesystem_dirty = true;
 #ifdef ARDUINO
+    std::vector<uint8_t> payload;
+    if (!encode_for_write(path, content, payload, error)) return false;
+
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     File f;
     bool lock = false;
@@ -153,12 +208,12 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
         return false;
     }
 
-    size_t written = f.print(content);
+    size_t written = payload.empty() ? 0 : f.write(payload.data(), payload.size());
     f.close();
     if (lock) instance.unlockSPI();
 
     printf("Saved %u bytes to %s (%s)\n", (unsigned int)written, str.c_str(), lock ? "SD" : "Internal");
-    bool ok = (written > 0 || strlen(content) == 0);
+    bool ok = (written == payload.size());
     if (!ok && error) {
         *error = std::string("Write to ") + target + " failed (storage full?).";
     }
@@ -174,6 +229,9 @@ bool hw_save_internal_file(const char *path, const char *content, std::string *e
 {
     filesystem_dirty = true;
 #ifdef ARDUINO
+    std::vector<uint8_t> payload;
+    if (!encode_for_write(path, content, payload, error)) return false;
+
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     File f;
 
@@ -189,11 +247,11 @@ bool hw_save_internal_file(const char *path, const char *content, std::string *e
         return false;
     }
 
-    size_t written = f.print(content);
+    size_t written = payload.empty() ? 0 : f.write(payload.data(), payload.size());
     f.close();
 
     printf("Saved %u bytes to internal %s\n", (unsigned int)written, str.c_str());
-    bool ok = (written > 0 || strlen(content) == 0);
+    bool ok = (written == payload.size());
     if (!ok && error) {
         *error = "Write to Internal failed (storage full?).";
     }
@@ -237,6 +295,61 @@ bool hw_delete_internal_file(const char *path)
 #endif
 }
 
+#ifdef ARDUINO
+/* Recursively walk and remove. Children are snapshotted first because
+ * openNextFile() iterators don't survive mutations. */
+static bool delete_path_recursive(fs::FS &fs, const String &path)
+{
+    File f = fs.open(path);
+    if (!f) return false;
+    if (!f.isDirectory()) {
+        f.close();
+        return fs.remove(path);
+    }
+
+    std::vector<String> children;
+    File entry = f.openNextFile();
+    while (entry) {
+        String name = entry.name();
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0) name = name.substring(slash + 1);
+        String full = path;
+        if (!full.endsWith("/")) full += "/";
+        full += name;
+        children.push_back(full);
+        entry.close();
+        entry = f.openNextFile();
+    }
+    f.close();
+
+    for (const auto &c : children) {
+        if (!delete_path_recursive(fs, c)) return false;
+    }
+    return fs.rmdir(path);
+}
+#endif
+
+bool hw_delete_path(const char *path, bool use_sd)
+{
+    filesystem_dirty = true;
+#ifdef ARDUINO
+    if (!path || !path[0]) return false;
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    if (use_sd) {
+        if (!(HW_SD_ONLINE & hw_get_device_online())) return false;
+        instance.lockSPI();
+        bool ok = delete_path_recursive(SD, str);
+        instance.unlockSPI();
+        return ok;
+    }
+    return delete_path_recursive(FFat, str);
+#else
+    (void)use_sd;
+    printf("Delete path: %s\n", path);
+    return true;
+#endif
+}
+
 bool hw_read_file(const char *path, std::string &content)
 {
 #ifdef ARDUINO
@@ -272,6 +385,10 @@ bool hw_read_file(const char *path, std::string &content)
     f.close();
     if (lock) instance.unlockSPI();
     printf("Read %u bytes from %s (%s)\n", (unsigned int)size, str.c_str(), lock ? "SD" : "Internal");
+    if (!decode_after_read(content)) {
+        content.clear();
+        return false;
+    }
     return true;
 #else
     printf("Read from file: %s\n", path);
@@ -389,6 +506,48 @@ bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::s
 #endif
 }
 
+bool hw_read_internal_bytes_raw(const char *path, std::vector<uint8_t> &buf)
+{
+    buf.clear();
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    File f = FFat.open(str, FILE_READ);
+    if (!f) return false;
+    size_t size = f.size();
+    buf.resize(size);
+    if (size > 0) f.read(buf.data(), size);
+    f.close();
+    return true;
+#else
+    (void)path;
+    return false;
+#endif
+}
+
+bool hw_read_sd_bytes_raw(const char *path, std::vector<uint8_t> &buf)
+{
+    buf.clear();
+#ifdef ARDUINO
+    if (!(HW_SD_ONLINE & hw_get_device_online())) return false;
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    instance.lockSPI();
+    File f = SD.open(str, FILE_READ);
+    if (!f) {
+        instance.unlockSPI();
+        return false;
+    }
+    size_t size = f.size();
+    buf.resize(size);
+    if (size > 0) f.read(buf.data(), size);
+    f.close();
+    instance.unlockSPI();
+    return true;
+#else
+    (void)path;
+    return false;
+#endif
+}
+
 bool hw_read_internal_file(const char *path, std::string &content)
 {
 #ifdef ARDUINO
@@ -410,6 +569,10 @@ bool hw_read_internal_file(const char *path, std::string &content)
     }
     f.close();
     printf("Read %u bytes from internal %s\n", (unsigned int)size, str.c_str());
+    if (!decode_after_read(content)) {
+        content.clear();
+        return false;
+    }
     return true;
 #else
     printf("Read from internal file: %s\n", path);
@@ -648,20 +811,36 @@ void hw_get_sd_news_files(std::vector<std::string> &list)
 {
     list.clear();
 #ifdef ARDUINO
+    std::vector<FileInfo> file_infos;
+
+    // SD is the primary store for downloaded news. FFat is merged in as a
+    // fallback so files that landed internally (because the card was missing
+    // or the SD write failed) still show up in the list.
     if (HW_SD_ONLINE & hw_get_device_online()) {
-        std::vector<FileInfo> file_infos;
         instance.lockSPI();
         list_files(file_infos, SD, "/news", ".txt");
         instance.unlockSPI();
+    }
 
-        std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo & a, const FileInfo & b) {
-            if (a.time != b.time) return a.time > b.time;
-            return a.name > b.name;
-        });
-
-        for (const auto &fi : file_infos) {
-            list.push_back(fi.name);
+    std::vector<FileInfo> ffat_infos;
+    list_files(ffat_infos, FFat, "/news", ".txt");
+    // Dedup by leaf name — prefer the SD copy if the same filename exists in
+    // both stores, since that's where the next download would land.
+    for (const auto &fi : ffat_infos) {
+        bool dup = false;
+        for (const auto &ex : file_infos) {
+            if (ex.name == fi.name) { dup = true; break; }
         }
+        if (!dup) file_infos.push_back(fi);
+    }
+
+    std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo & a, const FileInfo & b) {
+        if (a.time != b.time) return a.time > b.time;
+        return a.name > b.name;
+    });
+
+    for (const auto &fi : file_infos) {
+        list.push_back(fi.name);
     }
 #else
     list.push_back("/news/example1.txt");
@@ -929,26 +1108,44 @@ static void prune_internal_storage()
 bool hw_save_preferred_file(const char *path, const char *content, std::string *error)
 {
     filesystem_dirty = true;
-    bool ok = hw_save_internal_file(path, content, error);
 
-    // Redundant save to SD if available
-    if (HW_SD_ONLINE & hw_get_device_online()) {
 #ifdef ARDUINO
-        String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    /* Encode once so the internal and SD copies share identical bytes (and
+     * therefore an identical salt when encrypted). */
+    std::vector<uint8_t> payload;
+    if (!encode_for_write(path, content, payload, error)) return false;
+
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    bool ok_int = false;
+    {
+        File f = FFat.open(str, "w");
+        if (f) {
+            size_t w = payload.empty() ? 0 : f.write(payload.data(), payload.size());
+            f.close();
+            ok_int = (w == payload.size());
+        }
+        if (!ok_int && error) {
+            *error = "Cannot write to Internal.";
+        }
+    }
+
+    if (HW_SD_ONLINE & hw_get_device_online()) {
         instance.lockSPI();
         File f = SD.open(str, "w");
         if (f) {
-            f.print(content);
+            if (!payload.empty()) f.write(payload.data(), payload.size());
             f.close();
         }
         instance.unlockSPI();
-#endif
     }
 
-    // Ensure internal storage limit
     prune_internal_storage();
-
-    return ok;
+    return ok_int;
+#else
+    (void)error;
+    printf("Save to preferred file: %s, content: %s\n", path, content);
+    return true;
+#endif
 }
 
 bool hw_read_preferred_file(const char *path, std::string &content)
@@ -986,21 +1183,44 @@ bool hw_read_preferred_file_snippet(const char *path, std::string &content, size
     if (truncated) *truncated = false;
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
-    File f;
 
-    // Strictly use internal storage
-    f = FFat.open(str, FILE_READ);
-
+    /* Probe the first 8 bytes so encrypted files take the full-read path.
+     * CBC ciphertext can't be partially decrypted, so for protected files we
+     * must read the whole thing, decrypt, then truncate the plaintext. */
+    File f = FFat.open(str, FILE_READ);
     if (!f) return false;
-
     size_t total = f.size();
+
+    uint8_t probe[8] = {0};
+    size_t probe_len = total < 8 ? total : 8;
+    if (probe_len) f.read(probe, probe_len);
+    bool is_enc = content_has_salted_magic((const char *)probe, probe_len);
+
+    if (is_enc) {
+        /* Read the whole file and decrypt. */
+        std::string full;
+        full.resize(total);
+        f.seek(0);
+        if (total) f.read((uint8_t *)&full[0], total);
+        f.close();
+        if (!decode_after_read(full)) return false;
+        if (full.size() > max_bytes) {
+            content.assign(full.data(), max_bytes);
+            if (truncated) *truncated = true;
+        } else {
+            content = std::move(full);
+        }
+        return true;
+    }
+
+    /* Plaintext: cheap partial read like before. */
+    f.seek(0);
     size_t to_read = total < max_bytes ? total : max_bytes;
     content.resize(to_read);
     if (to_read > 0) {
         f.read((uint8_t *)&content[0], to_read);
     }
     f.close();
-
     if (truncated) *truncated = total > max_bytes;
     return true;
 #else

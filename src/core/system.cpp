@@ -5,10 +5,15 @@
  * @copyright Copyright (c) 2026
  */
 #include "system.h"
+#include "input_focus.h"
 #include "../ui_define.h"
 #include <Arduino.h>
 
 #include "../apps/menu_app.h"
+
+LV_FONT_DECLARE(lv_font_montserrat_18);
+LV_FONT_DECLARE(lv_font_montserrat_28);
+LV_FONT_DECLARE(lv_font_montserrat_40);
 
 // Definition of global UI objects
 lv_obj_t *main_screen = nullptr;
@@ -128,6 +133,12 @@ void System::setupGlobalUI() {
     lv_label_set_text(_statBTLabel, LV_SYMBOL_BLUETOOTH);
     lv_obj_add_flag(_statBTLabel, LV_OBJ_FLAG_HIDDEN);
 
+    _statWifiLabel = lv_label_create(_statRightCont);
+    lv_obj_set_style_text_color(_statWifiLabel, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_text_font(_statWifiLabel, header_font, 0);
+    lv_label_set_text(_statWifiLabel, LV_SYMBOL_WIFI);
+    lv_obj_add_flag(_statWifiLabel, LV_OBJ_FLAG_HIDDEN);
+
     _statBattLabel = lv_label_create(_statRightCont);
     lv_obj_set_style_text_color(_statBattLabel, lv_color_white(), 0);
     lv_obj_set_style_text_font(_statBattLabel, header_font, 0);
@@ -160,6 +171,11 @@ void System::setupGlobalUI() {
     lv_timer_create([](lv_timer_t *t) {
         System& self = System::getInstance();
 
+        // Hold the status-bar refresh while the user is typing: the cadence
+        // triggers an FFat walk (file count) plus an I2C battery read, both
+        // under the instance mutex that the keyboard reader also needs.
+        if (core::isTextInputFocused()) return;
+
         static const lv_font_t *applied_header_font = nullptr;
         const lv_font_t *cur_font = get_header_font();
         if (applied_header_font == nullptr) applied_header_font = cur_font;
@@ -174,6 +190,9 @@ void System::setupGlobalUI() {
             lv_obj_set_style_text_font(self._statUSBLabel, cur_font, 0);
             if (self._statBTLabel) {
                 lv_obj_set_style_text_font(self._statBTLabel, cur_font, 0);
+            }
+            if (self._statWifiLabel) {
+                lv_obj_set_style_text_font(self._statWifiLabel, cur_font, 0);
             }
             if (self._statFileCountLabel) {
                 lv_obj_set_style_text_font(self._statFileCountLabel, cur_font, 0);
@@ -223,16 +242,34 @@ void System::setupGlobalUI() {
             else           lv_obj_add_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
         }
 
+        // Radio icons have three states each:
+        //   off        → hidden
+        //   on, idle   → shown in muted gray
+        //   connected  → shown in accent color
         if (self._statBTLabel) {
-            if (hw_get_ble_kb_connected()) {
+            if (hw_get_bt_enable()) {
                 lv_obj_clear_flag(self._statBTLabel, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_style_text_color(self._statBTLabel,
+                    hw_get_ble_kb_connected() ? UI_COLOR_ACCENT : UI_COLOR_MUTED, 0);
             } else {
                 lv_obj_add_flag(self._statBTLabel, LV_OBJ_FLAG_HIDDEN);
             }
         }
 
+        if (self._statWifiLabel) {
+            if (hw_get_wifi_enable()) {
+                lv_obj_clear_flag(self._statWifiLabel, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_style_text_color(self._statWifiLabel,
+                    hw_get_wifi_connected() ? UI_COLOR_ACCENT : UI_COLOR_MUTED, 0);
+            } else {
+                lv_obj_add_flag(self._statWifiLabel, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+
+        bool usb_mounted = hw_is_usb_msc_mounted();
+
         if (self._statUSBLabel) {
-            if (hw_is_usb_msc_mounted()) {
+            if (usb_mounted) {
                 lv_obj_clear_flag(self._statUSBLabel, LV_OBJ_FLAG_HIDDEN);
                 if (hw_is_usb_msc_writing()) {
                     lv_obj_set_style_text_color(self._statUSBLabel, lv_palette_main(LV_PALETTE_RED), 0);
@@ -244,6 +281,54 @@ void System::setupGlobalUI() {
             } else {
                 lv_obj_add_flag(self._statUSBLabel, LV_OBJ_FLAG_HIDDEN);
             }
+        }
+
+        // Unsafe-to-disconnect warning: present as long as the volume is
+        // mounted on the host. Sits on the top layer so it overrides whatever
+        // app is currently running, and tears itself down once the host
+        // ejects the volume.
+        if (usb_mounted && self._usbWarningBox == nullptr) {
+            lv_obj_t *box = lv_obj_create(lv_layer_top());
+            lv_obj_set_size(box, lv_pct(100), lv_pct(100));
+            lv_obj_center(box);
+            lv_obj_set_style_bg_color(box, UI_COLOR_BG, 0);
+            lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_color(box, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_border_width(box, UI_BORDER_W, 0);
+            lv_obj_set_style_radius(box, 0, 0);
+            lv_obj_set_style_pad_all(box, 12, 0);
+            lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+            lv_obj_set_flex_align(box, LV_FLEX_ALIGN_CENTER,
+                                  LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_row(box, 8, 0);
+            lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+            lv_obj_t *icon = lv_label_create(box);
+            lv_label_set_text(icon, LV_SYMBOL_WARNING);
+            lv_obj_set_style_text_color(icon, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_text_font(icon, &lv_font_montserrat_40, 0);
+
+            lv_obj_t *title = lv_label_create(box);
+            lv_label_set_text(title, "Unsafe to\ndisconnect");
+            lv_obj_set_style_text_color(title, UI_COLOR_FG, 0);
+            lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+            lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+
+            lv_obj_t *msg = lv_label_create(box);
+            lv_label_set_text(msg,
+                "Eject the USB\n"
+                "volume before\n"
+                "unplugging.");
+            lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+            lv_obj_set_width(msg, lv_pct(95));
+            lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_style_text_color(msg, UI_COLOR_FG, 0);
+            lv_obj_set_style_text_font(msg, &lv_font_montserrat_18, 0);
+
+            self._usbWarningBox = box;
+        } else if (!usb_mounted && self._usbWarningBox != nullptr) {
+            lv_obj_del(self._usbWarningBox);
+            self._usbWarningBox = nullptr;
         }
 
         user_setting_params_t settings;
@@ -332,11 +417,27 @@ lv_obj_t* System::showBackButton(lv_event_cb_t cb) {
     if (!_statBackBtn) return nullptr;
     clear_back_button_events(_statBackBtn);
     if (cb) lv_obj_add_event_cb(_statBackBtn, cb, LV_EVENT_CLICKED, NULL);
+    _backBtnCb = cb;
     lv_obj_remove_flag(_statBackBtn, LV_OBJ_FLAG_HIDDEN);
     lv_group_t *g = lv_group_get_default();
     if (g) {
+        // lv_group_add_obj appends, so if the group already held other
+        // widgets (e.g. when restoring this handler after a modal overlay
+        // tore down) the back button would land at the end of the nav
+        // order. Rebuild the group so the back button sits at index 0 while
+        // every other member keeps its original relative order.
         lv_group_remove_obj(_statBackBtn);
+        uint32_t n = lv_group_get_obj_count(g);
+        lv_obj_t *members[32];
+        if (n > 32) n = 32;
+        for (uint32_t i = 0; i < n; i++) {
+            members[i] = lv_group_get_obj_by_index(g, i);
+        }
+        lv_group_remove_all_objs(g);
         lv_group_add_obj(g, _statBackBtn);
+        for (uint32_t i = 0; i < n; i++) {
+            if (members[i]) lv_group_add_obj(g, members[i]);
+        }
     }
     return _statBackBtn;
 }
@@ -344,6 +445,7 @@ lv_obj_t* System::showBackButton(lv_event_cb_t cb) {
 void System::hideBackButton() {
     if (!_statBackBtn) return;
     clear_back_button_events(_statBackBtn);
+    _backBtnCb = nullptr;
     lv_group_remove_obj(_statBackBtn);
     lv_obj_add_flag(_statBackBtn, LV_OBJ_FLAG_HIDDEN);
 }
@@ -360,4 +462,9 @@ lv_obj_t *ui_show_back_button(lv_event_cb_t cb)
 void ui_hide_back_button(void)
 {
     core::System::getInstance().hideBackButton();
+}
+
+lv_event_cb_t ui_get_back_button_cb(void)
+{
+    return core::System::getInstance().getBackButtonCb();
 }

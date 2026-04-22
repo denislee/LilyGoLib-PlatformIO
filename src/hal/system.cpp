@@ -5,6 +5,8 @@
  */
 #include "../hal_interface.h"   // umbrella: pulls all hal/ headers and `using std::string`.
 #include "internal.h"
+#include "notes_crypto.h"
+#include "keyboard_task.h"
 
 #include <cstring>
 #include <lvgl.h>
@@ -24,7 +26,7 @@ user_setting_params_t user_setting;
 //     Adding a new field to the *end* keeps the size check effective and is
 //     safe without a version bump — missing bytes keep their default values.
 static constexpr uint32_t SETTINGS_MAGIC   = 0x50414752u; // "PAGR"
-static constexpr uint16_t SETTINGS_VERSION = 5;
+static constexpr uint16_t SETTINGS_VERSION = 8;
 
 struct SettingsHeader {
     uint32_t magic;
@@ -37,6 +39,8 @@ struct SettingsHeader {
 #include "Esp.h"
 #include <LilyGoLib.h>
 #include <esp_mac.h>
+#include <esp_sntp.h>
+#include <WiFi.h>
 #include <Preferences.h>
 #include "driver/rtc_io.h"
 
@@ -272,6 +276,12 @@ void hw_init()
             hw_low_power_loop();
         }
     }, POWER_EVENT, NULL);
+
+    // Drive the keyboard from a dedicated high-priority task so it stays
+    // responsive even when the main loop is held up by radio / NFC /
+    // display flush / WiFi work. Must run after beginLvglHelper() so the
+    // LVGL keypad indev exists and our read_cb can be swapped in.
+    hw_keyboard_task_start();
 #endif
 
 }
@@ -296,6 +306,12 @@ void hw_load_setting()
     user_setting.header_font_index = 0;  // Montserrat
     user_setting.home_font_size = 16;
     user_setting.home_font_index = 0;    // Montserrat
+    user_setting.system_font_size = 14;
+    user_setting.system_font_index = 0;  // Montserrat
+    user_setting.weather_font_size = 14;
+    user_setting.weather_font_index = 4; // Inter — Latin-1 glyphs for diacritics
+    user_setting.telegram_font_size = 14;
+    user_setting.telegram_font_index = 4; // Inter — needed for Portuguese, Spanish, French accents
     user_setting.charge_limit_en = false;
     user_setting.wifi_enable = 0;
     user_setting.bt_enable = 0;
@@ -479,6 +495,59 @@ void hw_set_date_time(struct tm &timeinfo)
 #endif
 }
 
+// --- NTP sync -------------------------------------------------------------
+// Manual-trigger counterpart to the automatic sync done from
+// factory.ino::WiFiGotIP(). Starts SNTP and returns immediately so the UI
+// stays responsive; the caller polls hw_get_time_sync_status() on an
+// lv_timer to learn when it's done. The actual RTC write happens in the
+// factory.ino time_available() callback that esp_sntp invokes on success.
+//
+// Calling configTime() after the DHCP flow has already set NTP via option
+// 42 is safe — it overrides whatever the DHCP server handed us.
+// Flipped by the SNTP notification callback in factory.ino via
+// hw_notify_time_sync_completed(). More reliable than sntp_get_sync_status(),
+// which in the default SNTP_SYNC_MODE_IMMED often stays at RESET even after
+// a successful update.
+static volatile bool g_ntp_sync_completed = false;
+
+bool hw_start_time_sync_ntp(int gmt_offset_sec)
+{
+#ifdef ARDUINO
+    if (!hw_get_wifi_connected()) return false;
+    g_ntp_sync_completed = false;
+    // Force a fresh sync cycle: if SNTP was already COMPLETED from boot,
+    // reset it so the callback fires again on the next successful update.
+    sntp_stop();
+    configTime(gmt_offset_sec, 0, "pool.ntp.org", "time.nist.gov");
+    return true;
+#else
+    (void)gmt_offset_sec;
+    return false;
+#endif
+}
+
+bool hw_start_time_sync_ntp()
+{
+    return hw_start_time_sync_ntp((int)GMT_OFFSET_SECOND);
+}
+
+void hw_notify_time_sync_completed()
+{
+    g_ntp_sync_completed = true;
+}
+
+// 1 = synced since last start, 0 = not yet (in progress or reset).
+int hw_get_time_sync_status()
+{
+#ifdef ARDUINO
+    if (g_ntp_sync_completed) return 1;
+    if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) return 1;
+    return 0;
+#else
+    return -1;
+#endif
+}
+
 
 
 void hw_get_arduino_version(string &param)
@@ -545,10 +614,11 @@ void hw_power_down_all()
     hw_disable_keyboard();
     // SD Card is left on to avoid mount/unmount overhead and potential filesystem issues
 
-    // Lower CPU frequency for power saving during fake sleep. BLE needs at
-    // least 80MHz — dropping to 40MHz while a BLE client is connected severs
-    // the link, so hold at 80MHz in that case.
-    setCpuFrequencyMhz(hw_get_ble_kb_connected() ? 80 : 40);
+    // Lower CPU frequency for power saving during fake sleep. BLE and WiFi
+    // both need ≥80MHz — dropping to 40MHz while either link is up severs
+    // it, so hold at 80MHz in that case.
+    bool hold_80 = hw_get_ble_kb_connected() || hw_get_wifi_connected();
+    setCpuFrequencyMhz(hold_80 ? 80 : 40);
 #endif
 }
 
@@ -570,6 +640,9 @@ void hw_power_up_all()
 void hw_sleep()
 {
 #ifdef ARDUINO
+    /* Drop the in-RAM passphrase before suspending — a device found asleep
+     * should be indistinguishable from one that's been off. */
+    notes_crypto_lock();
     hw_audio_deinit_task();
 
 #ifdef USING_PDM_MICROPHONE
@@ -595,6 +668,7 @@ void hw_feedback()
 void hw_low_power_loop()
 {
 #ifdef ARDUINO
+    notes_crypto_lock();
     if (user_setting.sleep_mode == 1) {
         hw_sleep();
     } else {

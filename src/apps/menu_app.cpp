@@ -7,38 +7,81 @@
 #include "menu_app.h"
 #include "../core/system.h"
 #include "../ui_define.h"
+#include "app_registry.h"
+#include <vector>
+
+LV_FONT_DECLARE(lv_font_montserrat_12);
 
 namespace apps {
 
 namespace {
+
+// A badge function returns the small unread/notification count to render in
+// the tile corner. Return 0 to hide the badge. Null means the tile never has
+// a badge.
+using BadgeFn = int (*)();
 
 struct HomeItem {
     const char* label;
     const char* symbol;
     const char* appName;
     lv_palette_t palette;
+    BadgeFn badge_fn;
 };
+
+// Keeps the badge labels alive for the lifetime of the menu view so the
+// periodic timer can refresh them. Reset each time the menu re-mounts.
+static std::vector<lv_obj_t*> s_badge_labels;
+static std::vector<BadgeFn>   s_badge_fns;
+static lv_timer_t* s_badge_timer = nullptr;
+
+static void format_badge_text(int n, char *buf, size_t cap) {
+    if (n > 99) snprintf(buf, cap, "99+");
+    else        snprintf(buf, cap, "%d", n);
+}
+
+static void update_badges(lv_timer_t *t) {
+    (void)t;
+    for (size_t i = 0; i < s_badge_labels.size(); i++) {
+        lv_obj_t *lbl = s_badge_labels[i];
+        if (!lbl) continue;
+        int n = s_badge_fns[i] ? s_badge_fns[i]() : 0;
+        if (n > 0) {
+            char buf[8];
+            format_badge_text(n, buf, sizeof(buf));
+            lv_label_set_text(lbl, buf);
+            lv_obj_clear_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
 
 enum HomeItemId {
     ITEM_NOTES,
     ITEM_TASKS,
     ITEM_RECORDER,
-    ITEM_JOURNAL,
+    ITEM_WEATHER,
     ITEM_REMOTE,
+    ITEM_TELEGRAM,
     ITEM_NEWS,
-    ITEM_FILES,
     ITEM_SETTINGS,
 };
 
+// Notes tile now opens a launcher that contains both the text editor and the
+// chronological Journal view — the standalone Journal tile has been folded in.
+// File browsing lives inside Settings to keep the home grid focused on
+// day-to-day apps.
 static const HomeItem kItems[] = {
-    {"Notes",    LV_SYMBOL_EDIT,      "Notes",    LV_PALETTE_ORANGE},
-    {"Tasks",    LV_SYMBOL_OK,        "Tasks",    LV_PALETTE_GREEN},
-    {"Recorder", LV_SYMBOL_AUDIO,     "Recorder", LV_PALETTE_PURPLE},
-    {"Journal",  LV_SYMBOL_BARS,      "Journal",  LV_PALETTE_CYAN},
-    {"Remote",   LV_SYMBOL_BLUETOOTH, "Remote",   LV_PALETTE_INDIGO},
-    {"News",     LV_SYMBOL_LIST,      "News",     LV_PALETTE_BLUE},
-    {"Files",    LV_SYMBOL_DIRECTORY, "Files",    LV_PALETTE_YELLOW},
-    {"Settings", LV_SYMBOL_SETTINGS,  "Settings", LV_PALETTE_GREY},
+    {"Notes",    LV_SYMBOL_EDIT,      "Notes",    LV_PALETTE_ORANGE,      nullptr},
+    {"Tasks",    LV_SYMBOL_OK,        "Tasks",    LV_PALETTE_GREEN,       nullptr},
+    {"Recorder", LV_SYMBOL_AUDIO,     "Recorder", LV_PALETTE_PURPLE,      nullptr},
+    {"Weather",  LV_SYMBOL_TINT,      "Weather",  LV_PALETTE_CYAN,        nullptr},
+    {"Remote",   LV_SYMBOL_BLUETOOTH, "Remote",   LV_PALETTE_INDIGO,      nullptr},
+    {"Telegram", LV_SYMBOL_ENVELOPE,  "Telegram", LV_PALETTE_LIGHT_BLUE,  tg_get_unread_count},
+    {"News",     LV_SYMBOL_LIST,      "News",     LV_PALETTE_BLUE,        nullptr},
+    {"Settings", LV_SYMBOL_SETTINGS,  "Settings", LV_PALETTE_GREY,        nullptr},
 };
 constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
 
@@ -68,6 +111,15 @@ void tile_click_cb(lv_event_t* e) {
 
 MenuApp::MenuApp() : core::App("MainMenu") {}
 
+void MenuApp::onStop() {
+    // Kill the badge timer before the tiles are cleaned up — otherwise its
+    // next tick would touch labels that lv_obj_clean just destroyed.
+    if (s_badge_timer) { lv_timer_del(s_badge_timer); s_badge_timer = nullptr; }
+    s_badge_labels.clear();
+    s_badge_fns.clear();
+    core::App::onStop();
+}
+
 void MenuApp::onStart(lv_obj_t* parent) {
     // Turn the menu panel itself into the flex grid — avoids an extra layer and
     // makes sizing/padding straightforward.
@@ -82,15 +134,22 @@ void MenuApp::onStart(lv_obj_t* parent) {
     lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
+    // Reset badge tracking: tiles are about to be recreated, old pointers
+    // are now invalid. onStop() kills the timer before the tiles go away.
+    s_badge_labels.clear();
+    s_badge_fns.clear();
+    if (s_badge_timer) { lv_timer_del(s_badge_timer); s_badge_timer = nullptr; }
+
     lv_obj_update_layout(parent);
     int32_t panel_w = lv_obj_get_content_width(parent);
     int32_t panel_h = lv_obj_get_content_height(parent);
     if (panel_w <= 0) panel_w = 460;
     if (panel_h <= 0) panel_h = 180;
 
-    // 4x2 on landscape panels (pager, ultra); 3x3 on the square watch.
+    // 4 cols on landscape panels (pager, ultra); 3 cols on the square watch.
+    // Rows adapt to item count so added apps still fit the grid.
     int cols = (panel_w >= 400) ? 4 : 3;
-    int rows = (cols == 4) ? 2 : 3;
+    int rows = (kItemCount + cols - 1) / cols;
     const int gap = 6;
     int32_t tile_w = (panel_w - (cols - 1) * gap) / cols;
     int32_t tile_h = (panel_h - (rows - 1) * gap) / rows;
@@ -168,10 +227,36 @@ void MenuApp::onStart(lv_obj_t* parent) {
         lv_obj_add_event_cb(tile, tile_click_cb, LV_EVENT_CLICKED,
                             (void*)&item);
         if (grp) lv_group_add_obj(grp, tile);
+
+        // Tiles with a badge_fn get a small red pill in the top-right
+        // corner, hidden by default and toggled on by update_badges().
+        if (item.badge_fn) {
+            lv_obj_t* badge = lv_label_create(tile);
+            lv_label_set_text(badge, "");
+            lv_obj_add_flag(badge, LV_OBJ_FLAG_IGNORE_LAYOUT);
+            lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -2, 2);
+            lv_obj_set_style_bg_color(badge, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+            lv_obj_set_style_text_color(badge, UI_COLOR_FG, 0);
+            lv_obj_set_style_text_font(badge, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_pad_hor(badge, 4, 0);
+            lv_obj_set_style_pad_ver(badge, 1, 0);
+            lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
+            s_badge_labels.push_back(badge);
+            s_badge_fns.push_back(item.badge_fn);
+        }
     }
 
     if (grp && lv_obj_get_child_count(parent) > 0) {
         lv_group_focus_obj(lv_obj_get_child(parent, 0));
+    }
+
+    // Populate badges immediately, then refresh on a slow tick so the menu
+    // reflects unread counts that arrive while it's open.
+    if (!s_badge_labels.empty()) {
+        update_badges(nullptr);
+        s_badge_timer = lv_timer_create(update_badges, 2000, nullptr);
     }
 }
 

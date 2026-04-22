@@ -6,6 +6,8 @@
  *
  */
 #include "ui_define.h"
+#include "hal/notes_crypto.h"
+#include "core/input_focus.h"
 
 LV_FONT_DECLARE(lv_font_montserrat_12);
 
@@ -120,6 +122,10 @@ static bool save_content(bool is_autosave = false)
 
 static void autosave_timer_cb(lv_timer_t *t)
 {
+    // Defer the write while the user is actively typing — the FS flush
+    // stalls the LVGL thread and holds the instance mutex long enough to
+    // drop keystrokes. Content stays dirty; the next tick picks it up.
+    if (core::isTextInputFocused()) return;
     save_content(true);
 }
 
@@ -196,7 +202,34 @@ static void text_area_event_cb(lv_event_t *e)
     }
 }
 
+static void editor_build_ui(lv_obj_t *parent);
+
+static lv_obj_t *pending_editor_parent = NULL;
+static void editor_unlock_result_cb(bool ok, void *ud)
+{
+    lv_obj_t *parent = (lv_obj_t *)ud;
+    if (!ok) {
+        pending_editor_parent = NULL;
+        menu_show();
+        return;
+    }
+    if (pending_editor_parent == parent) {
+        pending_editor_parent = NULL;
+        editor_build_ui(parent);
+    }
+}
+
 void ui_text_editor_enter(lv_obj_t *parent)
+{
+    if (notes_crypto_is_enabled() && !notes_crypto_is_unlocked()) {
+        pending_editor_parent = parent;
+        ui_passphrase_unlock(editor_unlock_result_cb, parent);
+        return;
+    }
+    editor_build_ui(parent);
+}
+
+static void editor_build_ui(lv_obj_t *parent)
 {
     // If it was already partially active or pointers are stale, clean up
     if (menu != NULL) {
@@ -331,7 +364,7 @@ void ui_text_editor_exit(lv_obj_t *parent)
 namespace {
 class TextEditorApp : public core::App {
 public:
-    TextEditorApp() : core::App("Notes") {}
+    TextEditorApp() : core::App("Editor") {}
     void onStart(lv_obj_t *parent) override { ui_text_editor_enter(parent); }
     void onStop() override {
         ui_text_editor_exit(getRoot());

@@ -32,6 +32,7 @@ public:
     lv_obj_t* showBackButton(lv_event_cb_t cb);
     void hideBackButton();
     lv_obj_t* getBackButton() const { return _statBackBtn; }
+    lv_event_cb_t getBackButtonCb() const { return _backBtnCb; }
 
 private:
     System() = default;
@@ -47,10 +48,13 @@ private:
     lv_obj_t* _statSDLabel = nullptr;
     lv_obj_t* _statUSBLabel = nullptr;
     lv_obj_t* _statBTLabel = nullptr;
+    lv_obj_t* _statWifiLabel = nullptr;
     lv_obj_t* _statFileCountLabel = nullptr;
     lv_obj_t* _statRightCont = nullptr;
     lv_obj_t* _statBackBtn = nullptr;
-    
+    lv_event_cb_t _backBtnCb = nullptr;
+    lv_obj_t* _usbWarningBox = nullptr;
+
     lv_group_t* _menuGroup = nullptr;
     lv_group_t* _appGroup = nullptr;
     

@@ -212,6 +212,12 @@ typedef struct {
     uint8_t header_font_index;
     uint8_t home_font_size;
     uint8_t home_font_index;
+    uint8_t system_font_size;
+    uint8_t system_font_index;
+    uint8_t weather_font_size;
+    uint8_t weather_font_index;
+    uint8_t telegram_font_size;
+    uint8_t telegram_font_index;
 } user_setting_params_t;
 
 typedef struct {

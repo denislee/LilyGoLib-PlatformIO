@@ -4,6 +4,7 @@
  */
 #include "ui_define.h"
 #include "core/app_manager.h"
+#include "hal/notes_crypto.h"
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -64,6 +65,16 @@ bool load_index_file(std::vector<JournalEntry> &out)
     out.clear();
     std::vector<uint8_t> raw;
     if (!hw_read_preferred_bytes(kIndexPath, raw)) return false;
+
+    /* Encrypted indices carry the OpenSSL Salted__ prefix. Decrypt in place
+     * before the header checks below try to interpret the bytes. */
+    if (raw.size() >= 8 && memcmp(raw.data(), "Salted__", 8) == 0) {
+        if (!notes_crypto_is_unlocked()) return false;
+        std::string plain;
+        if (!notes_crypto_decrypt_buffer(raw.data(), raw.size(), plain)) return false;
+        raw.assign(plain.begin(), plain.end());
+    }
+
     if (raw.size() < 9) return false;
 
     size_t pos = 0;
@@ -119,6 +130,19 @@ void save_index_file(const std::vector<JournalEntry> &entries)
         write_u16le(buf, snip_len);
         buf.insert(buf.end(), e.snippet.begin(), e.snippet.begin() + snip_len);
         buf.push_back(e.truncated ? 1 : 0);
+    }
+
+    /* The index caches the first 4KB of every note as a plaintext snippet.
+     * Without encryption that would defeat the at-rest protection on the
+     * notes themselves, so we encrypt the whole blob with the same key. */
+    if (notes_crypto_should_encrypt()) {
+        std::vector<uint8_t> ct;
+        if (notes_crypto_encrypt_buffer(buf.data(), buf.size(), ct)) {
+            hw_save_preferred_bytes(kIndexPath, ct.data(), ct.size());
+            return;
+        }
+        /* Encryption failure falls through to the plaintext write so we don't
+         * lose the index entirely on transient errors. */
     }
     hw_save_preferred_bytes(kIndexPath, buf.data(), buf.size());
 }
@@ -313,6 +337,22 @@ static void loader_hide()
 
 void ui_journal_enter(lv_obj_t *parent);
 void ui_journal_exit(lv_obj_t *parent);
+static void journal_build_ui(lv_obj_t *parent);
+
+static lv_obj_t *pending_journal_parent = NULL;
+static void journal_unlock_result_cb(bool ok, void *ud)
+{
+    lv_obj_t *parent = (lv_obj_t *)ud;
+    if (!ok) {
+        pending_journal_parent = NULL;
+        menu_show();
+        return;
+    }
+    if (pending_journal_parent == parent) {
+        pending_journal_parent = NULL;
+        journal_build_ui(parent);
+    }
+}
 
 static void free_post_user_data()
 {
@@ -540,6 +580,16 @@ static void post_scroll_indicator_cb(lv_event_t *e)
 }
 
 void ui_journal_enter(lv_obj_t *parent)
+{
+    if (notes_crypto_is_enabled() && !notes_crypto_is_unlocked()) {
+        pending_journal_parent = parent;
+        ui_passphrase_unlock(journal_unlock_result_cb, parent);
+        return;
+    }
+    journal_build_ui(parent);
+}
+
+static void journal_build_ui(lv_obj_t *parent)
 {
     if (menu != NULL) return;
     enable_keyboard();

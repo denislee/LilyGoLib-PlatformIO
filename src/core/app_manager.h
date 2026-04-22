@@ -35,6 +35,14 @@ public:
     void switchApp(const std::string& name, lv_obj_t* parent);
 
     /**
+     * @brief Queue an app switch to run after the current LVGL event dispatch
+     * unwinds. Safe to call from inside LV_EVENT_CLICKED and other handlers
+     * whose target is a descendant of the UI the destination app will tear
+     * down. The switch runs from update(), called once per main-loop tick.
+     */
+    void queueSwitchApp(const std::string& name, lv_obj_t* parent);
+
+    /**
      * @brief Get the currently active app.
      */
     std::shared_ptr<App> getActiveApp() const { return _activeApp; }
@@ -57,6 +65,10 @@ private:
     std::map<std::string, std::shared_ptr<App>> _appMap;
     std::vector<std::shared_ptr<App>> _apps;
     std::shared_ptr<App> _activeApp;
+
+    bool _hasPendingSwitch = false;
+    std::string _pendingName;
+    lv_obj_t* _pendingParent = nullptr;
 };
 
 } // namespace core
