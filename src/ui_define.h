@@ -118,6 +118,8 @@ void ui_text_prompt(const char *title, const char *subtitle,
 /* Modal WiFi picker: scan / list / connect / forget. Self-contained overlay
  * on lv_layer_top. See ui_wifi.cpp. */
 void ui_wifi_networks_open();
+/* Live NFC status + detection counters overlay. See ui_nfc_test.cpp. */
+void ui_nfc_test_open();
 void ui_request_editor_switch();
 void ui_resume_timers();
 void ui_pause_timers();

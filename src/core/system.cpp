@@ -7,7 +7,6 @@
 #include "system.h"
 #include "input_focus.h"
 #include "../ui_define.h"
-#include <Arduino.h>
 
 #include "../apps/menu_app.h"
 

@@ -1853,12 +1853,14 @@ static lv_obj_t *create_subpage_notes_security(lv_obj_t *menu, lv_obj_t *main_pa
     return cont;
 }
 
-// Connectivity subpage — "WiFi Networks" row is hidden when WiFi is off.
-// `row` is the full menu_cont (icon + label + right-arrow btn); `btn` is the
-// inner clickable that needs to join/leave the nav group. We hide the whole
-// row so the label disappears along with the arrow.
+// Connectivity subpage — "WiFi Networks" row is hidden when WiFi is off,
+// "NFC Test" row the same when NFC is off. `row` is the full menu_cont
+// (icon + label + right-arrow btn); `btn` is the inner clickable that needs
+// to join/leave the nav group. Hiding the whole row drops the label too.
 static lv_obj_t *g_wifi_networks_row = nullptr;
 static lv_obj_t *g_wifi_networks_btn = nullptr;
+static lv_obj_t *g_nfc_test_row      = nullptr;
+static lv_obj_t *g_nfc_test_btn      = nullptr;
 static lv_obj_t *g_connectivity_subpage = nullptr;
 
 static void wifi_enable_cb(lv_event_t *e) {
@@ -1901,9 +1903,14 @@ static void radio_enable_cb(lv_event_t *e) {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
     local_param.radio_enable = en;
-    hw_set_radio_enable(en);
+    int16_t st = hw_set_radio_enable(en);
     lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
     if (label) lv_label_set_text(label, en ? " On " : " Off ");
+    if (st != 0) {
+        char msg[48];
+        snprintf(msg, sizeof(msg), "Radio config failed (err %d)", (int)st);
+        ui_msg_pop_up("Radio", msg);
+    }
 }
 
 static void nfc_enable_cb(lv_event_t *e) {
@@ -1913,6 +1920,20 @@ static void nfc_enable_cb(lv_event_t *e) {
     hw_set_nfc_enable(en);
     lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
     if (label) lv_label_set_text(label, en ? " On " : " Off ");
+    if (g_nfc_test_row) {
+        if (en) {
+            lv_obj_clear_flag(g_nfc_test_row, LV_OBJ_FLAG_HIDDEN);
+            if (g_nfc_test_btn) lv_obj_clear_flag(g_nfc_test_btn, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(g_nfc_test_row, LV_OBJ_FLAG_HIDDEN);
+            if (g_nfc_test_btn) lv_obj_add_flag(g_nfc_test_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+        // Rebuild nav group so the row reclaims focusability when re-shown.
+        if (g_connectivity_subpage) {
+            activate_subpage_group(g_connectivity_subpage);
+            lv_group_focus_obj(obj);
+        }
+    }
 }
 
 static void gps_enable_cb(lv_event_t *e) {
@@ -1975,6 +1996,18 @@ static void build_subpage_connectivity(lv_obj_t *menu, lv_obj_t *sub_page)
 
     btn = create_toggle_btn_row(sub_page, "NFC", hw_get_nfc_enable(), nfc_enable_cb);
     register_subpage_group_obj(sub_page, btn);
+
+#if defined(USING_ST25R3916)
+    btn = create_button(sub_page, LV_SYMBOL_REFRESH, "NFC Test",
+                        [](lv_event_t *) { ui_nfc_test_open(); });
+    g_nfc_test_btn = btn;
+    g_nfc_test_row = lv_obj_get_parent(btn);
+    if (!hw_get_nfc_enable()) {
+        lv_obj_add_flag(g_nfc_test_row, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    register_subpage_group_obj(sub_page, btn);
+#endif
 
     btn = create_toggle_btn_row(sub_page, "GPS", hw_get_gps_enable(), gps_enable_cb);
     register_subpage_group_obj(sub_page, btn);

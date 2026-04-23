@@ -14,17 +14,16 @@
 
 bool hw_get_radio_enable() { return user_setting.radio_enable; }
 
-void hw_set_radio_enable(bool en)
+int16_t hw_set_radio_enable(bool en)
 {
     user_setting.radio_enable = en;
     if (en) {
-        hw_set_radio_default();
-    } else {
-        radio_params_t params;
-        hw_get_radio_params(params);
-        params.mode = RADIO_DISABLE;
-        hw_set_radio_params(params);
+        return hw_set_radio_default();
     }
+    radio_params_t params;
+    hw_get_radio_params(params);
+    params.mode = RADIO_DISABLE;
+    return hw_set_radio_params(params);
 }
 
 void hw_set_usb_rf_switch(bool to_usb)

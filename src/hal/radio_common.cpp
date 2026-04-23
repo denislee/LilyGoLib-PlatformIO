@@ -73,11 +73,11 @@ void hw_get_radio_params(radio_params_t &params)
     radio_chip::default_params(params);
 }
 
-void hw_set_radio_default()
+int16_t hw_set_radio_default()
 {
     radio_params_t params;
     hw_get_radio_params(params);
-    hw_set_radio_params(params);
+    return hw_set_radio_params(params);
 }
 
 void hw_set_radio_listening()

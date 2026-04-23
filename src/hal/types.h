@@ -46,6 +46,24 @@ typedef enum {
 #define _BV(x)                      (1UL<<x)
 #endif
 
+// Arduino's esp32-hal-log macros are unavailable on the emulator.
+// Route to printf so log_i/log_e/log_w/log_d calls still produce output in
+// terminal mode; tag prefixes mirror the ESP-IDF style so filters recognise
+// them. The `##__VA_ARGS__` trick strips the trailing comma when the caller
+// passes no format args.
+#ifndef log_i
+#define log_i(fmt, ...) fprintf(stdout, "[I] " fmt "\n", ##__VA_ARGS__)
+#endif
+#ifndef log_w
+#define log_w(fmt, ...) fprintf(stderr, "[W] " fmt "\n", ##__VA_ARGS__)
+#endif
+#ifndef log_e
+#define log_e(fmt, ...) fprintf(stderr, "[E] " fmt "\n", ##__VA_ARGS__)
+#endif
+#ifndef log_d
+#define log_d(fmt, ...) ((void)0)
+#endif
+
 /**
  * @brief Enumeration representing different WiFi statuses.
  *

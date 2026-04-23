@@ -20,8 +20,8 @@ typedef struct _device_const_var {
 extern user_setting_params_t user_setting;
 extern device_const_var_t dev_conts_var;
 
-struct _lv_timer_t;
-void battery_history_timer_cb(struct _lv_timer_t *timer);
+#include <lvgl.h>
+void battery_history_timer_cb(lv_timer_t *timer);
 
 void hw_audio_init();
 void hw_audio_deinit_task();

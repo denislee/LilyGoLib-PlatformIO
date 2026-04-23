@@ -962,8 +962,9 @@ bool LilyGoLoRaPager::initNFC()
     } else {
         log_d("Initializing NFC Reader succeeded");
         devices_probe |= HW_NFC_ONLINE;
-        // Turn off NFC power
-        setPower(POWER_NFC, false);
+        // Turn off NFC power (typo in upstream: `setPower` doesn't exist on
+        // the pager class — use the real power API).
+        powerControl(POWER_NFC, false);
     }
 #endif
     return res;

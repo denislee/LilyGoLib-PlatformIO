@@ -25,6 +25,17 @@
 
 extern void hw_init();
 
+// On hardware, factory.ino provides these (they guard the shared SPI bus).
+// The emulator has no SPI bus and no background tasks contending for it, so
+// they're intentional no-ops here.
+void instanceLockTake() {}
+void instanceLockGive() {}
+
+// Power-state descriptor is meaningless on the host; return a stable empty
+// string so the on-device power screen still renders without reaching into
+// hardware registers.
+const char *hw_get_device_power_tips_string() { return ""; }
+
 static lv_display_t *lvDisplay;
 static lv_indev_t *lvMouse;
 static lv_indev_t *lvMouseWheel;

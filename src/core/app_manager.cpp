@@ -5,7 +5,7 @@
  * @copyright Copyright (c) 2026
  */
 #include "app_manager.h"
-#include <Arduino.h>
+#include "../hal/types.h"  // log_d/i/e macros (Arduino on hardware, printf on emulator)
 
 namespace core {
 

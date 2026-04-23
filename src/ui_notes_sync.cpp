@@ -28,6 +28,7 @@
 #include "hal/system.h"
 #include "hal/wireless.h"
 #include "hal/notes_crypto.h"
+#include "hal/secrets.h"
 #include "core/app.h"
 #include "core/app_manager.h"
 #include "core/system.h"
@@ -43,6 +44,7 @@
 #ifdef ARDUINO
 #include <Preferences.h>
 #include <mbedtls/base64.h>
+#include <mbedtls/sha1.h>
 extern "C" {
 #include "cJSON.h"
 }
@@ -83,109 +85,36 @@ static void save_pref(const char *key, const char *value)
 #endif
 }
 
-// The token storage piggybacks on the notes passphrase the same way the
-// Telegram bearer does (see ui_telegram.cpp::save_token): when crypto is
-// unlocked, persist the AES-256 wrapped blob under `token_enc`; otherwise
-// plaintext under `token`. The two slots are kept mutually exclusive so
-// they never drift apart.
-static bool token_is_encrypted()
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(NSYNC_PREFS_NS, true)) return false;
-    size_t len = p.getBytesLength("token_enc");
-    p.end();
-    return len > 0;
-#else
-    return false;
-#endif
+// GitHub PAT persistence delegates to hal/secrets — same encrypted-NVS
+// wrapper the Telegram bearer uses, sharing the notes passphrase. A PAT
+// with contents:write on a private repo is a write credential, so we
+// never want it at rest plaintext; the legacy `token` slot is wiped at
+// boot to close that door for any pre-hardening installs.
+static bool token_is_encrypted() {
+    return hal::secret_exists(NSYNC_PREFS_NS, "token_enc");
 }
 
-// Returns the plaintext token held only in the caller's frame — we never
-// cache it in a file-scope variable. Empty when the token slot is missing,
-// or when it's encrypted but the notes session is locked. The legacy
-// plaintext key is intentionally ignored (purged at startup).
-static std::string load_token_plain()
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(NSYNC_PREFS_NS, true)) return "";
-    size_t len = p.getBytesLength("token_enc");
-    if (len == 0) { p.end(); return ""; }
-    if (!notes_crypto_is_unlocked()) { p.end(); return ""; }
-    std::vector<uint8_t> ct(len);
-    p.getBytes("token_enc", ct.data(), len);
-    p.end();
-    std::string out;
-    if (!notes_crypto_decrypt_buffer(ct.data(), ct.size(), out)) return "";
-    return out;
-#else
-    return "";
-#endif
+static std::string load_token_plain() {
+    return hal::secret_load(NSYNC_PREFS_NS, "token_enc");
 }
 
-// Refuses to persist the PAT unless notes crypto is enabled and unlocked
-// so that a stolen device cannot yield the token by dumping NVS. A PAT
-// with contents:write on a private repo is a write credential — we never
-// want it at rest plaintext. Returns false with *err set on refusal;
-// passing an empty value always succeeds and wipes both slots.
-static bool save_token(const char *value, std::string *err)
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(NSYNC_PREFS_NS, false)) {
-        if (err) *err = "NVS open failed.";
-        return false;
-    }
-    // Empty value = clear. No crypto check needed.
-    if (!value || !*value) {
-        p.remove("token");
-        p.remove("token_enc");
-        p.end();
-        return true;
-    }
-    if (!notes_crypto_is_enabled()) {
-        p.end();
-        if (err) *err = "Enable Notes encryption first "
-                        "(Settings » Notes Security).";
-        return false;
-    }
-    if (!notes_crypto_is_unlocked()) {
-        p.end();
-        if (err) *err = "Notes session locked — unlock first.";
-        return false;
-    }
-    std::vector<uint8_t> ct;
-    if (!notes_crypto_encrypt_buffer((const uint8_t *)value, strlen(value), ct)) {
-        p.end();
-        if (err) *err = "Encryption failed.";
-        return false;
-    }
-    p.putBytes("token_enc", ct.data(), ct.size());
-    // Ensure no legacy plaintext slot survives alongside the encrypted one.
-    p.remove("token");
-    p.end();
-    return true;
-#else
-    (void)value;
-    if (err) *err = "Not supported on emulator.";
-    return false;
-#endif
+static bool save_token(const char *value, std::string *err) {
+    // Keyboard / paste flows routinely append whitespace or a trailing newline;
+    // baking that into the Authorization header yields a silent 401 from GitHub.
+    std::string trimmed = value ? value : "";
+    size_t a = trimmed.find_first_not_of(" \t\r\n");
+    size_t b = trimmed.find_last_not_of(" \t\r\n");
+    trimmed = (a == std::string::npos) ? std::string()
+                                       : trimmed.substr(a, b - a + 1);
+    bool ok = hal::secret_store(NSYNC_PREFS_NS, "token_enc",
+                                trimmed.c_str(), err);
+    if (ok) hal::secret_purge_legacy(NSYNC_PREFS_NS, "token");
+    hal::secret_scrub(trimmed);
+    return ok;
 }
 
-// One-off migration: if an older build left a plaintext `token` entry
-// behind (before this file required encryption), drop it on startup so it
-// can't be read from a powered-off device. The user has to re-enter the
-// PAT once under an unlocked notes session; that trade is worth the lost
-// convenience.
-static void purge_legacy_plaintext_token()
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(NSYNC_PREFS_NS, false)) return;
-    if (p.isKey("token")) p.remove("token");
-    p.end();
-#endif
+static void purge_legacy_plaintext_token() {
+    hal::secret_purge_legacy(NSYNC_PREFS_NS, "token");
 }
 
 // Forward decl — the definition sits further down next to run_sync, but
@@ -193,11 +122,65 @@ static void purge_legacy_plaintext_token()
 // the moment hw_http_request returns.
 #ifdef ARDUINO
 static void scrub_string(std::string &s);
+
+// Pull the "message" field out of GitHub's error JSON ({"message":"Bad
+// credentials","documentation_url":...}) so the log surfaces the real reason
+// instead of a bare "HTTP 401". Falls back to a truncated body when the
+// response isn't JSON, and finally to the hw_http_request error string.
+static std::string gh_error(int code, const std::string &body,
+                            const std::string &fallback)
+{
+    std::string msg;
+    if (!body.empty()) {
+        cJSON *j = cJSON_Parse(body.c_str());
+        if (j) {
+            cJSON *m = cJSON_GetObjectItemCaseSensitive(j, "message");
+            if (m && cJSON_IsString(m) && m->valuestring) {
+                msg = m->valuestring;
+            }
+            cJSON_Delete(j);
+        }
+        if (msg.empty()) {
+            msg = body.substr(0, 120);
+        }
+    }
+    if (msg.empty()) msg = fallback;
+    char buf[24];
+    snprintf(buf, sizeof(buf), "HTTP %d: ", code);
+    return std::string(buf) + msg;
+}
 #endif
 
 // --- base64 (mbedtls) -----------------------------------------------------
 
 #ifdef ARDUINO
+// GitHub's Contents API reports a file's `sha` as the Git blob SHA-1, which
+// hashes the bytes `"blob <len>\0<content>"` — not a plain SHA-1 over the
+// file. Computing it locally lets us skip uploads when the bytes already
+// match the remote, which otherwise produces a fresh commit per file on
+// every sync regardless of changes.
+static std::string git_blob_sha1(const uint8_t *data, size_t len)
+{
+    char header[32];
+    int hlen = snprintf(header, sizeof(header), "blob %u", (unsigned)len);
+    mbedtls_sha1_context ctx;
+    mbedtls_sha1_init(&ctx);
+    mbedtls_sha1_starts(&ctx);
+    mbedtls_sha1_update(&ctx, (const unsigned char *)header, (size_t)hlen + 1);
+    if (len) mbedtls_sha1_update(&ctx, data, len);
+    unsigned char out[20];
+    mbedtls_sha1_finish(&ctx, out);
+    mbedtls_sha1_free(&ctx);
+    static const char hex[] = "0123456789abcdef";
+    std::string s;
+    s.resize(40);
+    for (int i = 0; i < 20; i++) {
+        s[i * 2]     = hex[(out[i] >> 4) & 0xF];
+        s[i * 2 + 1] = hex[out[i] & 0xF];
+    }
+    return s;
+}
+
 static bool b64_encode(const uint8_t *data, size_t len, std::string &out)
 {
     size_t olen = 0;
@@ -344,7 +327,7 @@ static bool list_remote_notes(const Config &c,
     scrub_string(auth);
     if (!ok) {
         if (code == 404) return true;  // folder doesn't exist yet
-        if (err) *err = terr.empty() ? "list failed" : terr;
+        if (err) *err = gh_error(code, body, terr.empty() ? "list failed" : terr);
         return false;
     }
     cJSON *arr = cJSON_Parse(body.c_str());
@@ -412,7 +395,7 @@ static bool put_remote_file(const Config &c,
                               auth.c_str(), resp, &code, &terr);
     scrub_string(auth);
     if (!ok) {
-        if (err) *err = terr.empty() ? "PUT failed" : terr;
+        if (err) *err = gh_error(code, resp, terr.empty() ? "PUT failed" : terr);
         return false;
     }
     return true;
@@ -442,7 +425,7 @@ static bool delete_remote_file(const Config &c,
                               auth.c_str(), resp, &code, &terr);
     scrub_string(auth);
     if (!ok) {
-        if (err) *err = terr.empty() ? "DELETE failed" : terr;
+        if (err) *err = gh_error(code, resp, terr.empty() ? "DELETE failed" : terr);
         return false;
     }
     return true;
@@ -513,9 +496,12 @@ static void run_sync()
     }
     log_appendf("Remote notes: %u", (unsigned)remote.size());
 
-    // 3. Upload each local file. Attach the existing sha when present so
-    //    the API treats the call as an update.
-    int uploaded = 0, skipped = 0, up_failed = 0;
+    // 3. Upload each local file whose content differs from the remote.
+    //    Skip unchanged files — a blind PUT creates a no-op commit on
+    //    GitHub even when bytes match, so syncing a dozen notes with one
+    //    edit used to produce a dozen commits. Compare the Git blob SHA
+    //    locally to the `sha` we got from the listing.
+    int uploaded = 0, unchanged = 0, skipped = 0, up_failed = 0;
     for (const auto &fname : local) {
         std::vector<uint8_t> bytes;
         std::string abs = "/" + fname;
@@ -527,6 +513,11 @@ static void run_sync()
         std::string prev_sha;
         for (const auto &r : remote) {
             if (r.name == fname) { prev_sha = r.sha; break; }
+        }
+        if (!prev_sha.empty() &&
+            git_blob_sha1(bytes.data(), bytes.size()) == prev_sha) {
+            unchanged++;
+            continue;
         }
         std::string perr;
         if (put_remote_file(cfg, fname, bytes, prev_sha, &perr)) {
@@ -556,8 +547,8 @@ static void run_sync()
         }
     }
 
-    log_appendf("Notes: +%d -%d (fail +%d -%d, skip %d)",
-                uploaded, deleted, up_failed, del_failed, skipped);
+    log_appendf("Notes: +%d -%d =%d (fail +%d -%d, skip %d)",
+                uploaded, deleted, unchanged, up_failed, del_failed, skipped);
 
     // Token is no longer needed once the contents API calls are done —
     // the news download is a public HTTPS GET. Scrub now so the PAT
@@ -599,17 +590,7 @@ static void run_sync()
                 n_ok, (int)news.size(), n_fail);
 }
 
-// Overwrite the buffer bytes before release so the decrypted PAT does not
-// linger in freed heap pages waiting to be scavenged. std::string::clear()
-// keeps capacity, so we walk the storage first.
-static void scrub_string(std::string &s)
-{
-    if (s.empty()) return;
-    volatile char *p = &s[0];
-    for (size_t i = 0; i < s.size(); i++) p[i] = 0;
-    s.clear();
-    s.shrink_to_fit();
-}
+static void scrub_string(std::string &s) { hal::secret_scrub(s); }
 #endif  // ARDUINO
 
 // --- UI -------------------------------------------------------------------
@@ -726,7 +707,7 @@ static void exit_cb(lv_obj_t *) {
     s_syncing = false;
 }
 
-static void on_unlocked_cb(bool /*ok*/, void *ud)
+static void on_unlocked_cb(bool ok, void *ud)
 {
     // The enter() path reads the banner state from NVS + session; after
     // unlock we just rebuild the page so the banner flips from "locked"
@@ -737,6 +718,7 @@ static void on_unlocked_cb(bool /*ok*/, void *ud)
     if (!parent) return;
     lv_obj_clean(parent);
     enter(parent);
+    if (ok) sync_btn_cb(nullptr);
 }
 
 class NotesSyncApp : public core::App {
@@ -752,7 +734,11 @@ public:
         // disabled or already unlocked, so the normal case costs nothing.
         if (token_is_encrypted() && !notes_crypto_is_unlocked()) {
             ui_passphrase_unlock(on_unlocked_cb, parent);
+        } else {
+            sync_btn_cb(nullptr);
         }
+#else
+        sync_btn_cb(nullptr);
 #endif
     }
     void onStop() override {

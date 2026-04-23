@@ -21,6 +21,7 @@
 #include "hal/wireless.h"
 #include "hal/system.h"
 #include "hal/notes_crypto.h"
+#include "hal/secrets.h"
 #include "core/app.h"
 #include "core/app_manager.h"
 #include "core/system.h"
@@ -101,117 +102,31 @@ static void save_bool_pref(const char *key, bool value)
 #endif
 }
 
-// NVS holds the token either as plaintext `token` (legacy / unencrypted) or
-// as `token_enc` which is the OpenSSL-enc format AES-256-CBC + PBKDF2 blob
-// produced by notes_crypto_encrypt_buffer. We piggyback on the notes
-// passphrase: one unlock per session covers both.
-
-static bool token_is_encrypted()
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(TG_PREFS_NS, true)) return false;
-    size_t len = p.getBytesLength("token_enc");
-    p.end();
-    return len > 0;
-#else
-    return false;
-#endif
+// The bearer lives in NVS as `token_enc` (AES-256-CBC + PBKDF2, OpenSSL-enc
+// format) produced by notes_crypto. We piggyback on the notes passphrase —
+// one unlock per session covers every secret slot device-wide. Persistence
+// delegated to hal/secrets; legacy plaintext `token` slot is wiped at boot.
+static bool token_is_encrypted() {
+    return hal::secret_exists(TG_PREFS_NS, "token_enc");
 }
 
-// Returns the plaintext bearer token held only in the caller's frame.
-// Empty when the slot is missing, or when it's encrypted but the notes
-// session is locked. The legacy plaintext `token` key is ignored (purged
-// at startup) so a stolen device with NVS access can't recover the token
-// without the notes passphrase.
-static std::string load_token_plain()
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(TG_PREFS_NS, true)) return "";
-    size_t len = p.getBytesLength("token_enc");
-    if (len == 0) { p.end(); return ""; }
-    if (!notes_crypto_is_unlocked()) { p.end(); return ""; }
-    std::vector<uint8_t> ct(len);
-    p.getBytes("token_enc", ct.data(), len);
-    p.end();
-    std::string out;
-    if (!notes_crypto_decrypt_buffer(ct.data(), ct.size(), out)) return "";
-    return out;
-#else
-    return "";
-#endif
+static std::string load_token_plain() {
+    return hal::secret_load(TG_PREFS_NS, "token_enc");
 }
 
-// Refuses to persist the bearer unless notes crypto is enabled and
-// unlocked, so a stolen device cannot yield the token by dumping NVS.
-// Returns false with *err set on refusal; passing an empty value always
-// succeeds and wipes both slots.
-static bool save_token(const char *value, std::string *err)
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(TG_PREFS_NS, false)) {
-        if (err) *err = "NVS open failed.";
-        return false;
-    }
-    if (!value || !*value) {
-        p.remove("token");
-        p.remove("token_enc");
-        p.end();
-        return true;
-    }
-    if (!notes_crypto_is_enabled()) {
-        p.end();
-        if (err) *err = "Enable Notes encryption first "
-                        "(Settings » Notes Security).";
-        return false;
-    }
-    if (!notes_crypto_is_unlocked()) {
-        p.end();
-        if (err) *err = "Notes session locked — unlock first.";
-        return false;
-    }
-    std::vector<uint8_t> ct;
-    if (!notes_crypto_encrypt_buffer((const uint8_t *)value, strlen(value), ct)) {
-        p.end();
-        if (err) *err = "Encryption failed.";
-        return false;
-    }
-    p.putBytes("token_enc", ct.data(), ct.size());
-    // Drop any legacy plaintext slot so the two storages never coexist.
-    p.remove("token");
-    p.end();
-    return true;
-#else
-    (void)value;
-    if (err) *err = "Not supported on emulator.";
-    return false;
-#endif
+static bool save_token(const char *value, std::string *err) {
+    bool ok = hal::secret_store(TG_PREFS_NS, "token_enc", value, err);
+    // Clearing or rewriting the encrypted slot also nukes any legacy
+    // plaintext sibling so the two never coexist.
+    if (ok) hal::secret_purge_legacy(TG_PREFS_NS, "token");
+    return ok;
 }
 
-// One-shot migration called at boot: drops any plaintext `token` entry a
-// pre-encryption-required build may have left behind.
-static void purge_legacy_plaintext_token()
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(TG_PREFS_NS, false)) return;
-    if (p.isKey("token")) p.remove("token");
-    p.end();
-#endif
+static void purge_legacy_plaintext_token() {
+    hal::secret_purge_legacy(TG_PREFS_NS, "token");
 }
 
-// Overwrite a std::string's backing bytes before releasing them, so the
-// plaintext bearer doesn't linger in freed heap pages.
-static void scrub_string(std::string &s)
-{
-    if (s.empty()) return;
-    volatile char *p = &s[0];
-    for (size_t i = 0; i < s.size(); i++) p[i] = 0;
-    s.clear();
-    s.shrink_to_fit();
-}
+static void scrub_string(std::string &s) { hal::secret_scrub(s); }
 
 // --- state ----------------------------------------------------------------
 
