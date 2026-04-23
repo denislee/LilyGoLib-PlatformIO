@@ -19,7 +19,53 @@
 #define CONFIG_BLE_KEYBOARD
 #if defined(USING_BLE_KEYBOARD)
 #include <BleKeyboard.h>
+#include <NimBLEDevice.h>
+#include <NimBLEServer.h>
+#include <NimBLEConnInfo.h>
 static BleKeyboard bleKeyboard;
+
+// iOS is strict about Apple's Accessory Design Guidelines for BLE HID. If the
+// connection interval / latency / supervision timeout drift outside the
+// recommended window, iPhone silently tears the link down after a few minutes.
+// These values sit inside the accepted band: 30–50 ms interval, no slave
+// latency, 6.72 s supervision timeout. The second-stage task also emits an
+// empty HID report every 25 s so iOS sees the peripheral as "live" and does
+// not park the connection during idle periods.
+static TaskHandle_t ble_kb_keepalive_handle = nullptr;
+
+static void ble_kb_apply_ios_conn_params()
+{
+    NimBLEServer *server = NimBLEDevice::getServer();
+    if (!server) return;
+    uint8_t n = server->getConnectedCount();
+    for (uint8_t i = 0; i < n; ++i) {
+        NimBLEConnInfo info = server->getPeerInfo(i);
+        // 0x18=24 (30 ms), 0x28=40 (50 ms), latency 0, timeout 0x2A0=672 (6.72 s).
+        server->updateConnParams(info.getConnHandle(), 0x18, 0x28, 0, 0x2A0);
+    }
+}
+
+static void ble_kb_keepalive_task(void *)
+{
+    bool was_connected = false;
+    uint32_t last_ka_ms = 0;
+    for (;;) {
+        bool now_connected = bleKeyboard.isConnected();
+        if (now_connected && !was_connected) {
+            // Give the iPhone a moment to finish service discovery / pairing
+            // before we push a parameter update.
+            vTaskDelay(pdMS_TO_TICKS(1500));
+            ble_kb_apply_ios_conn_params();
+            last_ka_ms = millis();
+        }
+        if (now_connected && (millis() - last_ka_ms) >= 25000) {
+            bleKeyboard.releaseAll();
+            last_ka_ms = millis();
+        }
+        was_connected = now_connected;
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
 #endif
 
 #define WIFI_PREFS_NS     "wifi_cred"
@@ -357,8 +403,8 @@ static bool http_open(HttpClients &c, const char *url, std::string *error)
     }
     c.secure.setInsecure();  // GitHub Pages — we don't ship a root CA bundle.
     c.http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    c.http.setTimeout(15000);
-    c.http.setConnectTimeout(10000);
+    c.http.setTimeout(3000);
+    c.http.setConnectTimeout(3000);
     c.http.setUserAgent("LilyGoLib/1.0");
 
     bool ok;
@@ -421,8 +467,8 @@ bool hw_http_request(const char *url,
     HttpClients c;
     c.secure.setInsecure();
     c.http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    c.http.setTimeout(15000);
-    c.http.setConnectTimeout(10000);
+    c.http.setTimeout(3000);
+    c.http.setConnectTimeout(3000);
     c.http.setUserAgent("LilyGoLib/1.0");
 
     String u = url;
@@ -616,6 +662,15 @@ void hw_set_ble_kb_enable()
 #ifdef CONFIG_BLE_KEYBOARD
     bleKeyboard.setName("lilygo-pager");
     bleKeyboard.begin();
+    // BleKeyboard's begin() calls setSecurityAuth(false,false,false), which
+    // leaves bonding off — iOS then re-prompts "Allow" on every reconnect.
+    // Re-enable bonding with Just Works pairing so the link key persists.
+    NimBLEDevice::setSecurityAuth(true, false, true);
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+    if (!ble_kb_keepalive_handle) {
+        xTaskCreate(ble_kb_keepalive_task, "ble_kb_ka", 3072, nullptr,
+                    tskIDLE_PRIORITY + 1, &ble_kb_keepalive_handle);
+    }
 #endif
 #endif
 }
@@ -623,6 +678,10 @@ void hw_set_ble_kb_enable()
 void hw_set_ble_kb_disable()
 {
 #if defined(ARDUINO) && defined(USING_BLE_KEYBOARD)
+    if (ble_kb_keepalive_handle) {
+        vTaskDelete(ble_kb_keepalive_handle);
+        ble_kb_keepalive_handle = nullptr;
+    }
     bleKeyboard.end();
     log_d("Disable ble devices");
 #endif

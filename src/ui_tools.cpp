@@ -577,6 +577,13 @@ LV_FONT_DECLARE(font_inter_18);
 LV_FONT_DECLARE(font_inter_20);
 LV_FONT_DECLARE(font_emoji_16);
 LV_FONT_DECLARE(font_emoji_20);
+LV_FONT_DECLARE(font_atkinson_14);
+LV_FONT_DECLARE(font_atkinson_16);
+LV_FONT_DECLARE(font_atkinson_18);
+LV_FONT_DECLARE(font_atkinson_20);
+LV_FONT_DECLARE(font_jbmono_16);
+LV_FONT_DECLARE(font_jbmono_20);
+LV_FONT_DECLARE(font_jbmono_24);
 
 // Inter-with-emoji-fallback variants used only by the Telegram app. The
 // base Inter fonts are const and shared across other apps, so we keep a
@@ -599,7 +606,8 @@ static void init_inter_emoji_fonts()
     s_inter_emoji_ready = true;
 }
 
-// idx: 0=Montserrat, 1=Unscii 8, 2=Unscii 16, 3=Courier, 4=Inter
+// idx: 0=Montserrat, 1=Unscii 8, 2=Unscii 16, 3=Courier, 4=Inter,
+//      5=Atkinson Hyperlegible, 6=JetBrains Mono
 static const lv_font_t *pick_font(uint8_t idx, uint8_t size)
 {
     if (idx == 1) return &lv_font_unscii_8;
@@ -614,6 +622,17 @@ static const lv_font_t *pick_font(uint8_t idx, uint8_t size)
         if (size <= 16) return &font_inter_16;
         if (size <= 18) return &font_inter_18;
         return &font_inter_20;
+    }
+    if (idx == 5) {
+        if (size <= 14) return &font_atkinson_14;
+        if (size <= 16) return &font_atkinson_16;
+        if (size <= 18) return &font_atkinson_18;
+        return &font_atkinson_20;
+    }
+    if (idx == 6) {
+        if (size <= 16) return &font_jbmono_16;
+        if (size <= 20) return &font_jbmono_20;
+        return &font_jbmono_24;
     }
     // Default to Montserrat
     switch (size) {
@@ -651,7 +670,7 @@ const lv_font_t *get_small_font()
     if (idx == 2) return &lv_font_unscii_8; // Unscii 16 -> 8
 
     // For scalable faces, go 2 sizes smaller, min 10
-    if (idx == 0 || idx == 4) {
+    if (idx == 0 || idx == 4 || idx == 5 || idx == 6) {
         int s = (int)size - 2;
         if (s < 10) s = 10;
         size = (uint8_t)s;

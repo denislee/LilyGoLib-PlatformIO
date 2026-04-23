@@ -158,6 +158,13 @@ static void report(ProgressFn cb, void *ud, const char *phase, int cur, int tota
         if (lv_tick_elaps(last_refr) > 100) {
             lv_refr_now(NULL);
             last_refr = now;
+            // The scan/decrypt loop runs inside lv_timer_handler on the
+            // dedicated LVGL task. Without a yield here, large journals keep
+            // IDLE1 off the CPU long enough for the task watchdog to panic the
+            // device. vTaskDelay(1) costs one tick but guarantees IDLE runs.
+#ifdef ARDUINO
+            vTaskDelay(1);
+#endif
         }
     }
 }

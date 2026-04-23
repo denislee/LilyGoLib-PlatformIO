@@ -64,6 +64,8 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 #include "core/system.h"
 #include "core/scoped_lock.h"
 #include "apps/app_registry.h"
+#include "hal/lvgl_task.h"
+#include "hal/nfc_task.h"
 
 void setup()
 {
@@ -107,69 +109,57 @@ void setup()
     WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
     WiFi.setAutoReconnect(false);
 
+    // LVGL rendering and NFC polling now run on their own FreeRTOS tasks so
+    // the main loop's mutex hold window stays short. Must come after
+    // core::System::getInstance().init() — the LVGL task calls System::loop().
+    hw_lvgl_task_start();
+    hw_nfc_task_start();
+
     Serial.println("Start done. run main loop");
 }
-
-#ifdef USING_ST25R3916
-extern void loopNFCReader();
-#endif
 
 extern bool ui_is_fake_sleep();
 
 void loop()
 {
-    uint32_t time_to_next = 5;
-
+    uint32_t inactive_time = 0;
     {
         core::ScopedInstanceLock lock;
-
         instance.loop();
-
-#if defined(USING_ST25R3916)
         if (!ui_is_fake_sleep()) {
-            loopNFCReader();
+            inactive_time = lv_display_get_inactive_time(NULL);
         }
-#endif
+    }
 
-        if (!ui_is_fake_sleep()) {
-            time_to_next = lv_timer_handler();
-            core::System::getInstance().loop();
+    static uint32_t last_freq = 0;
+    if (ui_is_fake_sleep()) {
+        // BLE and WiFi both need ≥80MHz; hold there while either link is
+        // up so the fake-sleep power saving doesn't drop them.
+        bool hold_80 = hw_get_ble_kb_connected() || hw_get_wifi_connected();
+        uint32_t fake_sleep_freq = hold_80 ? 80 : 40;
+        if (last_freq != fake_sleep_freq) {
+            setCpuFrequencyMhz(fake_sleep_freq);
+            last_freq = fake_sleep_freq;
         }
+    } else {
+        user_setting_params_t settings;
+        hw_get_user_setting(settings);
+        uint32_t active_freq = settings.cpu_freq_mhz;
 
-        static uint32_t last_freq = 0;
-        if (ui_is_fake_sleep()) {
-            // BLE and WiFi both need ≥80MHz; hold there while either link is
-            // up so the fake-sleep power saving doesn't drop them.
-            bool hold_80 = hw_get_ble_kb_connected() || hw_get_wifi_connected();
-            uint32_t fake_sleep_freq = hold_80 ? 80 : 40;
-            if (last_freq != fake_sleep_freq) {
-                setCpuFrequencyMhz(fake_sleep_freq);
-                last_freq = fake_sleep_freq;
+        if (inactive_time > 2000 && active_freq > 80) {
+            if (last_freq != 80) {
+                setCpuFrequencyMhz(80);
+                last_freq = 80;
             }
         } else {
-            uint32_t inactive_time = lv_display_get_inactive_time(NULL);
-            user_setting_params_t settings;
-            hw_get_user_setting(settings);
-            uint32_t active_freq = settings.cpu_freq_mhz;
-
-            if (inactive_time > 2000 && active_freq > 80) {
-                if (last_freq != 80) {
-                    setCpuFrequencyMhz(80);
-                    last_freq = 80;
-                }
-            } else {
-                if (last_freq != active_freq) {
-                    setCpuFrequencyMhz(active_freq);
-                    last_freq = active_freq;
-                }
+            if (last_freq != active_freq) {
+                setCpuFrequencyMhz(active_freq);
+                last_freq = active_freq;
             }
         }
     }
 
-    if (time_to_next > 5) time_to_next = 5;
-    if (time_to_next == 0) time_to_next = 1;
-
-    delay(time_to_next);
+    delay(50);
 }
 
 #endif

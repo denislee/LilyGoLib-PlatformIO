@@ -100,6 +100,11 @@ void hw_enable_keyboard()
 #endif
     // Ensure user setting is restored as initKeyboard might reset it to library defaults
     hw_set_kb_backlight(user_setting.keyboard_bl_level);
+    // Enable the vendor driver's repeat emitter. It's the only way backspace
+    // produces "still held" pings — LilyGoKeyboard::handleSpecialKeys swallows
+    // the release event for '\b', so without this there's no signal our
+    // keyboard_task can use to auto-repeat backspace.
+    instance.kb.setRepeat(true);
 #endif
 }
 

@@ -246,6 +246,85 @@ static void download_btn_cb(lv_event_t *e)
     start_remote_browse();
 }
 
+// Bulk fetch: pulls the index and downloads every .txt into /news in one
+// go. Matches what the old Notes Sync flow used to do — lives here now so
+// notes sync stays narrowly about notes.
+static void sync_all_btn_cb(lv_event_t *e)
+{
+    if (!hw_get_wifi_enable()) {
+        ui_msg_pop_up("WiFi off", "Enable WiFi in Settings first.");
+        return;
+    }
+    if (!hw_get_wifi_connected()) {
+        ui_msg_pop_up("No connection", "WiFi is not connected.");
+        return;
+    }
+
+    lv_obj_t *loading = ui_popup_create("Fetching index");
+    lv_obj_t *sub = lv_label_create(loading);
+    lv_label_set_text(sub, NEWS_REMOTE_BASE);
+    lv_obj_set_style_text_color(sub, UI_COLOR_MUTED, 0);
+    lv_refr_now(NULL);
+
+    std::string html, err;
+    bool ok = hw_http_get_string(NEWS_REMOTE_BASE, html, &err);
+    ui_popup_destroy(loading);
+
+    if (!ok) {
+        std::string msg = "Fetch failed: " + (err.empty() ? std::string("unknown") : err);
+        ui_msg_pop_up("Error", msg.c_str());
+        return;
+    }
+
+    std::vector<std::pair<std::string, std::string>> entries;
+    parse_remote_index(html, entries);
+    if (entries.empty()) {
+        ui_msg_pop_up("Empty", "No news files on the server.");
+        return;
+    }
+
+    // Single progress popup spans the whole batch; the per-file callback
+    // repurposes progress_popup_lbl for per-item bytes.
+    progress_popup = ui_popup_create("Syncing news");
+    lv_obj_t *subf = lv_label_create(progress_popup);
+    lv_label_set_text(subf, "");
+    lv_obj_set_style_text_color(subf, UI_COLOR_MUTED, 0);
+
+    progress_popup_lbl = lv_label_create(progress_popup);
+    lv_label_set_text(progress_popup_lbl, "0%");
+    lv_obj_set_style_text_color(progress_popup_lbl, UI_COLOR_FG, 0);
+
+    int ok_count = 0, fail_count = 0;
+    for (size_t i = 0; i < entries.size() && !progress_cancelled; i++) {
+        const std::string &fname = entries[i].first;
+        char hdr[96];
+        snprintf(hdr, sizeof(hdr), "[%u/%u] %s",
+                 (unsigned)(i + 1), (unsigned)entries.size(), fname.c_str());
+        lv_label_set_text(subf, hdr);
+        progress_last_percent = 101;
+        lv_refr_now(NULL);
+
+        std::string url = std::string(NEWS_REMOTE_BASE) + fname;
+        std::string dest = "/news/" + fname;
+        std::string derr;
+        if (hw_http_download_to_file(url.c_str(), dest.c_str(),
+                                     nullptr, download_progress_cb, &derr)) {
+            ok_count++;
+        } else {
+            fail_count++;
+        }
+    }
+    progress_popup_close();
+
+    load_files();
+    refresh_ui();
+
+    char summary[96];
+    snprintf(summary, sizeof(summary), "Synced %d/%d files (%d failed).",
+             ok_count, (int)entries.size(), fail_count);
+    ui_msg_pop_up("News sync", summary);
+}
+
 static void back_event_handler(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
@@ -436,8 +515,9 @@ static void file_list_key_cb(lv_event_t *e)
 
     const char *filename = lv_list_get_button_text(file_list, focused);
     if (!filename) return;
-    // The top "Download from internet" entry is not a file.
+    // The top action rows aren't files.
     if (strcmp(filename, "Download from internet") == 0) return;
+    if (strcmp(filename, "Sync all news") == 0) return;
 
     show_delete_confirm(resolve_news_path(filename));
 }
@@ -575,6 +655,21 @@ static void refresh_ui()
         lv_obj_add_event_cb(dl_btn, download_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_group_add_obj(lv_group_get_default(), dl_btn);
         lv_obj_t *lbl = lv_obj_get_child(dl_btn, 1);
+        if (lbl) {
+            lv_obj_set_width(lbl, 0);
+            lv_obj_set_flex_grow(lbl, 1);
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+        }
+    }
+
+    // Bulk "sync all" — fetches the index and downloads every file in
+    // one go. Takes over what the Notes Sync screen used to do.
+    {
+        lv_obj_t *sync_btn = lv_list_add_btn(file_list, LV_SYMBOL_REFRESH,
+                                             "Sync all news");
+        lv_obj_add_event_cb(sync_btn, sync_all_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_group_add_obj(lv_group_get_default(), sync_btn);
+        lv_obj_t *lbl = lv_obj_get_child(sync_btn, 1);
         if (lbl) {
             lv_obj_set_width(lbl, 0);
             lv_obj_set_flex_grow(lbl, 1);

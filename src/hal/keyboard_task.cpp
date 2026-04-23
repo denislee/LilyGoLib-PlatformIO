@@ -45,14 +45,43 @@ struct KeyEvent {
     char c;
 };
 
-constexpr UBaseType_t kTaskPriority = configMAX_PRIORITIES - 2;
-constexpr BaseType_t  kTaskCore     = 0;   // Arduino loop runs on core 1
-constexpr uint32_t    kPollMs       = 10;  // Faster than the 100 ms fallback in LilyGoKeyboard.
-constexpr UBaseType_t kQueueDepth   = 32;
+constexpr UBaseType_t kTaskPriority     = configMAX_PRIORITIES - 2;
+constexpr BaseType_t  kTaskCore         = 0;   // Arduino loop runs on core 1
+constexpr uint32_t    kPollMs           = 10;  // Faster than the 100 ms fallback in LilyGoKeyboard.
+constexpr UBaseType_t kQueueDepth       = 32;
+constexpr uint32_t    kRepeatDelayMs    = 500; // Hold time before auto-repeat kicks in.
+constexpr uint32_t    kRepeatIntervalMs = 90;  // ~11 Hz repeat rate once engaged.
 
 QueueHandle_t s_event_queue = nullptr;
 TaskHandle_t  s_task        = nullptr;
 uint32_t      s_last_key    = 0;
+
+char       s_held_char      = '\0';
+TickType_t s_press_tick     = 0;
+TickType_t s_repeat_tick    = 0;
+// For backspace only: last time we observed a vendor-emitted KB_PRESSED
+// ping. The vendor driver fires one every 300 ms while the key is physically
+// held and stops once released — we treat a stale ping as "released".
+TickType_t s_backspace_seen = 0;
+
+// Vendor's LilyGoKeyboard::setRepeat(true) fires KB_PRESSED every 300 ms
+// while a key is physically held. We treat a gap longer than this as a
+// release signal for backspace (which has no KB_RELEASED event path).
+// Kept just above the 300 ms vendor interval: long enough to absorb poll
+// jitter (task runs every 10 ms), short enough that stale pulses don't
+// keep firing after the user lets go.
+constexpr uint32_t kBackspacePingTimeoutMs = 320;
+
+void enqueue_event(const KeyEvent &ev)
+{
+    // Drop oldest if the UI somehow falls behind the queue depth —
+    // better to lose a stale key than to stall the reader.
+    if (xQueueSend(s_event_queue, &ev, 0) != pdTRUE) {
+        KeyEvent discard;
+        xQueueReceive(s_event_queue, &discard, 0);
+        xQueueSend(s_event_queue, &ev, 0);
+    }
+}
 
 void keyboard_task_fn(void *)
 {
@@ -66,20 +95,84 @@ void keyboard_task_fn(void *)
         // Drain everything pending in a single lock hold so we don't
         // thrash the mutex on bursts (fast typing can emit several events
         // per poll).
-        core::ScopedInstanceLock lock;
-        for (int i = 0; i < 16; ++i) {
-            char c = '\0';
-            int state = instance.kb.getKey(&c);
-            if (state != KB_PRESSED && state != KB_RELEASED) {
-                break;
+        {
+            core::ScopedInstanceLock lock;
+            for (int i = 0; i < 16; ++i) {
+                char c = '\0';
+                int state = instance.kb.getKey(&c);
+                if (state != KB_PRESSED && state != KB_RELEASED) {
+                    break;
+                }
+                if (state == KB_PRESSED) {
+                    TickType_t now = xTaskGetTickCount();
+                    // Backspace is the tricky one: handleSpecialKeys in the
+                    // vendor driver never emits KB_RELEASED for '\b'. We
+                    // rely on setRepeat(true)'s 300 ms pings as a liveness
+                    // signal — a fresh press when we weren't already
+                    // tracking, otherwise just a "still held" ping that
+                    // refreshes the staleness timer.
+                    if (c == '\b') {
+                        if (s_held_char == '\b') {
+                            s_backspace_seen = now;
+                            continue;
+                        }
+                        s_held_char      = '\b';
+                        s_press_tick     = now;
+                        s_repeat_tick    = now;
+                        s_backspace_seen = now;
+                        enqueue_event({KB_PRESSED,  '\b'});
+                        enqueue_event({KB_RELEASED, '\b'});
+                        continue;
+                    }
+                    // Drop duplicate presses for the same held char — the
+                    // TCA8418 occasionally reports the same key twice in
+                    // a burst and we don't want LVGL to see it as two
+                    // separate presses or to reset the repeat delay.
+                    if (c != '\0' && c == s_held_char) {
+                        continue;
+                    }
+                    s_held_char   = c;
+                    s_press_tick  = now;
+                    s_repeat_tick = now;
+                } else {
+                    // Any release cancels the held state. If we only
+                    // cleared when c matched s_held_char, a release
+                    // carrying a different char (or a '\0') would leave
+                    // auto-repeat running forever.
+                    s_held_char = '\0';
+                }
+                enqueue_event({state, c});
             }
-            KeyEvent ev{state, c};
-            // Drop oldest if the UI somehow falls behind 32 events —
-            // better to lose a stale key than to stall the reader.
-            if (xQueueSend(s_event_queue, &ev, 0) != pdTRUE) {
-                KeyEvent discard;
-                xQueueReceive(s_event_queue, &discard, 0);
-                xQueueSend(s_event_queue, &ev, 0);
+        }
+
+        // Detect backspace release via vendor-ping staleness. The vendor
+        // driver never surfaces KB_RELEASED for '\b', so we notice release
+        // by the absence of its 300 ms repeat pings.
+        if (s_held_char == '\b') {
+            TickType_t now         = xTaskGetTickCount();
+            uint32_t   since_seen  = (now - s_backspace_seen) * portTICK_PERIOD_MS;
+            if (since_seen > kBackspacePingTimeoutMs) {
+                s_held_char = '\0';
+            }
+        }
+
+        // Synthesize auto-repeat while a key stays held. For regular keys
+        // we inject a RELEASE + PRESS pair (LVGL treats it as a fresh
+        // event); for backspace we inject a PRESS + RELEASE pulse to match
+        // how initial '\b' presses reach LVGL.
+        if (s_held_char != '\0') {
+            TickType_t now       = xTaskGetTickCount();
+            uint32_t   held_ms   = (now - s_press_tick)  * portTICK_PERIOD_MS;
+            uint32_t   since_rep = (now - s_repeat_tick) * portTICK_PERIOD_MS;
+            if (held_ms >= kRepeatDelayMs && since_rep >= kRepeatIntervalMs) {
+                if (s_held_char == '\b') {
+                    enqueue_event({KB_PRESSED,  '\b'});
+                    enqueue_event({KB_RELEASED, '\b'});
+                } else {
+                    enqueue_event({KB_RELEASED, s_held_char});
+                    enqueue_event({KB_PRESSED,  s_held_char});
+                }
+                s_repeat_tick = now;
             }
         }
     }

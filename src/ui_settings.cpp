@@ -1179,7 +1179,7 @@ static void settings_exit_cb(lv_event_t *e)
 // Only "Inter" carries the Latin-1 supplement (U+00A0..U+00FF), so it's the
 // face to pick when rendering Portuguese, Spanish, French, or other accented
 // Latin scripts. The label below advertises that so users know which to pick.
-static const char *FONT_FACE_OPTIONS = "Montserrat\nUnscii 8\nUnscii 16\nCourier\nInter (Latin-1)";
+static const char *FONT_FACE_OPTIONS = "Montserrat\nUnscii 8\nUnscii 16\nCourier\nInter (Latin-1)\nAtkinson (Latin-1)\nJetBrains Mono";
 static const char *FONT_SIZE_OPTIONS = "10\n12\n14\n16\n18\n20\n22\n24\n26\n28\n30\n32";
 
 static uint8_t size_to_idx(uint8_t size)
@@ -2408,7 +2408,6 @@ namespace notes_sync_cfg {
 static lv_obj_t *g_sub_page    = nullptr;
 static lv_obj_t *g_repo_label  = nullptr;
 static lv_obj_t *g_branch_label = nullptr;
-static lv_obj_t *g_news_label  = nullptr;
 static lv_obj_t *g_tok_label   = nullptr;
 static lv_obj_t *g_note_label  = nullptr;
 
@@ -2422,10 +2421,6 @@ static void refresh_labels()
     if (g_branch_label) {
         std::string v = apps::nsync_cfg_get_branch();
         lv_label_set_text_fmt(g_branch_label, "Branch: %s", v.c_str());
-    }
-    if (g_news_label) {
-        std::string v = apps::nsync_cfg_get_news_url();
-        lv_label_set_text_fmt(g_news_label, "News: %s", v.c_str());
     }
     if (g_tok_label) {
         std::string tok = apps::nsync_cfg_get_token_display();
@@ -2468,13 +2463,6 @@ static void set_branch_cb(const char *text, void *)
     refresh_labels();
 }
 
-static void set_news_cb(const char *text, void *)
-{
-    if (!text) return;
-    apps::nsync_cfg_set_news_url(text);
-    refresh_labels();
-}
-
 static void set_token_cb(const char *text, void *)
 {
     if (!text) return;
@@ -2498,13 +2486,6 @@ static void btn_set_branch_cb(lv_event_t *)
     std::string current = apps::nsync_cfg_get_branch();
     ui_text_prompt("Branch", "main",
                    current.c_str(), set_branch_cb, nullptr);
-}
-
-static void btn_set_news_cb(lv_event_t *)
-{
-    std::string current = apps::nsync_cfg_get_news_url();
-    ui_text_prompt("News index URL", "https://...",
-                   current.c_str(), set_news_cb, nullptr);
 }
 
 static void btn_set_token_cb(lv_event_t *)
@@ -2534,11 +2515,6 @@ static void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_obj_set_width(g_branch_label, LV_PCT(100));
     lv_obj_set_style_text_color(g_branch_label, UI_COLOR_MUTED, 0);
 
-    g_news_label = lv_label_create(status);
-    lv_label_set_long_mode(g_news_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_news_label, LV_PCT(100));
-    lv_obj_set_style_text_color(g_news_label, UI_COLOR_MUTED, 0);
-
     g_tok_label = lv_label_create(status);
     lv_label_set_long_mode(g_tok_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(g_tok_label, LV_PCT(100));
@@ -2555,10 +2531,6 @@ static void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_obj_t *b3 = create_button(sub_page, LV_SYMBOL_KEYBOARD,
                                  "Set token", btn_set_token_cb);
     register_subpage_group_obj(sub_page, b3);
-
-    lv_obj_t *b4 = create_button(sub_page, LV_SYMBOL_DOWNLOAD,
-                                 "Set news URL", btn_set_news_cb);
-    register_subpage_group_obj(sub_page, b4);
 
 #ifdef ARDUINO
     lv_obj_t *note_row = lv_menu_cont_create(sub_page);
@@ -2771,7 +2743,6 @@ void ui_sys_exit(lv_obj_t *parent)
     notes_sync_cfg::g_sub_page = nullptr;
     notes_sync_cfg::g_repo_label = nullptr;
     notes_sync_cfg::g_branch_label = nullptr;
-    notes_sync_cfg::g_news_label = nullptr;
     notes_sync_cfg::g_tok_label = nullptr;
     notes_sync_cfg::g_note_label = nullptr;
     main_page_group_count = 0;

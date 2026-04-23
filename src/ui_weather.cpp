@@ -387,7 +387,7 @@ static lv_obj_t *make_cell(lv_obj_t *parent, const char *top, int icon_kind,
     add_label(top, UI_COLOR_MUTED);
     make_icon_widget(cell, icon_kind);
     add_label(mid, UI_COLOR_FG);
-    add_label(bot, UI_COLOR_MUTED);
+    add_label(bot, lv_color_hex(0x4AA3FF));
     return cell;
 }
 

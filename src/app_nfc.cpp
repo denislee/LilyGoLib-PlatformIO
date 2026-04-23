@@ -41,12 +41,16 @@ static void ndefClassHandler()
     rfalNfcDevice *nfcDev;
     NFCReader.rfalNfcGetActiveDevice(&nfcDev);
 
-    Serial.print("NDEF ID:");
-    for (int i = 0; i < nfcDev->nfcidLen; i++) {
-        Serial.print(nfcDev->nfcid[i], HEX);
-        Serial.print(" ");
+    {
+        char idbuf[3 * 16 + 1];
+        int n = 0;
+        int max_bytes = nfcDev->nfcidLen;
+        if (max_bytes > 16) max_bytes = 16;
+        for (int i = 0; i < max_bytes; i++) {
+            n += snprintf(idbuf + n, sizeof(idbuf) - n, "%02X ", nfcDev->nfcid[i]);
+        }
+        log_d("NDEF ID: %s", idbuf);
     }
-    Serial.println();
 
     // See if we can get an NDEF record from it
     ReturnCode  err = ndef.ndefPollerContextInitialization(nfcDev);
@@ -54,16 +58,16 @@ static void ndefClassHandler()
         return;
     }
 
-    Serial.println("NDEF context initialized.");
+    log_d("NDEF context initialized.");
 
     ndefInfo info;
     err = ndef.ndefPollerNdefDetect(&info);
     if (err != ST_ERR_NONE) {
-        Serial.printf("ndefPollerNdefDetect error: %u %s\n", err, ndef.errorToString(err));
+        log_e("ndefPollerNdefDetect error: %u %s", err, ndef.errorToString(err));
         return;
     }
 
-    Serial.println("NDEF detected.");
+    log_d("NDEF detected.");
     uint32_t actual_size = 0;
 
     if (!rawBuffer) return;
@@ -100,13 +104,13 @@ static void ndefClassHandler()
 static void demoNotif(rfalNfcState st )
 {
     if ( st == RFAL_NFC_STATE_WAKEUP_MODE ) {
-        Serial.println("Wake Up mode started");
+        log_d("Wake Up mode started");
     } else if ( st == RFAL_NFC_STATE_POLL_TECHDETECT ) {
-        Serial.println("Wake Up mode terminated. Polling for devices \r\n");
+        log_d("Wake Up mode terminated. Polling for devices");
     } else if ( st == RFAL_NFC_STATE_POLL_SELECT ) {
-        Serial.println("State poll select");
+        log_d("State poll select");
     } else if ( st == RFAL_NFC_STATE_START_DISCOVERY ) {
-        Serial.println("State start discovery");
+        log_d("State start discovery");
     } else if (st == RFAL_NFC_STATE_ACTIVATED) {
         if (ndef_notify_cb) {
             ndef_notify_cb();
@@ -121,18 +125,17 @@ static void demoNotif(rfalNfcState st )
         rfalNfcDevice *nfcDev;
         NFCReader.rfalNfcGetActiveDevice(&nfcDev);
         /* Loop until tag is removed from the field */
-        Serial.print("Operation completed\r\nTag can be removed from the field\r\n");
+        log_d("Operation completed. Tag can be removed from the field");
         NFCReader.rfalNfcaPollerInitialize();
         while (NFCReader.rfalNfcaPollerCheckPresence(RFAL_14443A_SHORTFRAME_CMD_WUPA, &sensRes) == ST_ERR_NONE) {
             if (((nfcDev->dev.nfca.type == RFAL_NFCA_T1T) && (!rfalNfcaIsSensResT1T(&sensRes))) ||
                     ((nfcDev->dev.nfca.type != RFAL_NFCA_T1T) && (NFCReader.rfalNfcaPollerSelect(nfcDev->dev.nfca.nfcId1, nfcDev->dev.nfca.nfcId1Len, &selRes) != ST_ERR_NONE))) {
                 break;
             }
-            Serial.println(".");
             NFCReader.rfalNfcaPollerSleep();
             delay(130);
         }
-        Serial.println("Start discovery");
+        log_d("Start discovery");
 #else
         state = ST_WAIT_RELEASED;
 #endif
@@ -164,17 +167,17 @@ void loopNFCReader()
             if (((nfcDev->dev.nfca.type == RFAL_NFCA_T1T) && (!rfalNfcaIsSensResT1T(&sensRes))) ||
                     ((nfcDev->dev.nfca.type != RFAL_NFCA_T1T) && (NFCReader.rfalNfcaPollerSelect(nfcDev->dev.nfca.nfcId1, nfcDev->dev.nfca.nfcId1Len, &selRes) != ST_ERR_NONE))) {
                 state = ST_POLLING;
-                Serial.println("Start discovery");
+                log_d("Start discovery");
                 return ;
             }
             if (millis() > interval) {
-                Serial.println("Operation completed,Tag can be removed from the field");
+                log_d("Operation completed, tag can be removed from the field");
                 interval = millis() + 1000;
             }
             NFCReader.rfalNfcaPollerSleep();
         } else if (err == ST_ERR_TIMEOUT) {
             state = ST_POLLING;
-            Serial.println("Start discovery");
+            log_d("Start discovery");
             return ;
         }
     }

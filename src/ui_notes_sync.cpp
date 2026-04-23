@@ -3,25 +3,23 @@
  * @brief     GitHub notes sync — the on-device counterpart of the host
  *            lilygo-notes-sync.sh script.
  *
- * The script mounts the device's USB MSC, copies `*.txt` from the mount
- * root into a git repo, downloads the news index onto the card, then
- * commits + pushes. The firmware can't run git, so we drive the same
- * workflow through the GitHub REST Contents API over HTTPS:
+ * The firmware can't run git, so we drive the note-sync half of the host
+ * script through the GitHub REST Contents API over HTTPS:
  *   - Upload every top-level note on the SD card via PUT
  *     /repos/{owner}/{repo}/contents/notes/{file} (carrying the previous
  *     SHA when the file already exists so GitHub treats it as an update,
  *     not a conflict).
  *   - Delete anything under notes/ on the repo side that no longer
  *     exists on the SD card.
- *   - Download the news index HTML and every *.txt link from it into
- *     /news on the device (SD preferred; FFat fallback via
- *     hw_http_download_to_file).
  *
  * The card is the sync source of truth — that matches what the host
  * script sees when it mounts the MSC, and it keeps notes that only live
  * in internal FFat from being pushed to a shared repo. Bytes go to the
  * repo as raw ciphertext when notes crypto is enabled — we read via
  * hw_read_sd_bytes_raw() which bypasses the decrypt-on-read path.
+ *
+ * The news-index download (denislee.github.io/hn) lives on the News app
+ * itself — this sync only touches notes.
  */
 #include "ui_define.h"
 #include "hal/storage.h"
@@ -53,7 +51,6 @@ extern "C" {
 namespace {
 
 #define NSYNC_PREFS_NS      "notesync"
-#define NSYNC_DEFAULT_NEWS  "https://denislee.github.io/hn/"
 #define NSYNC_DEFAULT_BRANCH "main"
 
 // --- NVS helpers ----------------------------------------------------------
@@ -231,7 +228,6 @@ static std::string json_escape(const std::string &in)
 static lv_obj_t *s_root = nullptr;
 static lv_obj_t *s_log_label = nullptr;
 static lv_obj_t *s_log_scroll = nullptr;
-static lv_obj_t *s_sync_btn = nullptr;
 static std::string s_log_text;
 static bool s_syncing = false;
 
@@ -265,17 +261,14 @@ struct Config {
     std::string repo;        // "owner/repo"
     std::string branch;      // default "main"
     std::string token;       // GitHub PAT (contents:write)
-    std::string news_url;    // HTML index of news .txt files
 };
 
 static bool load_config(Config &c, std::string *err)
 {
     c.repo     = load_pref("repo");
     c.branch   = load_pref("branch", NSYNC_DEFAULT_BRANCH);
-    c.news_url = load_pref("news_url", NSYNC_DEFAULT_NEWS);
     c.token    = load_token_plain();
     if (c.branch.empty()) c.branch = NSYNC_DEFAULT_BRANCH;
-    if (c.news_url.empty()) c.news_url = NSYNC_DEFAULT_NEWS;
     if (c.repo.empty()) {
         if (err) *err = "Repo not set (Settings » Notes Sync).";
         return false;
@@ -431,27 +424,6 @@ static bool delete_remote_file(const Config &c,
     return true;
 }
 
-// Parse href="YYYY-MM-DD.txt" out of the news index HTML. Matches
-// parse_remote_index in ui_news.cpp but only returns the filenames — we
-// don't need the size string here.
-static void parse_news_index(const std::string &html,
-                             std::vector<std::string> &out)
-{
-    out.clear();
-    const char *needle = ".txt\">TXT</a>";
-    size_t pos = 0;
-    while ((pos = html.find(needle, pos)) != std::string::npos) {
-        size_t href_end = pos + 4;
-        size_t href_start = html.rfind("href=\"", pos);
-        if (href_start == std::string::npos) { pos++; continue; }
-        href_start += 6;
-        std::string fname = html.substr(href_start, href_end - href_start);
-        if (fname.size() == 14 && fname[4] == '-' && fname[7] == '-') {
-            out.push_back(std::move(fname));
-        }
-        pos = href_end;
-    }
-}
 #endif  // ARDUINO
 
 // --- sync driver ----------------------------------------------------------
@@ -550,44 +522,7 @@ static void run_sync()
     log_appendf("Notes: +%d -%d =%d (fail +%d -%d, skip %d)",
                 uploaded, deleted, unchanged, up_failed, del_failed, skipped);
 
-    // Token is no longer needed once the contents API calls are done —
-    // the news download is a public HTTPS GET. Scrub now so the PAT
-    // doesn't sit in heap for the duration of the news download loop.
     scrub_string(cfg.token);
-
-    // 5. News: fetch the index HTML, download every .txt into /news. Any
-    //    prior files stay put — the host script rm -rf's /news first, but
-    //    doing that on-device risks wiping files we can't re-download when
-    //    the index call partly fails.
-    log_appendf("News: fetching %s", cfg.news_url.c_str());
-    std::string html, herr;
-    if (!hw_http_get_string(cfg.news_url.c_str(), html, &herr)) {
-        log_appendf("News: index fetch failed: %s", herr.c_str());
-        return;
-    }
-    std::vector<std::string> news;
-    parse_news_index(html, news);
-    if (news.empty()) {
-        log_append("News: no files in index.");
-        return;
-    }
-    int n_ok = 0, n_fail = 0;
-    for (const auto &fname : news) {
-        std::string url = cfg.news_url;
-        if (!url.empty() && url.back() != '/') url.push_back('/');
-        url += fname;
-        std::string dest = "/news/" + fname;
-        std::string derr;
-        if (hw_http_download_to_file(url.c_str(), dest.c_str(),
-                                     nullptr, nullptr, &derr)) {
-            n_ok++;
-        } else {
-            log_appendf("  news %s FAIL: %s", fname.c_str(), derr.c_str());
-            n_fail++;
-        }
-    }
-    log_appendf("News: %d/%d files (%d failed).",
-                n_ok, (int)news.size(), n_fail);
 }
 
 static void scrub_string(std::string &s) { hal::secret_scrub(s); }
@@ -601,7 +536,6 @@ static void sync_btn_cb(lv_event_t *)
 {
     if (s_syncing) return;
     s_syncing = true;
-    if (s_sync_btn) lv_obj_add_state(s_sync_btn, LV_STATE_DISABLED);
     hw_feedback();
     s_log_text.clear();
     if (s_log_label) lv_label_set_text(s_log_label, "");
@@ -621,7 +555,6 @@ static void sync_btn_cb(lv_event_t *)
 #endif
     log_append("Done.");
     s_syncing = false;
-    if (s_sync_btn) lv_obj_clear_state(s_sync_btn, LV_STATE_DISABLED);
 }
 
 static void enter(lv_obj_t *parent)
@@ -673,11 +606,6 @@ static void enter(lv_obj_t *parent)
                               repo.c_str(), tok_status);
     }
 
-    s_sync_btn = create_button(parent, LV_SYMBOL_REFRESH,
-                                "Sync now", sync_btn_cb);
-    lv_group_t *grp = lv_group_get_default();
-    if (grp) lv_group_add_obj(grp, s_sync_btn);
-
     // Scrolling log area — PUT/DELETE/download calls each emit a line.
     s_log_scroll = lv_obj_create(parent);
     lv_obj_set_width(s_log_scroll, lv_pct(100));
@@ -694,15 +622,13 @@ static void enter(lv_obj_t *parent)
     lv_label_set_long_mode(s_log_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_log_label, lv_pct(100));
     lv_obj_set_style_text_color(s_log_label, UI_COLOR_FG, 0);
-    lv_obj_set_style_text_font(s_log_label, get_small_font(), 0);
+    lv_obj_set_style_text_font(s_log_label, &lv_font_montserrat_10, 0);
     lv_label_set_text(s_log_label, "");
-
-    if (grp) lv_group_focus_obj(s_sync_btn);
 }
 
 static void exit_cb(lv_obj_t *) {
     ui_hide_back_button();
-    s_root = s_log_label = s_log_scroll = s_sync_btn = nullptr;
+    s_root = s_log_label = s_log_scroll = nullptr;
     s_log_text.clear();
     s_syncing = false;
 }
@@ -777,14 +703,6 @@ std::string nsync_cfg_get_branch()
     return v;
 }
 void nsync_cfg_set_branch(const char *v) { save_pref("branch", v ? v : ""); }
-
-std::string nsync_cfg_get_news_url()
-{
-    std::string v = load_pref("news_url", NSYNC_DEFAULT_NEWS);
-    if (v.empty()) v = NSYNC_DEFAULT_NEWS;
-    return v;
-}
-void nsync_cfg_set_news_url(const char *v) { save_pref("news_url", v ? v : ""); }
 
 std::string nsync_cfg_get_token_display()
 {

@@ -75,15 +75,12 @@ bool tg_cfg_fetch_all_chats(std::vector<std::pair<long long, std::string>> &out,
 // GitHub notes-sync config, driven by the Settings app (Settings » Notes
 // Sync). Storage lives in the "notesync" NVS namespace and mirrors the
 // Telegram token pattern: the PAT is AES-wrapped with the notes passphrase
-// when crypto is enabled+unlocked, plaintext otherwise. Defaults:
-//   branch    = "main"
-//   news_url  = "https://denislee.github.io/hn/"
+// when crypto is enabled+unlocked, plaintext otherwise. Default branch is
+// "main".
 std::string nsync_cfg_get_repo();
 void        nsync_cfg_set_repo(const char *v);
 std::string nsync_cfg_get_branch();
 void        nsync_cfg_set_branch(const char *v);
-std::string nsync_cfg_get_news_url();
-void        nsync_cfg_set_news_url(const char *v);
 std::string nsync_cfg_get_token_display();
 // Saves the PAT AES-wrapped under the notes passphrase. Refuses to persist
 // a non-empty token unless notes crypto is enabled AND the session is
