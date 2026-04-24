@@ -792,14 +792,7 @@ static void ui_weather_enter(lv_obj_t *parent)
     lv_obj_set_flex_flow(hourly_col, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(hourly_col, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_add_flag(hourly_col, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(hourly_col, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
-    lv_obj_set_style_radius(hourly_col, 3, 0);
-    lv_obj_set_style_bg_color(hourly_col, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
-    lv_obj_set_style_bg_opa(hourly_col, LV_OPA_20, LV_STATE_FOCUSED);
-    if (lv_group_t *g = lv_group_get_default()) {
-        lv_group_add_obj(g, hourly_col);
-    }
+    lv_obj_remove_flag(hourly_col, LV_OBJ_FLAG_CLICKABLE);
 
     // Section label: Week
     lv_obj_t *d_hdr = lv_label_create(parent);
@@ -817,14 +810,7 @@ static void ui_weather_enter(lv_obj_t *parent)
     lv_obj_set_flex_flow(daily_col, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(daily_col, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_add_flag(daily_col, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(daily_col, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
-    lv_obj_set_style_radius(daily_col, 3, 0);
-    lv_obj_set_style_bg_color(daily_col, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
-    lv_obj_set_style_bg_opa(daily_col, LV_OPA_20, LV_STATE_FOCUSED);
-    if (lv_group_t *g = lv_group_get_default()) {
-        lv_group_add_obj(g, daily_col);
-    }
+    lv_obj_remove_flag(daily_col, LV_OBJ_FLAG_CLICKABLE);
 
     status_label = lv_label_create(parent);
     lv_label_set_text(status_label, "");

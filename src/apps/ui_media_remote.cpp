@@ -10,6 +10,8 @@
  */
 #include "../ui_define.h"
 #include "app_registry.h"
+#include "../core/app_manager.h"
+#include "../core/system.h"
 
 namespace {
 
@@ -174,7 +176,8 @@ static void volume_event_cb(lv_event_t *e)
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
-    menu_show();
+    core::AppManager::getInstance().queueSwitchApp("Settings",
+        core::System::getInstance().getAppPanel());
 }
 
 static lv_obj_t *make_panel(lv_obj_t *parent)

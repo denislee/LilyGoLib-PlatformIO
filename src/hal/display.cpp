@@ -100,11 +100,13 @@ void hw_enable_keyboard()
 #endif
     // Ensure user setting is restored as initKeyboard might reset it to library defaults
     hw_set_kb_backlight(user_setting.keyboard_bl_level);
-    // Enable the vendor driver's repeat emitter. It's the only way backspace
-    // produces "still held" pings — LilyGoKeyboard::handleSpecialKeys swallows
-    // the release event for '\b', so without this there's no signal our
-    // keyboard_task can use to auto-repeat backspace.
-    instance.kb.setRepeat(true);
+    // Disable the vendor driver's repeat emitter. With it on, backspace
+    // fires KB_PRESSED every 300 ms while held, which is indistinguishable
+    // from a fast re-tap — a user pressing backspace twice in under 320 ms
+    // would look identical to "still held" and the second tap would be
+    // swallowed. Off means one KB_PRESSED per physical tap: no auto-repeat
+    // on hold (by design) and every fast re-tap registers.
+    instance.kb.setRepeat(false);
 #endif
 }
 

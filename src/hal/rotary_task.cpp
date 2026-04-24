@@ -133,42 +133,54 @@ void rotary_read_cb(lv_indev_t *drv, lv_indev_data_t *data)
 {
     static uint8_t last_dir = ROTARY_DIR_NONE;
 
-    RotaryMsg_t msg;
-    bool got = s_event_queue
-               && xQueueReceive(s_event_queue, &msg, 0) == pdTRUE;
-    if (!got) {
-        msg.dir = ROTARY_DIR_NONE;
-        msg.centerBtnPressed = false;
+    // Coalesce every queued rotary event into one aggregate enc_diff. A
+    // fast flick emits many notches in quick succession; feeding them one
+    // at a time forces a full LVGL scroll+flush per notch, which shows up
+    // as stutter when the flush contends with the instance mutex. Summing
+    // lets a single render cycle cover the whole flick.
+    int     diff_total     = 0;
+    bool    center_pressed = false;
+    uint8_t latest_dir     = ROTARY_DIR_NONE;
+    bool    any_event      = false;
+
+    while (s_event_queue) {
+        RotaryMsg_t msg;
+        if (xQueueReceive(s_event_queue, &msg, 0) != pdTRUE) break;
+        any_event = true;
+        switch (msg.dir) {
+        case ROTARY_DIR_UP:   diff_total += 1; break;
+        case ROTARY_DIR_DOWN: diff_total -= 1; break;
+        default: break;
+        }
+        if (msg.dir != ROTARY_DIR_NONE) latest_dir = msg.dir;
+        if (msg.centerBtnPressed) center_pressed = true;
     }
 
-    int diff = 0;
-    switch (msg.dir) {
-    case ROTARY_DIR_UP:
-        diff = 1;
-        break;
-    case ROTARY_DIR_DOWN:
-        diff = -1;
-        break;
-    default:
-        data->state = LV_INDEV_STATE_RELEASED;
-        break;
+    if (!any_event) {
+        data->enc_diff = 0;
+        data->state    = LV_INDEV_STATE_RELEASED;
+        return;
     }
 
-    // Alt+scroll jumps the textarea cursor by word. Matches vendor read_cb.
-    if (diff != 0 && instance.isAltKeyPressed()) {
+    // Alt+scroll jumps the textarea cursor by word. Matches vendor read_cb,
+    // scaled by the aggregate so a 3-notch flick hops 3 words.
+    if (diff_total != 0 && instance.isAltKeyPressed()) {
         lv_group_t *g = lv_indev_get_group(drv);
         if (g && lv_group_get_editing(g)) {
             lv_obj_t *focused = lv_group_get_focused(g);
             if (focused && lv_obj_has_class(focused, &lv_textarea_class)) {
-                textarea_jump_word(focused, diff);
-                data->enc_diff = 0;
-                if (msg.centerBtnPressed) {
-                    data->state = LV_INDEV_STATE_PRESSED;
+                int dir   = diff_total > 0 ? 1 : -1;
+                int steps = diff_total > 0 ? diff_total : -diff_total;
+                for (int i = 0; i < steps; ++i) {
+                    textarea_jump_word(focused, dir);
                 }
-                if (last_dir != msg.dir || msg.centerBtnPressed) {
+                data->enc_diff = 0;
+                data->state    = center_pressed ? LV_INDEV_STATE_PRESSED
+                                                : LV_INDEV_STATE_RELEASED;
+                if (last_dir != latest_dir || center_pressed) {
                     instance.feedback((void *)drv);
                 }
-                last_dir = msg.dir;
+                last_dir = latest_dir;
                 data->continue_reading =
                     s_event_queue && uxQueueMessagesWaiting(s_event_queue) > 0;
                 return;
@@ -176,18 +188,17 @@ void rotary_read_cb(lv_indev_t *drv, lv_indev_data_t *data)
         }
     }
 
-    data->enc_diff = diff;
-    if (msg.centerBtnPressed) {
-        data->state = LV_INDEV_STATE_PRESSED;
-    }
+    data->enc_diff = diff_total;
+    data->state    = center_pressed ? LV_INDEV_STATE_PRESSED
+                                    : LV_INDEV_STATE_RELEASED;
 
-    if (last_dir != msg.dir || msg.centerBtnPressed) {
+    if (last_dir != latest_dir || center_pressed) {
         instance.feedback((void *)drv);
     }
-    last_dir = msg.dir;
+    last_dir = latest_dir;
 
-    // Drain the queue in one LVGL timer cycle when multiple events
-    // accumulated (common right after a long mutex hold clears).
+    // Any events that raced in after our drain will be picked up on the
+    // next cb call; normally the drain loop above leaves the queue empty.
     data->continue_reading =
         s_event_queue && uxQueueMessagesWaiting(s_event_queue) > 0;
 }

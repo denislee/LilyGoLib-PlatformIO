@@ -56,21 +56,17 @@ QueueHandle_t s_event_queue = nullptr;
 TaskHandle_t  s_task        = nullptr;
 uint32_t      s_last_key    = 0;
 
-char       s_held_char      = '\0';
-TickType_t s_press_tick     = 0;
-TickType_t s_repeat_tick    = 0;
-// For backspace only: last time we observed a vendor-emitted KB_PRESSED
-// ping. The vendor driver fires one every 300 ms while the key is physically
-// held and stops once released — we treat a stale ping as "released".
-TickType_t s_backspace_seen = 0;
+char       s_held_char   = '\0';
+TickType_t s_press_tick  = 0;
+TickType_t s_repeat_tick = 0;
 
-// Vendor's LilyGoKeyboard::setRepeat(true) fires KB_PRESSED every 300 ms
-// while a key is physically held. We treat a gap longer than this as a
-// release signal for backspace (which has no KB_RELEASED event path).
-// Kept just above the 300 ms vendor interval: long enough to absorb poll
-// jitter (task runs every 10 ms), short enough that stale pulses don't
-// keep firing after the user lets go.
-constexpr uint32_t kBackspacePingTimeoutMs = 320;
+// Keys whose release the vendor driver swallows (handleSpecialKeys returns -1
+// on release for backspace, so no KB_RELEASED surfaces). We rely on having
+// disabled vendor repeat (setRepeat(false) in display.cpp) so each physical
+// press gives us exactly one KB_PRESSED — we treat each as an instantaneous
+// tap, never tracking s_held_char for them, so no auto-repeat while held.
+// 0x17 is Alt+Backspace (word delete); '\b' is plain backspace.
+inline bool is_pingkey(char c) { return c == '\b' || c == 0x17; }
 
 void enqueue_event(const KeyEvent &ev)
 {
@@ -105,23 +101,17 @@ void keyboard_task_fn(void *)
                 }
                 if (state == KB_PRESSED) {
                     TickType_t now = xTaskGetTickCount();
-                    // Backspace is the tricky one: handleSpecialKeys in the
-                    // vendor driver never emits KB_RELEASED for '\b'. We
-                    // rely on setRepeat(true)'s 300 ms pings as a liveness
-                    // signal — a fresh press when we weren't already
-                    // tracking, otherwise just a "still held" ping that
-                    // refreshes the staleness timer.
-                    if (c == '\b') {
-                        if (s_held_char == '\b') {
-                            s_backspace_seen = now;
-                            continue;
-                        }
-                        s_held_char      = '\b';
-                        s_press_tick     = now;
-                        s_repeat_tick    = now;
-                        s_backspace_seen = now;
-                        enqueue_event({KB_PRESSED,  '\b'});
-                        enqueue_event({KB_RELEASED, '\b'});
+                    // Backspace and Alt+Backspace: the vendor's
+                    // handleSpecialKeys swallows KB_RELEASED. With vendor
+                    // repeat disabled (display.cpp), each physical press
+                    // produces exactly one KB_PRESSED, so we can emit a
+                    // synthetic PRESS+RELEASE pulse per event without
+                    // worrying about distinguishing held from fast re-tap.
+                    // Deliberately skip held-char tracking so the auto-
+                    // repeat timer below never fires for these keys.
+                    if (is_pingkey(c)) {
+                        enqueue_event({KB_PRESSED,  c});
+                        enqueue_event({KB_RELEASED, c});
                         continue;
                     }
                     // Drop duplicate presses for the same held char — the
@@ -145,33 +135,17 @@ void keyboard_task_fn(void *)
             }
         }
 
-        // Detect backspace release via vendor-ping staleness. The vendor
-        // driver never surfaces KB_RELEASED for '\b', so we notice release
-        // by the absence of its 300 ms repeat pings.
-        if (s_held_char == '\b') {
-            TickType_t now         = xTaskGetTickCount();
-            uint32_t   since_seen  = (now - s_backspace_seen) * portTICK_PERIOD_MS;
-            if (since_seen > kBackspacePingTimeoutMs) {
-                s_held_char = '\0';
-            }
-        }
-
-        // Synthesize auto-repeat while a key stays held. For regular keys
-        // we inject a RELEASE + PRESS pair (LVGL treats it as a fresh
-        // event); for backspace we inject a PRESS + RELEASE pulse to match
-        // how initial '\b' presses reach LVGL.
+        // Synthesize auto-repeat while a regular key stays held — inject a
+        // RELEASE + PRESS pair so LVGL treats it as a fresh event. Pingkeys
+        // ('\b', 0x17) never reach this path because we don't set
+        // s_held_char for them above.
         if (s_held_char != '\0') {
             TickType_t now       = xTaskGetTickCount();
             uint32_t   held_ms   = (now - s_press_tick)  * portTICK_PERIOD_MS;
             uint32_t   since_rep = (now - s_repeat_tick) * portTICK_PERIOD_MS;
             if (held_ms >= kRepeatDelayMs && since_rep >= kRepeatIntervalMs) {
-                if (s_held_char == '\b') {
-                    enqueue_event({KB_PRESSED,  '\b'});
-                    enqueue_event({KB_RELEASED, '\b'});
-                } else {
-                    enqueue_event({KB_RELEASED, s_held_char});
-                    enqueue_event({KB_PRESSED,  s_held_char});
-                }
+                enqueue_event({KB_RELEASED, s_held_char});
+                enqueue_event({KB_PRESSED,  s_held_char});
                 s_repeat_tick = now;
             }
         }

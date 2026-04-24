@@ -257,17 +257,17 @@ static lv_obj_t *create_device_probe(lv_obj_t *menu, lv_obj_t *main_page)
     return cont;
 }
 
+// Defer the app switch via queueSwitchApp: ui_sys_exit() deletes the settings
+// `menu`, which is an ancestor of the clicked menu item whose CLICKED event
+// is still being dispatched. Freeing it synchronously leaves LVGL walking
+// freed memory and freezes the device. queueSwitchApp runs from
+// AppManager::update() after lv_timer_handler fully unwinds — guaranteed
+// next-main-loop-iteration, unlike lv_async_call (period-0 timer) which
+// races the current event dispatch and could miss the first click.
 static void files_click_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     hw_feedback();
-    // Defer the app switch: ui_sys_exit() deletes the settings `menu`, which
-    // is an ancestor of the Files menu item whose CLICKED event is still
-    // being dispatched. Freeing it synchronously leaves LVGL walking freed
-    // memory and freezes the device. queueSwitchApp runs from
-    // AppManager::update() after lv_timer_handler fully unwinds — guaranteed
-    // next-main-loop-iteration, unlike lv_async_call (period-0 timer) which
-    // races the current event dispatch and could miss the first click.
     core::AppManager::getInstance().queueSwitchApp("Files",
         core::System::getInstance().getAppPanel());
 }
@@ -280,6 +280,25 @@ static lv_obj_t *create_files_item(lv_obj_t *main_page)
     lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     style_menu_item_icon(cont, LV_SYMBOL_DIRECTORY, "Files");
     lv_obj_add_event_cb(cont, files_click_cb, LV_EVENT_CLICKED, NULL);
+    return cont;
+}
+
+static void remote_click_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    hw_feedback();
+    core::AppManager::getInstance().queueSwitchApp("Remote",
+        core::System::getInstance().getAppPanel());
+}
+
+static lv_obj_t *create_remote_item(lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+    style_menu_item_icon(cont, LV_SYMBOL_BLUETOOTH, "Remote");
+    lv_obj_add_event_cb(cont, remote_click_cb, LV_EVENT_CLICKED, NULL);
     return cont;
 }
 
@@ -534,6 +553,7 @@ void ui_sys_enter(lv_obj_t *parent)
     cont = create_subpage_weather(menu, main_page);      add_grid_item(cont);
     cont = create_subpage_telegram(menu, main_page);     add_grid_item(cont);
     cont = create_subpage_notes_sync(menu, main_page);   add_grid_item(cont);
+    cont = create_remote_item(main_page);                add_grid_item(cont);
     cont = create_subpage_storage(menu, main_page);      add_grid_item(cont);
     cont = create_files_item(main_page);                 add_grid_item(cont);
     cont = create_subpage_notes_security(menu, main_page); add_grid_item(cont);
