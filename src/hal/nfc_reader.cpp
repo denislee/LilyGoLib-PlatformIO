@@ -7,7 +7,7 @@
  *
  */
 
-#include "app_nfc.h"
+#include "nfc_reader.h"
 
 #if defined(ARDUINO) && defined(USING_ST25R3916)
 

@@ -1,17 +1,14 @@
 /**
- * @file      hw_sx1262.cpp
- * @brief     SX1262 (sub-GHz LoRa) — per-chip programming.
+ * @file      hw_sx1280.cpp
+ * @brief     SX1280 (2.4 GHz LoRa) — per-chip programming.
  *
- * The shared ISR/event-group/TX/RX/listening logic lives in
- * hal/radio_common.cpp; this file only owns the chip-specific pieces:
- * RadioLib `radio.set*()` calls, mode entry, default params, and the
- * frequency/bandwidth/power option tables exposed via `radio_get_*_list`.
+ * Shared ISR/event-group/TX/RX plumbing lives in hal/radio_common.cpp.
  */
 
-#include "hal_interface.h"
-#include "hal/radio_chip.h"
+#include "../../hal_interface.h"
+#include "../radio_chip.h"
 
-#ifdef ARDUINO_LILYGO_LORA_SX1262
+#ifdef ARDUINO_LILYGO_LORA_SX1280
 
 #ifdef ARDUINO
 #include <LilyGoLib.h>
@@ -21,13 +18,13 @@ namespace radio_chip {
 
 void default_params(radio_params_t &params)
 {
-    params.bandwidth = 125.0;
-    params.freq      = RADIO_DEFAULT_FREQUENCY;
+    params.bandwidth = 203.125;
+    params.freq      = 2400.0;
     params.cr        = 5;
     params.isRunning = false;
     params.mode      = RADIO_DISABLE;
     params.sf        = 12;
-    params.power     = 22;
+    params.power     = 13;
     params.interval  = 3000;
     params.syncWord  = 0xCD;
 }
@@ -59,17 +56,13 @@ int16_t configure(const radio_params_t &params)
     if (state == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
         Serial.println(F("Selected output power is invalid for this module!"));
     }
-    state = radio.setCurrentLimit(140);
-    if (state == RADIOLIB_ERR_INVALID_CURRENT_LIMIT) {
-        Serial.println(F("Selected current limit is invalid for this module!"));
-    }
 
     switch (params.mode) {
-    case RADIO_DISABLE: state = radio.standby();          break;
+    case RADIO_DISABLE: state = radio.standby();         break;
     case RADIO_TX:      state = radio.startTransmit(""); break;
     case RADIO_RX:      state = radio.startReceive();    break;
-    case RADIO_CW:                                        break;
-    default:                                              break;
+    case RADIO_CW:                                       break;
+    default:                                             break;
     }
     return state;
 #else
@@ -83,13 +76,12 @@ int16_t configure(const radio_params_t &params)
 
 // ----- Option tables -----
 
-static const float bandwidth_list[]   = {41.7, 62.5, 125.0, 250.0, 500.0};
-static const float power_level_list[] = {2, 5, 10, 12, 17, 20, 22};
-#ifdef RADIO_FIXED_FREQUENCY
-static const float freq_list[] = {RADIO_FIXED_FREQUENCY};
-#else
-static const float freq_list[] = {433.0, 470.0, 842.0, 850, 868.0, 915.0, 923.0, 945.0};
-#endif
+static const float bandwidth_list[]   = {203.125, 406.25, 812.5, 1625.0};
+static const float power_level_list[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
+static const float freq_list[]        = {
+    2400.0, 2412.0, 2422.0, 2432.0, 2442.0, 2452.0,
+    2462.0, 2472.0, 2482.0, 2492.0, 2500.0
+};
 
 uint16_t radio_get_freq_length()      { return sizeof(freq_list)        / sizeof(freq_list[0]); }
 uint16_t radio_get_bandwidth_length() { return sizeof(bandwidth_list)   / sizeof(bandwidth_list[0]); }
@@ -97,39 +89,37 @@ uint16_t radio_get_tx_power_length()  { return sizeof(power_level_list) / sizeof
 
 const char *radio_get_freq_list()
 {
-#ifdef RADIO_FIXED_FREQUENCY
-    return RADIO_FIXED_FREQUENCY_STRING;
-#else
-    return "433MHz\n""470MHz\n""842MHZ\n""850MHZ\n""868MHz\n""915MHz\n""923MHz\n""945MHz";
-#endif
+    return "2400MHz\n""2412MHz\n""2422MHz\n""2432MHz\n""2442MHz\n""2452MHz\n"
+           "2462MHz\n""2472MHz\n""2482MHz\n""2492MHz\n""2500MHz";
 }
 
 float radio_get_freq_from_index(uint8_t index)
 {
-    if (index >= radio_get_freq_length()) return RADIO_DEFAULT_FREQUENCY;
+    if (index >= radio_get_freq_length()) return 2400.0;
     return freq_list[index];
 }
 
 const char *radio_get_bandwidth_list(bool)
 {
-    return "41.7KHz\n""62.5KHz\n""125KHz\n""250KHz\n""500KHz";
+    return "203.125KHz\n""406.25KHz\n""812.5KHz\n""1625.0KHz";
 }
 
 float radio_get_bandwidth_from_index(uint8_t index)
 {
-    if (index >= radio_get_bandwidth_length()) return 125.0;
+    if (index >= radio_get_bandwidth_length()) return 203.125;
     return bandwidth_list[index];
 }
 
 const char *radio_get_tx_power_list(bool)
 {
-    return "2dBm\n""5dBm\n""10dBm\n""12dBm\n""17dBm\n""20dBm\n""22dBm";
+    return "0dBm\n""1dBm\n""2dBm\n""3dBm\n""4dBm\n""5dBm\n""6dBm\n"
+           "7dBm\n""8dBm\n""9dBm\n""10dBm\n""11dBm\n""12dBm\n""13dBm";
 }
 
 float radio_get_tx_power_from_index(uint8_t index)
 {
-    if (index >= radio_get_tx_power_length()) return 22;
+    if (index >= radio_get_tx_power_length()) return 13;
     return power_level_list[index];
 }
 
-#endif  // ARDUINO_LILYGO_LORA_SX1262
+#endif  // ARDUINO_LILYGO_LORA_SX1280

@@ -10,7 +10,7 @@
 
 #ifdef ARDUINO
 #include <LilyGoLib.h>
-#include "../app_nfc.h"
+#include "nfc_reader.h"
 #include "../nfc_provision.h"
 #else
 #include <climits>

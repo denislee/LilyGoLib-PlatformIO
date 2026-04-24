@@ -16,8 +16,8 @@
 #define USING_EXTERN_NRF2401
 #endif
 /* USING_ST25R3916 is injected as a -D build flag in platformio.ini so it
- * reaches every translation unit (incl. app_nfc.cpp which doesn't pull in
- * this header). */
+ * reaches every translation unit (incl. hal/nfc_reader.cpp which doesn't
+ * pull in this header). */
 
 #define MAIN_FONT   &lv_font_montserrat_20
 #define NFC_TIPS_STRING "Place the NFC card close to the center of the arrow on the back. It will vibrate when the card is detected; otherwise, it will not display anything if it cannot be resolved."

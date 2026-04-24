@@ -20,9 +20,8 @@
 #include <freertos/task.h>
 
 #include "../core/scoped_lock.h"
-#include "../app_nfc.h"
-
-extern bool ui_is_fake_sleep();
+#include "../core/system_hooks.h"
+#include "nfc_reader.h"
 
 #if defined(USING_ST25R3916)
 

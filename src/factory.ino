@@ -13,33 +13,12 @@
 #include <esp_sntp.h>
 #include "hal_interface.h"
 #include "event_define.h"
+#include "core/system_hooks.h"
 
 static const char *ntpServer1 = "pool.ntp.org";
 static const char *ntpServer2 = "time.nist.gov";
 static const uint64_t  gmtOffset_sec = GMT_OFFSET_SECOND;
 static const int   daylightOffset_sec = 0;
-static SemaphoreHandle_t xSemaphore = NULL;
-
-
-void instanceLockTake()
-{
-    if (xSemaphore != NULL) {
-        if (xSemaphoreTake(xSemaphore, portMAX_DELAY) != pdTRUE) {
-            log_e("Failed to take semaphore");
-            assert(0);
-        }
-    }
-}
-
-void instanceLockGive()
-{
-    if (xSemaphore != NULL) {
-        if (xSemaphoreGive(xSemaphore) != pdTRUE) {
-            log_e("Failed to give semaphore");
-            assert(0);
-        }
-    }
-}
 
 // Callback function (gets called when time adjusts via NTP)
 static void time_available(struct timeval *t)
@@ -62,7 +41,6 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 }
 
 #include "core/system.h"
-#include "core/scoped_lock.h"
 #include "apps/app_registry.h"
 #include "hal/lvgl_task.h"
 #include "hal/nfc_task.h"
@@ -74,11 +52,7 @@ void setup()
 
     Serial.begin(115200);
 
-    xSemaphore = xSemaphoreCreateMutex();
-    if (xSemaphore == NULL) {
-        log_e("Failed to create mutex");
-        assert(0);
-    }
+    core::instance_lock_init();
 
     hw_load_setting();
     user_setting_params_t settings;
@@ -119,8 +93,6 @@ void setup()
 
     Serial.println("Start done. run main loop");
 }
-
-extern bool ui_is_fake_sleep();
 
 void loop()
 {

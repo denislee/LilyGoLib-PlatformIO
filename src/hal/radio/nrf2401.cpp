@@ -7,7 +7,7 @@
  *
  */
 
-#include "hal_interface.h"
+#include "../../hal_interface.h"
 
 #if defined(USING_EXTERN_NRF2401)
 

@@ -8,8 +8,8 @@
  * `_high_freq`, which tracks the band of the last selected frequency.
  */
 
-#include "hal_interface.h"
-#include "hal/radio_chip.h"
+#include "../../hal_interface.h"
+#include "../radio_chip.h"
 
 #ifdef ARDUINO_LILYGO_LORA_LR1121
 

@@ -1,5 +1,5 @@
 /**
- * @file      app_nfc.h
+ * @file      nfc_reader.h
  * @author    Lewis He (lewishe@outlook.com)
  * @license   MIT
  * @copyright Copyright (c) 2024  ShenZhen XinYuan Electronic Technology Co., Ltd

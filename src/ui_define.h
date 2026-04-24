@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "hal_interface.h"
+#include "core/system_hooks.h"
 
 #define DEFAULT_OPA          100
 
@@ -67,8 +68,7 @@ void destroy_msgbox(lv_obj_t *msgbox);
 
 lv_indev_t *lv_get_encoder_indev();
 lv_indev_t *lv_get_keyboard_indev();
-void menu_show();
-void menu_hidden();
+/* menu_show / menu_hidden declared in core/system_hooks.h (via include above). */
 void set_default_group(lv_group_t *group);
 
 lv_obj_t *ui_create_process_bar(lv_obj_t *parent, const char *title);
@@ -120,14 +120,8 @@ void ui_text_prompt(const char *title, const char *subtitle,
 void ui_wifi_networks_open();
 /* Live NFC status + detection counters overlay. See ui_nfc_test.cpp. */
 void ui_nfc_test_open();
-void ui_request_editor_switch();
-void ui_resume_timers();
-void ui_pause_timers();
-bool ui_is_fake_sleep();
-void ui_lock();
-void ui_unlock();
-
-extern bool editor_auto_edit;
+/* Editor / fake-sleep / instance-lock hooks are declared in
+ * core/system_hooks.h (included at top of this file). */
 
 const lv_font_t *get_editor_font();
 const lv_font_t *get_small_font();

@@ -5,8 +5,8 @@
  * Shared ISR/event-group/TX/RX plumbing lives in hal/radio_common.cpp.
  */
 
-#include "hal_interface.h"
-#include "hal/radio_chip.h"
+#include "../../hal_interface.h"
+#include "../radio_chip.h"
 
 #ifdef ARDUINO_LILYGO_LORA_CC1101
 

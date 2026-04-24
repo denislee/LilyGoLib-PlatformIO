@@ -21,15 +21,13 @@
 
 #include "hal_interface.h"
 #include "core/system.h"
+#include "core/system_hooks.h"
 #include "apps/app_registry.h"
 
 extern void hw_init();
 
-// On hardware, factory.ino provides these (they guard the shared SPI bus).
-// The emulator has no SPI bus and no background tasks contending for it, so
-// they're intentional no-ops here.
-void instanceLockTake() {}
-void instanceLockGive() {}
+// instanceLockTake/Give come from core/instance_lock.cpp — compiled as no-ops
+// when !ARDUINO so this TU no longer needs to define them.
 
 // Power-state descriptor is meaningless on the host; return a stable empty
 // string so the on-device power screen still renders without reaching into

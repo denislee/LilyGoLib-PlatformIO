@@ -22,8 +22,7 @@
 
 #include "../core/scoped_lock.h"
 #include "../core/system.h"
-
-extern bool ui_is_fake_sleep();
+#include "../core/system_hooks.h"
 
 namespace {
 
