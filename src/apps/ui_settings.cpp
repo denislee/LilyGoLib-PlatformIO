@@ -229,7 +229,7 @@ static void build_device_probe(lv_obj_t *menu, lv_obj_t *sub_page)
 
             lv_obj_t *name = lv_label_create(row);
             lv_label_set_text(name, device_name);
-            lv_label_set_long_mode(name, LV_LABEL_LONG_SCROLL);
+            lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
             lv_obj_set_style_max_width(name, LV_PCT(65), 0);
 
             lv_obj_t *status = lv_label_create(row);

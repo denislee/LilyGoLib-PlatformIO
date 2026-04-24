@@ -591,7 +591,7 @@ static void show_index_page()
         lv_obj_add_event_cb(btn, [](lv_event_t *ev) {
             lv_obj_t *b = (lv_obj_t *)lv_event_get_target(ev);
             lv_obj_t *l = lv_obj_get_child(b, 0);
-            if (l) lv_label_set_long_mode(l, LV_LABEL_LONG_SCROLL_CIRCULAR);
+            if (l) lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
         }, LV_EVENT_FOCUSED, NULL);
 
         lv_obj_add_event_cb(btn, [](lv_event_t *ev) {

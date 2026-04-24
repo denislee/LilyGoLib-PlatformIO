@@ -149,7 +149,7 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
 
         lv_obj_t *v = lv_label_create(row);
         lv_label_set_text(v, val);
-        lv_label_set_long_mode(v, LV_LABEL_LONG_SCROLL);
+        lv_label_set_long_mode(v, LV_LABEL_LONG_DOT);
         lv_obj_set_style_max_width(v, LV_PCT(55), 0);
 
         register_subpage_group_obj(sub_page, row);

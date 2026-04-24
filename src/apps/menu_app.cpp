@@ -357,8 +357,13 @@ void MenuApp::onStart(lv_obj_t* parent) {
     lv_obj_set_style_bg_opa(toggle_bar, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(toggle_bar, 0, 0);
     lv_obj_set_style_pad_all(toggle_bar, 0, 0);
+    // Add horizontal padding so the 4px outline (2px pad + 2px width) on the outer pills
+    // does not get clipped by the right/left edges of the parent container or screen.
+    lv_obj_set_style_pad_right(toggle_bar, 6, 0);
+    lv_obj_set_style_pad_left(toggle_bar, 6, 0);
     lv_obj_set_style_pad_column(toggle_bar, 8, 0);
     lv_obj_remove_flag(toggle_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(toggle_bar, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     lv_obj_set_flex_flow(toggle_bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(toggle_bar, LV_FLEX_ALIGN_END,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -381,6 +386,10 @@ void MenuApp::onStart(lv_obj_t* parent) {
         lv_obj_set_style_outline_color(btn, UI_COLOR_FG, LV_STATE_FOCUSED);
         lv_obj_set_style_outline_opa(btn, LV_OPA_COVER, LV_STATE_FOCUSED);
         lv_obj_set_style_outline_pad(btn, 2, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_width(btn, 2, LV_STATE_FOCUS_KEY);
+        lv_obj_set_style_outline_color(btn, UI_COLOR_FG, LV_STATE_FOCUS_KEY);
+        lv_obj_set_style_outline_opa(btn, LV_OPA_COVER, LV_STATE_FOCUS_KEY);
+        lv_obj_set_style_outline_pad(btn, 2, LV_STATE_FOCUS_KEY);
 
         lv_obj_t* icon = lv_label_create(btn);
         lv_label_set_text(icon, symbol);

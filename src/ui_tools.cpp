@@ -289,7 +289,7 @@ lv_obj_t *create_text(lv_obj_t *parent, const char *icon, const char *txt,
     if (txt) {
         label = lv_label_create(obj);
         lv_label_set_text(label, txt);
-        lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
         lv_obj_set_flex_grow(label, 1);
     }
 

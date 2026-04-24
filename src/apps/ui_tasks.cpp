@@ -74,7 +74,7 @@ static void task_event_cb(lv_event_t *e) {
 
         if (label) {
             if (code == LV_EVENT_FOCUSED) {
-                lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL);
+                lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
             } else {
                 lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
             }
