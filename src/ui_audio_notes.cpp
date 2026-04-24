@@ -5,6 +5,7 @@
  */
 #include "ui_define.h"
 #include "core/app_manager.h"
+#include "core/spi_lock.h"
 #include "hal/system.h"
 #include "hal/storage.h"
 #include "hal/audio.h"
@@ -93,9 +94,8 @@ static void ensure_notes_dir()
 {
 #ifdef ARDUINO
     if (!(HW_SD_ONLINE & hw_get_device_online())) return;
-    instance.lockSPI();
+    core::ScopedSpiLock lock;
     if (!SD.exists(NOTES_DIR)) SD.mkdir(NOTES_DIR);
-    instance.unlockSPI();
 #endif
 }
 
@@ -126,14 +126,15 @@ static void reload_notes()
         // File size — re-open briefly. Could be slow; we cache it.
         n.data_bytes = 0;
 #ifdef ARDUINO
-        instance.lockSPI();
-        File f = SD.open(n.full_path.c_str());
-        if (f) {
-            size_t sz = f.size();
-            n.data_bytes = (sz >= 44) ? (uint32_t)(sz - 44) : 0;
-            f.close();
+        {
+            core::ScopedSpiLock lock;
+            File f = SD.open(n.full_path.c_str());
+            if (f) {
+                size_t sz = f.size();
+                n.data_bytes = (sz >= 44) ? (uint32_t)(sz - 44) : 0;
+                f.close();
+            }
         }
-        instance.unlockSPI();
 #endif
         notes.push_back(n);
     }

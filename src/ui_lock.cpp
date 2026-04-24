@@ -132,7 +132,9 @@ static void build(const char *title, const char *subtitle,
                   void *ud,
                   bool password = true,
                   const char *initial = nullptr,
-                  bool allow_empty = false)
+                  bool allow_empty = false,
+                  bool hide_cancel = false,
+                  bool hide_ok = false)
 {
     if (g_ctx) {
         /* Already showing a prompt; drop the new request. */
@@ -255,27 +257,31 @@ static void build(const char *title, const char *subtitle,
         lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
     };
 
-    ctx->cancel_btn = lv_btn_create(btn_row);
-    style_btn(ctx->cancel_btn);
-    {
-        lv_obj_t *lbl = lv_label_create(ctx->cancel_btn);
-        lv_label_set_text(lbl, "Cancel");
-        lv_obj_set_style_text_color(lbl, UI_COLOR_FG, 0);
-        lv_obj_center(lbl);
+    if (!hide_cancel) {
+        ctx->cancel_btn = lv_btn_create(btn_row);
+        style_btn(ctx->cancel_btn);
+        {
+            lv_obj_t *lbl = lv_label_create(ctx->cancel_btn);
+            lv_label_set_text(lbl, "Cancel");
+            lv_obj_set_style_text_color(lbl, UI_COLOR_FG, 0);
+            lv_obj_center(lbl);
+        }
+        lv_obj_add_event_cb(ctx->cancel_btn, cancel_event_cb, LV_EVENT_CLICKED, ctx);
+        lv_group_add_obj(ctx->group, ctx->cancel_btn);
     }
-    lv_obj_add_event_cb(ctx->cancel_btn, cancel_event_cb, LV_EVENT_CLICKED, ctx);
-    lv_group_add_obj(ctx->group, ctx->cancel_btn);
 
-    ctx->ok_btn = lv_btn_create(btn_row);
-    style_btn(ctx->ok_btn);
-    {
-        lv_obj_t *lbl = lv_label_create(ctx->ok_btn);
-        lv_label_set_text(lbl, "OK");
-        lv_obj_set_style_text_color(lbl, UI_COLOR_FG, 0);
-        lv_obj_center(lbl);
+    if (!hide_ok) {
+        ctx->ok_btn = lv_btn_create(btn_row);
+        style_btn(ctx->ok_btn);
+        {
+            lv_obj_t *lbl = lv_label_create(ctx->ok_btn);
+            lv_label_set_text(lbl, "OK");
+            lv_obj_set_style_text_color(lbl, UI_COLOR_FG, 0);
+            lv_obj_center(lbl);
+        }
+        lv_obj_add_event_cb(ctx->ok_btn, ok_event_cb, LV_EVENT_CLICKED, ctx);
+        lv_group_add_obj(ctx->group, ctx->ok_btn);
     }
-    lv_obj_add_event_cb(ctx->ok_btn, ok_event_cb, LV_EVENT_CLICKED, ctx);
-    lv_group_add_obj(ctx->group, ctx->ok_btn);
 
     lv_group_focus_obj(ctx->ta1);
 }
@@ -311,4 +317,21 @@ void ui_text_prompt(const char *title, const char *subtitle,
     build(title, subtitle, /*confirm=*/false, /*verify_unlock=*/false,
           cb, nullptr, ud,
           /*password=*/false, initial, /*allow_empty=*/true);
+}
+
+/* Device-level lock: shows the unlock modal with no cancel button, so if
+ * notes crypto is enabled and the session is locked nothing else in the UI
+ * is reachable until the passphrase is entered. Safe to call unconditionally
+ * — a no-op when crypto is disabled or already unlocked. */
+void ui_device_lock_enforce()
+{
+    if (!notes_crypto_is_enabled() || notes_crypto_is_unlocked()) return;
+    /* No title, no OK/Cancel buttons — the only way forward is to type the
+     * passphrase and press Enter (handled by ta_key_event_cb). */
+    build(/*title=*/nullptr,
+          "Enter your passphrase",
+          /*confirm=*/false, /*verify_unlock=*/true,
+          /*cb_pw=*/nullptr, /*cb_unlock=*/nullptr, /*ud=*/nullptr,
+          /*password=*/true, /*initial=*/nullptr, /*allow_empty=*/false,
+          /*hide_cancel=*/true, /*hide_ok=*/true);
 }

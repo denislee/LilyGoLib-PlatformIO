@@ -12,8 +12,13 @@
 #include <WiFi.h>
 #include <esp_sntp.h>
 #include "hal_interface.h"
+#include "hal/notes_crypto.h"
 #include "event_define.h"
 #include "core/system_hooks.h"
+
+/* Defined in ui_lock.cpp — shows the unlock modal if crypto is enabled and
+ * the session is locked. No-op otherwise. */
+void ui_device_lock_enforce();
 
 static const char *ntpServer1 = "pool.ntp.org";
 static const char *ntpServer2 = "time.nist.gov";
@@ -37,7 +42,9 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
     Serial.println("WiFi connected");
     Serial.println("IP address: ");
     Serial.println(IPAddress(info.got_ip.ip_info.ip.addr));
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
+    /* NTP sync is driven from the main loop's poll (see loop()) rather than
+     * from this event callback, so boot-time flows that connect WiFi before
+     * the event handler is fully wired are still covered. */
 }
 
 #include "core/system.h"
@@ -84,6 +91,11 @@ void setup()
     WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
     WiFi.setAutoReconnect(false);
 
+    // Passphrase-protected notes: if the session is locked, put an unlock
+    // modal on top of the UI before rendering starts. The modal has no cancel
+    // button so the device stays gated until the user enters the passphrase.
+    ui_device_lock_enforce();
+
     // LVGL rendering and NFC polling now run on their own FreeRTOS tasks so
     // the main loop's mutex hold window stays short. Must come after
     // core::System::getInstance().init() — the LVGL task calls System::loop().
@@ -96,6 +108,25 @@ void setup()
 
 void loop()
 {
+    // Poll-based NTP trigger: the first time WiFi comes up in this boot
+    // session, start a fresh sync. Polling rather than reacting to the
+    // WiFi event handler is more robust — GOT_IP can fire on a FreeRTOS
+    // task before time_available's callback is ready, or miss altogether
+    // if SNTP is already in COMPLETED state from a previous session.
+    // hw_start_time_sync_ntp() runs sntp_stop() + configTime() to force a
+    // fresh sync cycle whose completion fires time_available().
+    static bool boot_ntp_sync_done = false;
+    static uint32_t last_wifi_check_ms = 0;
+    if (!boot_ntp_sync_done && millis() - last_wifi_check_ms > 2000) {
+        last_wifi_check_ms = millis();
+        if (hw_get_wifi_connected()) {
+            Serial.println("WiFi up — triggering first-boot NTP sync");
+            if (hw_start_time_sync_ntp()) {
+                boot_ntp_sync_done = true;
+            }
+        }
+    }
+
     uint32_t inactive_time = 0;
     {
         core::ScopedInstanceLock lock;

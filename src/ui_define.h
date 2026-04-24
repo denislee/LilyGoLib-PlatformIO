@@ -115,6 +115,12 @@ void ui_text_prompt(const char *title, const char *subtitle,
                     const char *initial,
                     ui_passphrase_result_cb cb, void *ud);
 
+/* Device-level lock enforcement. If notes crypto is enabled and the session
+ * is locked, puts the unlock modal on top of the UI and keeps it there — any
+ * cancel immediately re-opens the modal — until the correct passphrase is
+ * entered. No-op when crypto is disabled or the session is already unlocked. */
+void ui_device_lock_enforce();
+
 /* Modal WiFi picker: scan / list / connect / forget. Self-contained overlay
  * on lv_layer_top. See ui_wifi.cpp. */
 void ui_wifi_networks_open();

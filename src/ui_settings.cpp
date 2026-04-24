@@ -12,29 +12,14 @@
 #include "core/system.h"
 #include "apps/app_registry.h"
 #include "ui_list_picker.h"
+#include "apps/settings_internal.h"
 #include <vector>
 
 using std::string;
 using std::vector;
 
-// Defined in ui_weather.cpp — read/write the user-chosen city used by the
-// weather app. Empty city means "use IP-based auto location".
-std::string weather_get_user_city();
-void weather_set_user_city(const char *city);
-void weather_set_user_location(const char *city, double lat, double lon);
-
-// Weather geocoding search — returns up to ~10 matches the open-meteo API
-// accepts. Declared inline here (matching the struct layout in ui_weather.cpp)
-// so we don't need to spin up a separate header for one call site.
-struct weather_city_match {
-    std::string label;
-    std::string name;
-    double lat;
-    double lon;
-};
-bool weather_search_cities(const char *query,
-                           std::vector<weather_city_match> &out,
-                           std::string &err);
+// weather_city_match, weather_get/set/search_cities, weather_set_user_location
+// live in apps/settings_internal.h (shared with settings_weather.cpp).
 
 // Defined in ui_time_sync.cpp — bundled IANA-city list + local offset lookup
 // driven by newlib's POSIX TZ rules, used to compute an accurate GMT offset
@@ -87,7 +72,9 @@ static void add_main_page_group_item(lv_obj_t *obj)
     lv_group_add_obj(menu_g, obj);
 }
 
-static void register_subpage_group_obj(lv_obj_t *page, lv_obj_t *obj)
+// External linkage — called from the split-out settings_*.cpp files. See
+// apps/settings_internal.h.
+void register_subpage_group_obj(lv_obj_t *page, lv_obj_t *obj)
 {
     if (subpage_item_count < MAX_SUBPAGE_ITEMS) {
         subpage_items[subpage_item_count].page = page;
@@ -129,7 +116,9 @@ static void activate_subpage_group(lv_obj_t *page)
     }
 }
 
-static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool initial_state, lv_event_cb_t cb);
+/* Forward decl for the external-linkage definition below — declaration
+ * also appears in apps/settings_internal.h so split-out files can call it. */
+lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool initial_state, lv_event_cb_t cb);
 
 typedef struct {
 
@@ -1508,7 +1497,7 @@ static void toggle_child_focus_cb(lv_event_t * e) {
     }
 }
 
-static lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool initial_state, lv_event_cb_t cb)
+lv_obj_t *create_toggle_btn_row(lv_obj_t *parent, const char *txt, bool initial_state, lv_event_cb_t cb)
 {
     lv_obj_t *obj = create_text(parent, NULL, txt, LV_MENU_ITEM_BUILDER_VARIANT_2);
 
@@ -2073,555 +2062,15 @@ static void build_subpage_connectivity(lv_obj_t *menu, lv_obj_t *sub_page)
     register_subpage_group_obj(sub_page, btn);
 }
 
-/* ===== Weather: choose the city used by the Weather app ===== */
-namespace weather_cfg {
-
-static lv_obj_t *g_sub_page = nullptr;
-static lv_obj_t *g_city_label = nullptr;
-static lv_obj_t *g_status_label = nullptr;
-static std::vector<weather_city_match> g_search_results;
-
-static void refresh_label()
-{
-    if (!g_city_label) return;
-    std::string city = weather_get_user_city();
-    lv_label_set_text_fmt(g_city_label, "City: %s",
-                          city.empty() ? "(auto from IP)" : city.c_str());
-}
-
-static void set_status(const char *text, lv_color_t color)
-{
-    if (!g_status_label) return;
-    lv_label_set_text(g_status_label, text ? text : "");
-    lv_obj_set_style_text_color(g_status_label, color, 0);
-}
-
-// User picked one of the geocoding results. Persist the exact name + lat/lon
-// so the Weather app's first fetch skips the geocoding round-trip entirely.
-static void city_picked_cb(int index, void *ud)
-{
-    (void)ud;
-    if (index < 0 || (size_t)index >= g_search_results.size()) {
-        set_status("Cancelled", UI_COLOR_MUTED);
-        return;
-    }
-    const weather_city_match &m = g_search_results[(size_t)index];
-    weather_set_user_location(m.name.c_str(), m.lat, m.lon);
-    refresh_label();
-    set_status("Saved", lv_palette_main(LV_PALETTE_GREEN));
-    g_search_results.clear();
-}
-
-// Text-prompt OK: query the open-meteo geocoding API for matches, then open
-// a modal list of the server-accepted names. We never store a city that the
-// API didn't return, so the forecast fetch can't fail on a typoed name.
-static void search_entered_cb(const char *text, void *ud)
-{
-    (void)ud;
-    if (!text) { set_status("Cancelled", UI_COLOR_MUTED); return; }
-    std::string s(text);
-    size_t a = s.find_first_not_of(" \t\r\n");
-    size_t b = s.find_last_not_of(" \t\r\n");
-    std::string q = (a == std::string::npos) ? std::string() : s.substr(a, b - a + 1);
-    if (q.empty()) {
-        // Empty submission clears the override and returns to auto.
-        weather_set_user_city("");
-        refresh_label();
-        set_status("Using auto (IP)", UI_COLOR_MUTED);
-        return;
-    }
-
-    set_status("Searching...", UI_COLOR_ACCENT);
-    lv_refr_now(NULL);
-
-    std::string err;
-    g_search_results.clear();
-    if (!weather_search_cities(q.c_str(), g_search_results, err)) {
-        set_status(("Search failed: " + (err.empty() ? std::string("err") : err)).c_str(),
-                   lv_palette_main(LV_PALETTE_RED));
-        return;
-    }
-
-    std::vector<std::string> labels;
-    labels.reserve(g_search_results.size());
-    for (const auto &m : g_search_results) labels.push_back(m.label);
-    set_status("", UI_COLOR_MUTED);
-    ui_list_picker_open("Pick a city", labels, city_picked_cb, nullptr);
-}
-
-static void btn_set_city_cb(lv_event_t *e)
-{
-    (void)e;
-    std::string current = weather_get_user_city();
-    ui_text_prompt("Weather city",
-                   "Search for a city (empty = auto).",
-                   current.c_str(), search_entered_cb, nullptr);
-}
-
-static void btn_clear_city_cb(lv_event_t *e)
-{
-    (void)e;
-    weather_set_user_city("");
-    refresh_label();
-    set_status("Using auto (IP)", UI_COLOR_MUTED);
-}
-
-static void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
-{
-    (void)menu;
-    lv_obj_set_style_pad_row(sub_page, 4, 0);
-
-    lv_obj_t *status = lv_menu_cont_create(sub_page);
-    g_city_label = lv_label_create(status);
-    lv_obj_set_style_text_color(g_city_label, UI_COLOR_MUTED, 0);
-    refresh_label();
-
-    lv_obj_t *b1 = create_button(sub_page, LV_SYMBOL_KEYBOARD,
-                                 "Set city", btn_set_city_cb);
-    register_subpage_group_obj(sub_page, b1);
-
-    lv_obj_t *b2 = create_button(sub_page, LV_SYMBOL_REFRESH,
-                                 "Use auto (IP)", btn_clear_city_cb);
-    register_subpage_group_obj(sub_page, b2);
-
-    // Status line for search feedback ("Searching...", errors, "Saved").
-    g_status_label = lv_label_create(sub_page);
-    lv_label_set_long_mode(g_status_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_status_label, LV_PCT(100));
-    lv_label_set_text(g_status_label, "");
-    lv_obj_set_style_text_color(g_status_label, UI_COLOR_MUTED, 0);
-}
-
-} // namespace weather_cfg
-
-/* ===== Telegram: bridge URL + bearer token used by the Telegram app =====
- * The actual storage lives in ui_telegram.cpp (NVS + optional AES wrap via
- * notes crypto). This subpage is just the UI over `apps::tg_cfg_*`. */
-namespace telegram_cfg {
-
-static lv_obj_t *g_sub_page       = nullptr;
-static lv_obj_t *g_url_label      = nullptr;
-static lv_obj_t *g_tok_label      = nullptr;
-static lv_obj_t *g_note_label     = nullptr;
-static lv_obj_t *g_fav_sub_page   = nullptr;
-
-static void build_favorites_subpage(lv_obj_t *menu, lv_obj_t *sub_page);
-
-static void refresh_labels()
-{
-    if (g_url_label) {
-        std::string url = apps::tg_cfg_get_url();
-        lv_label_set_text_fmt(g_url_label, "URL: %s",
-                              url.empty() ? "(not set)" : url.c_str());
-    }
-    if (g_tok_label) {
-        std::string tok = apps::tg_cfg_get_token_display();
-        const char *suffix = apps::tg_cfg_token_is_encrypted()
-                             ? "  [encrypted]" : "  [plaintext]";
-        lv_label_set_text_fmt(g_tok_label, "Token: %s%s",
-                              tok.c_str(), suffix);
-    }
-#ifdef ARDUINO
-    if (g_note_label) {
-        const char *note;
-        if (!notes_crypto_is_enabled()) {
-            note = "Enable Notes encryption (Settings » Notes Security) "
-                   "before saving the bearer — the token is persisted "
-                   "only AES-256 wrapped, never plaintext.";
-        } else if (!notes_crypto_is_unlocked()) {
-            note = "Notes session locked — unlock (open Notes) to "
-                   "save or read the token.";
-        } else {
-            note = "Token is AES-256 wrapped with your notes passphrase.";
-        }
-        lv_label_set_text(g_note_label, note);
-    }
-#endif
-}
-
-static void set_url_cb(const char *text, void *)
-{
-    if (!text) return;
-    apps::tg_cfg_set_url(text);
-    refresh_labels();
-}
-
-static void set_token_cb(const char *text, void *)
-{
-    if (!text) return;
-    std::string err;
-    if (!apps::tg_cfg_set_token(text, &err)) {
-        ui_msg_pop_up("Token rejected",
-                      err.empty() ? "Save failed." : err.c_str());
-    }
-    refresh_labels();
-}
-
-static void btn_set_url_cb(lv_event_t *)
-{
-    std::string current = apps::tg_cfg_get_url();
-    ui_text_prompt("Bridge URL", "https://tg.example.com",
-                   current.c_str(), set_url_cb, nullptr);
-}
-
-static void btn_open_favorites_cb(lv_event_t *)
-{
-    if (!menu || !g_fav_sub_page) return;
-    lv_menu_set_page(menu, g_fav_sub_page);
-}
-
-static void btn_set_token_cb(lv_event_t *)
-{
-    // Intentionally don't pre-fill the token so we never read plaintext out
-    // of NVS just to build a prompt — ui_text_prompt would echo it on-screen.
-    ui_text_prompt("Bearer token", "from config.yaml on the bridge",
-                   "", set_token_cb, nullptr);
-}
-
-// Notification toggles mirror the haptic_enable pattern above: the toggle
-// btn holds the " On "/" Off " label as its user_data so the callback can
-// flip the text in place when the user changes it.
-static void notif_vibrate_cb(lv_event_t *e)
-{
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
-    apps::tg_cfg_set_notif_vibrate(en);
-    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
-    if (label) lv_label_set_text(label, en ? " On " : " Off ");
-}
-
-static void notif_banner_cb(lv_event_t *e)
-{
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
-    apps::tg_cfg_set_notif_banner(en);
-    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
-    if (label) lv_label_set_text(label, en ? " On " : " Off ");
-}
-
-static void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
-{
-    (void)menu;
-    lv_obj_set_style_pad_row(sub_page, 4, 0);
-
-    lv_obj_t *status = lv_menu_cont_create(sub_page);
-    lv_obj_set_flex_flow(status, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(status, 2, 0);
-
-    g_url_label = lv_label_create(status);
-    lv_label_set_long_mode(g_url_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_url_label, LV_PCT(100));
-    lv_obj_set_style_text_color(g_url_label, UI_COLOR_MUTED, 0);
-
-    g_tok_label = lv_label_create(status);
-    lv_label_set_long_mode(g_tok_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_tok_label, LV_PCT(100));
-    lv_obj_set_style_text_color(g_tok_label, UI_COLOR_MUTED, 0);
-
-    lv_obj_t *b1 = create_button(sub_page, LV_SYMBOL_WIFI,
-                                 "Set URL", btn_set_url_cb);
-    register_subpage_group_obj(sub_page, b1);
-
-    lv_obj_t *b2 = create_button(sub_page, LV_SYMBOL_KEYBOARD,
-                                 "Set token", btn_set_token_cb);
-    register_subpage_group_obj(sub_page, b2);
-
-    // Favorites: clicking opens a nested subpage that fetches the full chat
-    // list from the bridge and lets the user star/unstar each chat. The
-    // Telegram app's listing renders only the starred ones. Match the
-    // Set URL / Set token rows exactly — create_button (real cb) gives us the
-    // same chevron bubble, and the cb triggers navigation via
-    // lv_menu_set_page instead of relying on lv_menu_set_load_page_event
-    // (which doesn't play well with a child btn inside the menu_cont).
-    g_fav_sub_page = lv_menu_page_create(menu, NULL);
-    lv_obj_set_user_data(g_fav_sub_page, (void*)build_favorites_subpage);
-    lv_obj_t *b3 = create_button(sub_page, LV_SYMBOL_EYE_OPEN,
-                                 "Favorites", btn_open_favorites_cb);
-    register_subpage_group_obj(sub_page, b3);
-
-    // Per-channel notification toggles. The background poll (running even
-    // when the Telegram app is closed) dispatches to these when it sees the
-    // total unread count go up. Haptic respects the global Haptic toggle in
-    // Connectivity — if that's off, enabling "Vibrate" here still won't
-    // buzz.
-    lv_obj_t *b4 = create_toggle_btn_row(sub_page, "Vibrate on new msg",
-                                         apps::tg_cfg_get_notif_vibrate(),
-                                         notif_vibrate_cb);
-    register_subpage_group_obj(sub_page, b4);
-
-    lv_obj_t *b5 = create_toggle_btn_row(sub_page, "Banner on new msg",
-                                         apps::tg_cfg_get_notif_banner(),
-                                         notif_banner_cb);
-    register_subpage_group_obj(sub_page, b5);
-
-#ifdef ARDUINO
-    lv_obj_t *note_row = lv_menu_cont_create(sub_page);
-    g_note_label = lv_label_create(note_row);
-    lv_label_set_long_mode(g_note_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_note_label, LV_PCT(100));
-    lv_obj_set_style_text_color(g_note_label, UI_COLOR_MUTED, 0);
-#endif
-
-    refresh_labels();
-}
-
-// Per-button owned chat id — freed via LV_EVENT_DELETE since `long long`
-// won't fit in a 32-bit void* slot on the ESP32-S3.
-static void fav_id_delete_cb(lv_event_t *e)
-{
-    auto *id = (long long *)lv_event_get_user_data(e);
-    delete id;
-}
-
-static void fav_toggle_cb(lv_event_t *e)
-{
-    lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
-    auto *id = (long long *)lv_event_get_user_data(e);
-    if (!id) return;
-    bool checked = lv_obj_has_state(btn, LV_STATE_CHECKED);
-    apps::tg_cfg_set_favorite(*id, checked);
-    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(btn);
-    if (label) lv_label_set_text(label, checked ? LV_SYMBOL_OK : LV_SYMBOL_PLUS);
-}
-
-static void build_favorites_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
-{
-    (void)menu;
-    lv_obj_set_style_pad_row(sub_page, 2, 0);
-
-    lv_obj_t *status_row = lv_menu_cont_create(sub_page);
-    lv_obj_t *status_lbl = lv_label_create(status_row);
-    lv_label_set_long_mode(status_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(status_lbl, LV_PCT(100));
-    lv_obj_set_style_text_color(status_lbl, UI_COLOR_MUTED, 0);
-    lv_label_set_text(status_lbl, "Loading chats...");
-    lv_refr_now(NULL);
-
-    std::vector<std::pair<long long, std::string>> chats;
-    std::string err;
-    bool ok = apps::tg_cfg_fetch_all_chats(chats, &err);
-    if (!ok) {
-        lv_label_set_text_fmt(status_lbl, "Fetch failed: %s", err.c_str());
-        return;
-    }
-    if (chats.empty()) {
-        lv_label_set_text(status_lbl, "Bridge returned no chats.");
-        return;
-    }
-    lv_label_set_text_fmt(status_lbl,
-        "%u chat(s) — tap to toggle favorite.", (unsigned)chats.size());
-
-    for (auto &c : chats) {
-        long long id = c.first;
-        const std::string &title = c.second;
-
-        lv_obj_t *row = create_text(sub_page, NULL, title.c_str(),
-                                    LV_MENU_ITEM_BUILDER_VARIANT_2);
-
-        lv_obj_t *btn = lv_btn_create(row);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
-        lv_obj_set_style_outline_width(btn, 0, 0);
-        lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
-        lv_obj_set_style_border_width(btn, 1, 0);
-        lv_obj_set_style_border_color(btn, UI_COLOR_ACCENT, 0);
-        lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUS_KEY);
-        lv_obj_set_style_border_color(btn, UI_COLOR_ACCENT, LV_STATE_FOCUS_KEY);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x222222), 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(btn, UI_COLOR_ACCENT, LV_STATE_CHECKED);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
-        lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_text_color(btn, UI_COLOR_FG, 0);
-        lv_obj_set_style_text_color(btn, UI_COLOR_BG, LV_STATE_CHECKED);
-        lv_obj_set_size(btn, 44, 28);
-        lv_obj_set_flex_grow(btn, 0);
-
-        bool starred = apps::tg_cfg_is_favorite(id);
-        if (starred) lv_obj_add_state(btn, LV_STATE_CHECKED);
-
-        lv_obj_t *label = lv_label_create(btn);
-        lv_label_set_text(label, starred ? LV_SYMBOL_OK : LV_SYMBOL_PLUS);
-        lv_obj_center(label);
-        lv_obj_set_user_data(btn, label);
-
-        long long *id_heap = new long long(id);
-        lv_obj_add_event_cb(btn, fav_toggle_cb, LV_EVENT_VALUE_CHANGED, id_heap);
-        lv_obj_add_event_cb(btn, fav_id_delete_cb, LV_EVENT_DELETE, id_heap);
-        register_subpage_group_obj(sub_page, btn);
-    }
-}
-
-} // namespace telegram_cfg
-
-/* ===== Notes Sync: GitHub repo + PAT used by the Notes Sync app =========
- * Storage lives in ui_notes_sync.cpp (NVS "notesync" namespace; token is
- * AES-wrapped when notes crypto is enabled, same pattern as Telegram).
- * This subpage is just the UI over `apps::nsync_cfg_*`. */
-namespace notes_sync_cfg {
-
-static lv_obj_t *g_sub_page    = nullptr;
-static lv_obj_t *g_repo_label  = nullptr;
-static lv_obj_t *g_branch_label = nullptr;
-static lv_obj_t *g_tok_label   = nullptr;
-static lv_obj_t *g_note_label  = nullptr;
-
-static void refresh_labels()
-{
-    if (g_repo_label) {
-        std::string v = apps::nsync_cfg_get_repo();
-        lv_label_set_text_fmt(g_repo_label, "Repo: %s",
-                              v.empty() ? "(not set)" : v.c_str());
-    }
-    if (g_branch_label) {
-        std::string v = apps::nsync_cfg_get_branch();
-        lv_label_set_text_fmt(g_branch_label, "Branch: %s", v.c_str());
-    }
-    if (g_tok_label) {
-        std::string tok = apps::nsync_cfg_get_token_display();
-        const char *suffix = apps::nsync_cfg_token_is_encrypted()
-                             ? "  [encrypted]" : "  [plaintext]";
-        lv_label_set_text_fmt(g_tok_label, "Token: %s%s",
-                              tok.c_str(), suffix);
-    }
-#ifdef ARDUINO
-    if (g_note_label) {
-        const char *note;
-        if (!notes_crypto_is_enabled()) {
-            note = "Enable Notes encryption (Settings » Notes Security) "
-                   "before saving a PAT — the token is persisted only "
-                   "AES-256 wrapped, never plaintext.";
-        } else if (!notes_crypto_is_unlocked()) {
-            note = "Notes session locked — unlock (open Notes) to "
-                   "save or read the token.";
-        } else {
-            note = "Token is AES-256 wrapped with your notes passphrase. "
-                   "Private repos work — use a fine-grained PAT with "
-                   "Contents: read/write on just this repo.";
-        }
-        lv_label_set_text(g_note_label, note);
-    }
-#endif
-}
-
-static void set_repo_cb(const char *text, void *)
-{
-    if (!text) return;
-    apps::nsync_cfg_set_repo(text);
-    refresh_labels();
-}
-
-static void set_branch_cb(const char *text, void *)
-{
-    if (!text) return;
-    apps::nsync_cfg_set_branch(text);
-    refresh_labels();
-}
-
-static void set_token_cb(const char *text, void *)
-{
-    if (!text) return;
-    std::string err;
-    if (!apps::nsync_cfg_set_token(text, &err)) {
-        ui_msg_pop_up("Token rejected",
-                      err.empty() ? "Save failed." : err.c_str());
-    }
-    refresh_labels();
-}
-
-static void btn_set_repo_cb(lv_event_t *)
-{
-    std::string current = apps::nsync_cfg_get_repo();
-    ui_text_prompt("GitHub repo", "owner/repo",
-                   current.c_str(), set_repo_cb, nullptr);
-}
-
-static void btn_set_branch_cb(lv_event_t *)
-{
-    std::string current = apps::nsync_cfg_get_branch();
-    ui_text_prompt("Branch", "main",
-                   current.c_str(), set_branch_cb, nullptr);
-}
-
-static void btn_set_token_cb(lv_event_t *)
-{
-    // No pre-fill so the PAT is never rendered back to the screen.
-    ui_text_prompt("GitHub token",
-                   "Personal access token (contents:write)",
-                   "", set_token_cb, nullptr);
-}
-
-static void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
-{
-    (void)menu;
-    lv_obj_set_style_pad_row(sub_page, 4, 0);
-
-    lv_obj_t *status = lv_menu_cont_create(sub_page);
-    lv_obj_set_flex_flow(status, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(status, 2, 0);
-
-    g_repo_label = lv_label_create(status);
-    lv_label_set_long_mode(g_repo_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_repo_label, LV_PCT(100));
-    lv_obj_set_style_text_color(g_repo_label, UI_COLOR_MUTED, 0);
-
-    g_branch_label = lv_label_create(status);
-    lv_label_set_long_mode(g_branch_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_branch_label, LV_PCT(100));
-    lv_obj_set_style_text_color(g_branch_label, UI_COLOR_MUTED, 0);
-
-    g_tok_label = lv_label_create(status);
-    lv_label_set_long_mode(g_tok_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_tok_label, LV_PCT(100));
-    lv_obj_set_style_text_color(g_tok_label, UI_COLOR_MUTED, 0);
-
-    lv_obj_t *b1 = create_button(sub_page, LV_SYMBOL_DIRECTORY,
-                                 "Set repo", btn_set_repo_cb);
-    register_subpage_group_obj(sub_page, b1);
-
-    lv_obj_t *b2 = create_button(sub_page, LV_SYMBOL_SHUFFLE,
-                                 "Set branch", btn_set_branch_cb);
-    register_subpage_group_obj(sub_page, b2);
-
-    lv_obj_t *b3 = create_button(sub_page, LV_SYMBOL_KEYBOARD,
-                                 "Set token", btn_set_token_cb);
-    register_subpage_group_obj(sub_page, b3);
-
-#ifdef ARDUINO
-    lv_obj_t *note_row = lv_menu_cont_create(sub_page);
-    g_note_label = lv_label_create(note_row);
-    lv_label_set_long_mode(g_note_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_note_label, LV_PCT(100));
-    lv_obj_set_style_text_color(g_note_label, UI_COLOR_MUTED, 0);
-#endif
-
-    refresh_labels();
-}
-
-} // namespace notes_sync_cfg
-
-static void build_subpage_weather(lv_obj_t *menu, lv_obj_t *sub_page)
-{
-    weather_cfg::build_subpage(menu, sub_page);
-}
-
-static void build_subpage_telegram(lv_obj_t *menu, lv_obj_t *sub_page)
-{
-    telegram_cfg::build_subpage(menu, sub_page);
-}
-
-static void build_subpage_notes_sync(lv_obj_t *menu, lv_obj_t *sub_page)
-{
-    notes_sync_cfg::build_subpage(menu, sub_page);
-}
 
 static lv_obj_t *create_subpage_weather(lv_obj_t *menu, lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
     style_menu_item_icon(cont, LV_SYMBOL_GPS, "Weather");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
-    lv_obj_set_user_data(sub_page, (void*)build_subpage_weather);
+    lv_obj_set_user_data(sub_page, (void*)&weather_cfg::build_subpage);
     lv_menu_set_load_page_event(menu, cont, sub_page);
-    weather_cfg::g_sub_page = sub_page;
+    weather_cfg::set_sub_page(sub_page);
     return cont;
 }
 
@@ -2630,9 +2079,9 @@ static lv_obj_t *create_subpage_telegram(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_t *cont = lv_menu_cont_create(main_page);
     style_menu_item_icon(cont, LV_SYMBOL_ENVELOPE, "Telegram");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
-    lv_obj_set_user_data(sub_page, (void*)build_subpage_telegram);
+    lv_obj_set_user_data(sub_page, (void*)&telegram_cfg::build_subpage);
     lv_menu_set_load_page_event(menu, cont, sub_page);
-    telegram_cfg::g_sub_page = sub_page;
+    telegram_cfg::set_sub_page(sub_page);
     return cont;
 }
 
@@ -2641,9 +2090,9 @@ static lv_obj_t *create_subpage_notes_sync(lv_obj_t *menu, lv_obj_t *main_page)
     lv_obj_t *cont = lv_menu_cont_create(main_page);
     style_menu_item_icon(cont, LV_SYMBOL_REFRESH, "Notes Sync");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
-    lv_obj_set_user_data(sub_page, (void*)build_subpage_notes_sync);
+    lv_obj_set_user_data(sub_page, (void*)&notes_sync_cfg::build_subpage);
     lv_menu_set_load_page_event(menu, cont, sub_page);
-    notes_sync_cfg::g_sub_page = sub_page;
+    notes_sync_cfg::set_sub_page(sub_page);
     return cont;
 }
 
@@ -2791,17 +2240,9 @@ void ui_sys_exit(lv_obj_t *parent)
     g_internet_test_row = nullptr;
     g_internet_test_btn = nullptr;
     g_internet_test_status = nullptr;
-    weather_cfg::g_sub_page = nullptr;
-    weather_cfg::g_city_label = nullptr;
-    telegram_cfg::g_sub_page = nullptr;
-    telegram_cfg::g_url_label = nullptr;
-    telegram_cfg::g_tok_label = nullptr;
-    telegram_cfg::g_note_label = nullptr;
-    notes_sync_cfg::g_sub_page = nullptr;
-    notes_sync_cfg::g_repo_label = nullptr;
-    notes_sync_cfg::g_branch_label = nullptr;
-    notes_sync_cfg::g_tok_label = nullptr;
-    notes_sync_cfg::g_note_label = nullptr;
+    weather_cfg::reset_state();
+    telegram_cfg::reset_state();
+    notes_sync_cfg::reset_state();
     main_page_group_count = 0;
     subpage_item_count = 0;
     memset(main_page_group_items, 0, sizeof(main_page_group_items));
