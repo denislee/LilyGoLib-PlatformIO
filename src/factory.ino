@@ -66,6 +66,7 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 #include "apps/app_registry.h"
 #include "hal/lvgl_task.h"
 #include "hal/nfc_task.h"
+#include "hal/rotary_task.h"
 
 void setup()
 {
@@ -114,6 +115,7 @@ void setup()
     // core::System::getInstance().init() — the LVGL task calls System::loop().
     hw_lvgl_task_start();
     hw_nfc_task_start();
+    hw_rotary_task_start();
 
     Serial.println("Start done. run main loop");
 }

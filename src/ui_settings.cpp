@@ -1862,6 +1862,9 @@ static lv_obj_t *g_wifi_networks_btn = nullptr;
 static lv_obj_t *g_nfc_test_row      = nullptr;
 static lv_obj_t *g_nfc_test_btn      = nullptr;
 static lv_obj_t *g_connectivity_subpage = nullptr;
+static lv_obj_t *g_internet_test_row    = nullptr;
+static lv_obj_t *g_internet_test_btn    = nullptr;
+static lv_obj_t *g_internet_test_status = nullptr;
 
 static void wifi_enable_cb(lv_event_t *e) {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
@@ -1874,9 +1877,15 @@ static void wifi_enable_cb(lv_event_t *e) {
         if (en) {
             lv_obj_clear_flag(g_wifi_networks_row, LV_OBJ_FLAG_HIDDEN);
             if (g_wifi_networks_btn) lv_obj_clear_flag(g_wifi_networks_btn, LV_OBJ_FLAG_HIDDEN);
+            if (g_internet_test_row) lv_obj_clear_flag(g_internet_test_row, LV_OBJ_FLAG_HIDDEN);
+            if (g_internet_test_btn) lv_obj_clear_flag(g_internet_test_btn, LV_OBJ_FLAG_HIDDEN);
+            if (g_internet_test_status) lv_obj_clear_flag(g_internet_test_status, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(g_wifi_networks_row, LV_OBJ_FLAG_HIDDEN);
             if (g_wifi_networks_btn) lv_obj_add_flag(g_wifi_networks_btn, LV_OBJ_FLAG_HIDDEN);
+            if (g_internet_test_row) lv_obj_add_flag(g_internet_test_row, LV_OBJ_FLAG_HIDDEN);
+            if (g_internet_test_btn) lv_obj_add_flag(g_internet_test_btn, LV_OBJ_FLAG_HIDDEN);
+            if (g_internet_test_status) lv_obj_add_flag(g_internet_test_status, LV_OBJ_FLAG_HIDDEN);
         }
         // Rebuild the subpage nav group so the row is inserted at its
         // registered position (between the WiFi toggle and Bluetooth) rather
@@ -1969,6 +1978,31 @@ static void wifi_networks_click_cb(lv_event_t *e)
     ui_wifi_networks_open();
 }
 
+static void internet_test_click_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!g_internet_test_status) return;
+    lv_label_set_text(g_internet_test_status, "Testing 1.1.1.1...");
+    lv_obj_set_style_text_color(g_internet_test_status, UI_COLOR_ACCENT, 0);
+    lv_refr_now(NULL);
+
+    uint32_t rtt_ms = 0;
+    std::string err;
+    bool ok = hw_ping_internet("1.1.1.1", 53, 3000, &rtt_ms, &err);
+    if (ok) {
+        char buf[48];
+        snprintf(buf, sizeof(buf), LV_SYMBOL_OK " Online (%u ms)", (unsigned)rtt_ms);
+        lv_label_set_text(g_internet_test_status, buf);
+        lv_obj_set_style_text_color(g_internet_test_status,
+                                    lv_palette_main(LV_PALETTE_GREEN), 0);
+    } else {
+        std::string msg = LV_SYMBOL_CLOSE " " + (err.empty() ? std::string("Failed") : err);
+        lv_label_set_text(g_internet_test_status, msg.c_str());
+        lv_obj_set_style_text_color(g_internet_test_status,
+                                    lv_palette_main(LV_PALETTE_RED), 0);
+    }
+}
+
 static void build_subpage_connectivity(lv_obj_t *menu, lv_obj_t *sub_page)
 {
     lv_obj_set_style_pad_row(sub_page, 2, 0);
@@ -1985,6 +2019,23 @@ static void build_subpage_connectivity(lv_obj_t *menu, lv_obj_t *sub_page)
     if (!hw_get_wifi_enable()) {
         lv_obj_add_flag(g_wifi_networks_row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    register_subpage_group_obj(sub_page, btn);
+
+    // "Test Internet" — TCP connect to Cloudflare DNS (1.1.1.1:53) to confirm
+    // the WiFi link has actual internet reachability, not just an AP association.
+    // Hidden together with the WiFi Networks row when WiFi is off.
+    btn = create_button(sub_page, LV_SYMBOL_REFRESH, "Test Internet", internet_test_click_cb);
+    g_internet_test_btn = btn;
+    g_internet_test_row = lv_obj_get_parent(btn);
+    g_internet_test_status = lv_label_create(sub_page);
+    lv_label_set_text(g_internet_test_status, "");
+    lv_obj_set_style_text_color(g_internet_test_status, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_pad_left(g_internet_test_status, 12, 0);
+    if (!hw_get_wifi_enable()) {
+        lv_obj_add_flag(g_internet_test_row, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(g_internet_test_status, LV_OBJ_FLAG_HIDDEN);
     }
     register_subpage_group_obj(sub_page, btn);
 
@@ -2734,6 +2785,9 @@ void ui_sys_exit(lv_obj_t *parent)
     g_wifi_networks_btn = nullptr;
     g_wifi_networks_row = nullptr;
     g_connectivity_subpage = nullptr;
+    g_internet_test_row = nullptr;
+    g_internet_test_btn = nullptr;
+    g_internet_test_status = nullptr;
     weather_cfg::g_sub_page = nullptr;
     weather_cfg::g_city_label = nullptr;
     telegram_cfg::g_sub_page = nullptr;

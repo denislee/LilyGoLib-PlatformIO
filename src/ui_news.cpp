@@ -31,6 +31,7 @@ static bool has_next_page = false;
 static std::vector<std::string> news_files;
 static std::vector<std::pair<std::string, size_t>> news_headers;
 static bool news_headers_loaded = false;
+static size_t last_index_focus = 0;
 
 static std::string current_file_path = "";
 static size_t current_file_size = 0;
@@ -342,6 +343,15 @@ static void news_view_back_cb(lv_event_t *e)
         lv_obj_t *target = (news_headers_loaded && !news_headers.empty()) ? index_page : main_page;
         lv_menu_set_page(menu, target);
         sync_menu_header();
+        if (target == index_page && index_list) {
+            uint32_t count = lv_obj_get_child_count(index_list);
+            if (count > 0) {
+                size_t idx = last_index_focus < count ? last_index_focus : 0;
+                lv_obj_t *btn = lv_obj_get_child(index_list, idx);
+                lv_group_focus_obj(btn);
+                lv_obj_scroll_to_view(btn, LV_ANIM_OFF);
+            }
+        }
     } else if (cur == index_page) {
         lv_menu_set_page(menu, main_page);
         sync_menu_header();
@@ -540,6 +550,7 @@ static void index_click_cb(lv_event_t *e)
 {
     size_t idx = (size_t)lv_event_get_user_data(e);
     if (idx >= news_headers.size()) return;
+    last_index_focus = idx;
     size_t start = news_headers[idx].second;
     size_t end = (idx + 1 < news_headers.size()) ? news_headers[idx + 1].second : current_file_size;
     jump_to_range(start, end);

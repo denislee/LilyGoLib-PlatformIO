@@ -55,6 +55,17 @@ bool hw_http_request(const char *url,
                      int *status_code = nullptr,
                      std::string *error = nullptr);
 
+// Quick internet reachability test. Opens a TCP connection to `host:port` with
+// `timeout_ms`, returns true on success. On success `elapsed_ms` (optional)
+// receives the round-trip time to connect. On failure `error` (optional) gets
+// a short diagnostic. Defaults target Cloudflare DNS (1.1.1.1:53) since it is
+// always-up, firewall-friendly, and does not require ICMP.
+bool hw_ping_internet(const char *host = "1.1.1.1",
+                      uint16_t port = 53,
+                      uint32_t timeout_ms = 3000,
+                      uint32_t *elapsed_ms = nullptr,
+                      std::string *error = nullptr);
+
 // GET the URL and stream the body to `abs_path` (absolute path on SD or FFat).
 // On success returns true and `bytes_written` (optional) gets the byte count.
 // `progress_cb` is invoked periodically with (downloaded, total_or_0). Return

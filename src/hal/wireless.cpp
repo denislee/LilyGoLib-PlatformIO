@@ -433,6 +433,35 @@ static bool http_open(HttpClients &c, const char *url, std::string *error)
 } // namespace
 #endif
 
+bool hw_ping_internet(const char *host, uint16_t port, uint32_t timeout_ms,
+                      uint32_t *elapsed_ms, std::string *error)
+{
+#ifdef ARDUINO
+    if (!WiFi.isConnected()) {
+        if (error) *error = "WiFi not connected.";
+        return false;
+    }
+    WiFiClient client;
+    client.setTimeout(timeout_ms / 1000 ? timeout_ms / 1000 : 1);
+    uint32_t t0 = millis();
+    int rc = client.connect(host, port, timeout_ms);
+    uint32_t dt = millis() - t0;
+    if (!rc) {
+        client.stop();
+        if (error) *error = "Unreachable.";
+        return false;
+    }
+    client.stop();
+    if (elapsed_ms) *elapsed_ms = dt;
+    return true;
+#else
+    (void)host; (void)port; (void)timeout_ms;
+    if (elapsed_ms) *elapsed_ms = 0;
+    if (error) *error = "Not supported on emulator.";
+    return false;
+#endif
+}
+
 bool hw_http_get_string(const char *url, std::string &out, std::string *error)
 {
 #ifdef ARDUINO
