@@ -3,6 +3,15 @@
  * @author    Gemini CLI
  * @license   MIT
  * @copyright Copyright (c) 2026
+ *
+ * Home screen. Layout, top-to-bottom:
+ *   1. Quick-toggles strip (media pills + WiFi/BT), right-aligned.
+ *   2. App-tile grid, ordered by activity:
+ *        Create → Communicate → Info → System.
+ *
+ * The grid uses a darkened resting state with a subtle accent border so tiles
+ * carry their identity even when unfocused, and a tinted fill + outer accent
+ * halo on focus so the selected tile reads at a glance from across the room.
  */
 #include "menu_app.h"
 #include "../core/system.h"
@@ -12,11 +21,14 @@
 #include <vector>
 
 LV_FONT_DECLARE(lv_font_montserrat_12);
+LV_FONT_DECLARE(lv_font_montserrat_14);
 LV_FONT_DECLARE(lv_font_montserrat_18);
 
 namespace apps {
 
 namespace {
+
+// ---- App tiles -----------------------------------------------------------
 
 // A badge function returns the small unread/notification count to render in
 // the tile corner. Return 0 to hide the badge. Null means the tile never has
@@ -30,6 +42,26 @@ struct HomeItem {
     lv_palette_t palette;
     BadgeFn badge_fn;
 };
+
+// Order groups apps by what the user is doing:
+//   [create/capture]        Notes, Tasks, Recorder
+//   [communicate]           Telegram
+//   [consume/check]         Weather, News
+// Settings lives in the top toggle strip as a small icon rather than the grid.
+//
+// Palettes are chosen so adjacent tiles never share a hue: Notes AMBER (warm
+// create), Tasks GREEN (progress), Recorder PURPLE (voice), Telegram
+// LIGHT_BLUE (messaging), Weather CYAN (sky), News INDIGO (reading, distinct
+// from Telegram's blue).
+static const HomeItem kItems[] = {
+    {"Notes",    LV_SYMBOL_EDIT,      "Notes",    LV_PALETTE_AMBER,       nullptr},
+    {"Tasks",    LV_SYMBOL_OK,        "Tasks",    LV_PALETTE_GREEN,       nullptr},
+    {"Recorder", LV_SYMBOL_AUDIO,     "Recorder", LV_PALETTE_PURPLE,      nullptr},
+    {"Telegram", LV_SYMBOL_ENVELOPE,  "Telegram", LV_PALETTE_LIGHT_BLUE,  tg_get_unread_count},
+    {"Weather",  LV_SYMBOL_TINT,      "Weather",  LV_PALETTE_CYAN,        nullptr},
+    {"News",     LV_SYMBOL_LIST,      "News",     LV_PALETTE_INDIGO,      nullptr},
+};
+constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
 
 // Keeps the badge labels alive for the lifetime of the menu view so the
 // periodic timer can refresh them. Reset each time the menu re-mounts.
@@ -59,37 +91,10 @@ static void update_badges(lv_timer_t *t) {
     }
 }
 
-
-enum HomeItemId {
-    ITEM_NOTES,
-    ITEM_TASKS,
-    ITEM_RECORDER,
-    ITEM_WEATHER,
-    ITEM_TELEGRAM,
-    ITEM_NEWS,
-    ITEM_SETTINGS,
-};
-
-// Notes tile now opens a launcher that contains both the text editor and the
-// chronological Journal view — the standalone Journal tile has been folded in.
-// File browsing lives inside Settings to keep the home grid focused on
-// day-to-day apps. The BLE media Remote is reached from Settings too — the
-// quick-toggle media pills on this screen cover the common case.
-static const HomeItem kItems[] = {
-    {"Notes",    LV_SYMBOL_EDIT,      "Notes",    LV_PALETTE_ORANGE,      nullptr},
-    {"Tasks",    LV_SYMBOL_OK,        "Tasks",    LV_PALETTE_GREEN,       nullptr},
-    {"Recorder", LV_SYMBOL_AUDIO,     "Recorder", LV_PALETTE_PURPLE,      nullptr},
-    {"Weather",  LV_SYMBOL_TINT,      "Weather",  LV_PALETTE_CYAN,        nullptr},
-    {"Telegram", LV_SYMBOL_ENVELOPE,  "Telegram", LV_PALETTE_LIGHT_BLUE,  tg_get_unread_count},
-    {"News",     LV_SYMBOL_LIST,      "News",     LV_PALETTE_BLUE,        nullptr},
-    {"Settings", LV_SYMBOL_SETTINGS,  "Settings", LV_PALETTE_GREY,        nullptr},
-};
-constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
-
 // Pick a scalable icon font that comfortably fits the tile height while still
 // leaving room for a label below it. Thresholds tuned for the three supported
-// panels (240px, 192px, 380px-tall menu areas). Only uses sizes that are
-// enabled across all build environments (including the native emulator).
+// panels (240px, 192px, 380px-tall menu areas). Only uses sizes enabled in
+// every build environment (including the native emulator).
 const lv_font_t* pick_icon_font(int32_t tile_h) {
     if (tile_h >= 140) return &lv_font_montserrat_48;
     if (tile_h >= 90)  return &lv_font_montserrat_32;
@@ -97,6 +102,14 @@ const lv_font_t* pick_icon_font(int32_t tile_h) {
     if (tile_h >= 55)  return &lv_font_montserrat_24;
     return &lv_font_montserrat_20;
 }
+
+// Resting background for tiles and pills — a hair above pure black so the
+// accent border stays visible on OLED/AMOLED panels without bleeding into the
+// page background.
+static inline lv_color_t tile_rest_bg()   { return lv_color_hex(0x15171d); }
+static inline lv_color_t pill_rest_bg()   { return lv_color_hex(0x15171d); }
+
+// ---- Quick toggles (WiFi / BT) -------------------------------------------
 
 struct QuickToggle {
     const char* icon;
@@ -115,11 +128,13 @@ static void apply_toggle_style(lv_obj_t* btn, bool on) {
         lv_obj_set_style_bg_color(btn, UI_COLOR_ACCENT, 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(btn, UI_COLOR_ACCENT, 0);
+        lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
         lv_obj_set_style_text_color(btn, UI_COLOR_FG, 0);
     } else {
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x151515), 0);
+        lv_obj_set_style_bg_color(btn, pill_rest_bg(), 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(btn, UI_COLOR_MUTED, 0);
+        lv_obj_set_style_border_opa(btn, LV_OPA_40, 0);
         lv_obj_set_style_text_color(btn, UI_COLOR_MUTED, 0);
     }
 }
@@ -135,11 +150,19 @@ static void quick_toggle_click_cb(lv_event_t* e) {
     hw_feedback();
 }
 
-// --- Media controls (HID transport keys to a paired phone) ---
+static void settings_click_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    hw_feedback();
+    core::System::getInstance().hideMenu();
+    core::AppManager::getInstance().switchApp("Settings",
+        core::System::getInstance().getAppPanel());
+}
+
+// ---- Media controls (BLE HID transport keys to a paired phone) -----------
 // Shown only when Bluetooth is enabled AND a BLE HID host has paired with us.
 // Two buttons: play/pause (momentary) and volume. The volume button mirrors
-// the Remote app's behaviour — click to capture the encoder, rotate to send
-// vol±, click again (or focus away) to release.
+// the Remote app — click to capture the encoder, rotate to send vol±, click
+// again (or focus away) to release.
 static std::vector<lv_obj_t*> s_media_buttons;  // tracked for visibility only
 static lv_obj_t* s_volume_btn = nullptr;
 static lv_obj_t* s_volume_icon = nullptr;
@@ -166,9 +189,9 @@ static void refresh_volume_visual() {
         lv_obj_set_style_border_opa(s_volume_btn, LV_OPA_COVER, 0);
         lv_obj_set_style_text_color(s_volume_icon, UI_COLOR_FG, 0);
     } else {
-        lv_obj_set_style_bg_color(s_volume_btn, lv_color_hex(0x151515), 0);
+        lv_obj_set_style_bg_color(s_volume_btn, pill_rest_bg(), 0);
         lv_obj_set_style_border_color(s_volume_btn, UI_COLOR_ACCENT, 0);
-        lv_obj_set_style_border_opa(s_volume_btn, LV_OPA_40, 0);
+        lv_obj_set_style_border_opa(s_volume_btn, LV_OPA_COVER, 0);
         lv_obj_set_style_text_color(s_volume_icon, UI_COLOR_ACCENT, 0);
     }
 }
@@ -288,19 +311,19 @@ void MenuApp::onStop() {
 }
 
 void MenuApp::onStart(lv_obj_t* parent) {
-    // Parent lays out a small quick-toggles row on top and the tile grid below.
+    // Parent column: toggle strip on top, tile grid filling the rest.
     lv_obj_set_style_bg_color(parent, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(parent, 0, 0);
-    lv_obj_set_style_pad_all(parent, 6, 0);
-    lv_obj_set_style_pad_row(parent, 4, 0);
+    lv_obj_set_style_pad_all(parent, 8, 0);
+    lv_obj_set_style_pad_row(parent, 6, 0);
     lv_obj_set_style_pad_column(parent, 0, 0);
     lv_obj_remove_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // Reset badge tracking: tiles are about to be recreated, old pointers
+    // Reset mutable tracking: tiles are about to be recreated, old pointers
     // are now invalid. onStop() kills the timer before the tiles go away.
     s_badge_labels.clear();
     s_badge_fns.clear();
@@ -316,55 +339,65 @@ void MenuApp::onStart(lv_obj_t* parent) {
 
     lv_group_t* grp = lv_group_get_default();
 
-    // Measure available room on the full panel before carving out the
-    // toggle bar. The grid gets whatever remains.
+    // Measure available room before carving out the toggle strip. The grid
+    // gets whatever remains.
     lv_obj_update_layout(parent);
     int32_t panel_w = lv_obj_get_content_width(parent);
     int32_t panel_full_h = lv_obj_get_content_height(parent);
     if (panel_w <= 0) panel_w = 460;
     if (panel_full_h <= 0) panel_full_h = 180;
 
-    // --- Quick toggles row (WiFi, Bluetooth) ---
-    const int32_t toggle_h = 26;
+    // --- Quick-toggles strip --------------------------------------------------
+    // Taller and more breathable than the first iteration so fingers can hit
+    // the pills on the touch screens and the icons sit with enough margin to
+    // not feel crowded against the tile grid below.
+    const int32_t toggle_h = 30;
     lv_obj_t* toggle_bar = lv_obj_create(parent);
     lv_obj_set_size(toggle_bar, LV_PCT(100), toggle_h);
     lv_obj_set_style_bg_opa(toggle_bar, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(toggle_bar, 0, 0);
     lv_obj_set_style_pad_all(toggle_bar, 0, 0);
-    lv_obj_set_style_pad_column(toggle_bar, 6, 0);
+    lv_obj_set_style_pad_column(toggle_bar, 8, 0);
     lv_obj_remove_flag(toggle_bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(toggle_bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(toggle_bar, LV_FLEX_ALIGN_END,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // Media buttons sit to the left of the wifi/bt toggles. Created hidden;
-    // a 1-second timer shows/hides them based on BLE HID pairing state.
-    auto make_media_pill = [&](const char* symbol) -> lv_obj_t* {
-        lv_obj_t* btn = lv_btn_create(toggle_bar);
-        lv_obj_set_size(btn, toggle_h + 10, toggle_h);
+    auto make_pill = [&](lv_obj_t* parent_bar,
+                         const char* symbol,
+                         int32_t w_extra) -> lv_obj_t* {
+        lv_obj_t* btn = lv_btn_create(parent_bar);
+        lv_obj_set_size(btn, toggle_h + w_extra, toggle_h);
         lv_obj_remove_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_style_radius(btn, toggle_h / 2, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x151515), 0);
+        lv_obj_set_style_bg_color(btn, pill_rest_bg(), 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(btn, UI_COLOR_ACCENT, 0);
         lv_obj_set_style_border_width(btn, 1, 0);
-        lv_obj_set_style_border_opa(btn, LV_OPA_40, 0);
         lv_obj_set_style_shadow_width(btn, 0, 0);
         lv_obj_set_style_pad_all(btn, 0, 0);
+        // Focus halo — white so it stays readable against an enabled
+        // (accent-filled/bordered) pill, where an accent halo would blend in.
         lv_obj_set_style_outline_width(btn, 2, LV_STATE_FOCUSED);
-        lv_obj_set_style_outline_color(btn, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
-        lv_obj_set_style_outline_pad(btn, 1, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_color(btn, UI_COLOR_FG, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_opa(btn, LV_OPA_COVER, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_pad(btn, 2, LV_STATE_FOCUSED);
 
         lv_obj_t* icon = lv_label_create(btn);
         lv_label_set_text(icon, symbol);
-        lv_obj_set_style_text_color(icon, UI_COLOR_ACCENT, 0);
         lv_obj_set_style_text_font(icon, &lv_font_montserrat_18, 0);
         lv_obj_center(icon);
         lv_obj_set_user_data(btn, icon);
         return btn;
     };
 
-    lv_obj_t* play_btn = make_media_pill(LV_SYMBOL_PLAY);
+    // --- Media pills (play/pause + volume) ---
+    // Sit at the left of the strip, created hidden; a 1 s timer shows/hides
+    // them based on BLE HID pairing state.
+    lv_obj_t* play_btn = make_pill(toggle_bar, LV_SYMBOL_PLAY, 14);
+    lv_obj_set_style_border_color(play_btn, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_border_opa(play_btn, LV_OPA_60, 0);
+    lv_obj_t* play_icon = (lv_obj_t*)lv_obj_get_user_data(play_btn);
+    lv_obj_set_style_text_color(play_icon, UI_COLOR_ACCENT, 0);
     lv_obj_add_event_cb(play_btn, play_pause_click_cb, LV_EVENT_CLICKED, nullptr);
     // Add to the group up front so lv_group_focus_next/prev can skip them via
     // the HIDDEN flag while BLE is disconnected. Registering them here — before
@@ -373,8 +406,11 @@ void MenuApp::onStart(lv_obj_t* parent) {
     if (grp) lv_group_add_obj(grp, play_btn);
     s_media_buttons.push_back(play_btn);
 
-    s_volume_btn = make_media_pill(LV_SYMBOL_VOLUME_MAX);
+    s_volume_btn = make_pill(toggle_bar, LV_SYMBOL_VOLUME_MAX, 14);
+    lv_obj_set_style_border_color(s_volume_btn, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_border_opa(s_volume_btn, LV_OPA_60, 0);
     s_volume_icon = (lv_obj_t*)lv_obj_get_user_data(s_volume_btn);
+    lv_obj_set_style_text_color(s_volume_icon, UI_COLOR_ACCENT, 0);
     lv_obj_add_event_cb(s_volume_btn, volume_event_cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(s_volume_btn, volume_event_cb, LV_EVENT_KEY, nullptr);
     lv_obj_add_event_cb(s_volume_btn, volume_event_cb, LV_EVENT_DEFOCUSED, nullptr);
@@ -383,57 +419,54 @@ void MenuApp::onStart(lv_obj_t* parent) {
 
     set_media_buttons_visible(media_controls_should_show());
 
+    // --- WiFi / BT toggles ---
     for (int i = 0; i < kQuickToggleCount; i++) {
         const QuickToggle& qt = kQuickToggles[i];
-        lv_obj_t* btn = lv_btn_create(toggle_bar);
-        lv_obj_set_size(btn, toggle_h + 14, toggle_h);
-        lv_obj_remove_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_style_radius(btn, toggle_h / 2, 0);
-        lv_obj_set_style_border_width(btn, 1, 0);
-        lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_shadow_width(btn, 0, 0);
-        lv_obj_set_style_pad_all(btn, 0, 0);
-        lv_obj_set_style_outline_width(btn, 2, LV_STATE_FOCUSED);
-        lv_obj_set_style_outline_color(btn, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
-        lv_obj_set_style_outline_pad(btn, 1, LV_STATE_FOCUSED);
-
-        lv_obj_t* icon = lv_label_create(btn);
-        lv_label_set_text(icon, qt.icon);
-        lv_obj_set_style_text_font(icon, &lv_font_montserrat_18, 0);
-        lv_obj_center(icon);
-
+        lv_obj_t* btn = make_pill(toggle_bar, qt.icon, 18);
         apply_toggle_style(btn, qt.getter());
         lv_obj_add_event_cb(btn, quick_toggle_click_cb, LV_EVENT_CLICKED,
                             (void*)&qt);
         if (grp) lv_group_add_obj(grp, btn);
     }
 
-    // --- Tile grid container (fills the rest) ---
+    // --- Settings shortcut ---
+    // Sits at the rightmost of the strip — distinct from the on/off toggles:
+    // always rendered in the muted resting style, click launches the Settings
+    // app directly rather than mutating a flag.
+    {
+        lv_obj_t* settings_btn = make_pill(toggle_bar, LV_SYMBOL_SETTINGS, 18);
+        apply_toggle_style(settings_btn, false);
+        lv_obj_add_event_cb(settings_btn, settings_click_cb,
+                            LV_EVENT_CLICKED, nullptr);
+        if (grp) lv_group_add_obj(grp, settings_btn);
+    }
+
+    // --- Tile grid container (fills the rest) -------------------------------
     lv_obj_t* grid = lv_obj_create(parent);
     lv_obj_set_width(grid, LV_PCT(100));
     lv_obj_set_flex_grow(grid, 1);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(grid, 0, 0);
     lv_obj_set_style_pad_all(grid, 0, 0);
-    lv_obj_set_style_pad_row(grid, 6, 0);
-    lv_obj_set_style_pad_column(grid, 6, 0);
+    lv_obj_set_style_pad_row(grid, 8, 0);
+    lv_obj_set_style_pad_column(grid, 8, 0);
     lv_obj_remove_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_update_layout(parent);
-    int32_t panel_h = lv_obj_get_content_height(grid);
-    if (panel_h <= 0) panel_h = panel_full_h - toggle_h - 4;
-    if (panel_h < 50) panel_h = 50;
+    int32_t grid_h = lv_obj_get_content_height(grid);
+    if (grid_h <= 0) grid_h = panel_full_h - toggle_h - 6;
+    if (grid_h < 50) grid_h = 50;
 
-    // 4 cols on landscape panels (pager, ultra); 3 cols on the square watch.
-    // Rows adapt to item count so added apps still fit the grid.
-    int cols = (panel_w >= 400) ? 4 : 3;
+    // Fixed 3 tiles per row on every panel — tiles stay big and readable, and
+    // the two-row layout (6 apps) balances the strip above visually.
+    int cols = 3;
     int rows = (kItemCount + cols - 1) / cols;
-    const int gap = 6;
+    const int gap = 8;
     int32_t tile_w = (panel_w - (cols - 1) * gap) / cols;
-    int32_t tile_h = (panel_h - (rows - 1) * gap) / rows;
+    int32_t tile_h = (grid_h - (rows - 1) * gap) / rows;
     if (tile_w < 50) tile_w = 50;
     if (tile_h < 50) tile_h = 50;
 
@@ -448,45 +481,52 @@ void MenuApp::onStart(lv_obj_t* parent) {
         lv_obj_set_size(tile, tile_w, tile_h);
         lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
 
-        // Resting look: near-black fill with a faint colored border — the only
-        // thing hinting at the app's identity at a glance.
-        lv_obj_set_style_radius(tile, 12, 0);
-        lv_obj_set_style_bg_color(tile, lv_color_hex(0x151515), 0);
+        // Resting look: near-black fill with a faint colored border — the tile
+        // carries its palette identity even when the user isn't on it.
+        lv_obj_set_style_radius(tile, 14, 0);
+        lv_obj_set_style_bg_color(tile, tile_rest_bg(), 0);
         lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(tile, accent, 0);
         lv_obj_set_style_border_width(tile, 1, 0);
         lv_obj_set_style_border_opa(tile, LV_OPA_40, 0);
         lv_obj_set_style_shadow_width(tile, 0, 0);
         lv_obj_set_style_outline_width(tile, 0, 0);
-        lv_obj_set_style_pad_all(tile, 4, 0);
+        lv_obj_set_style_pad_all(tile, 6, 0);
 
-        // Focused: accent border at full strength + gentle tint. Readable on
-        // all three displays without relying on color alone.
+        // Focused: palette-tinted fill, accent border at full strength, and
+        // an outer accent halo so the selected tile pops from across the room.
+        lv_obj_set_style_bg_color(tile, lv_palette_darken(item.palette, 4),
+                                  LV_STATE_FOCUSED);
         lv_obj_set_style_border_color(tile, accent, LV_STATE_FOCUSED);
         lv_obj_set_style_border_width(tile, 2, LV_STATE_FOCUSED);
         lv_obj_set_style_border_opa(tile, LV_OPA_COVER, LV_STATE_FOCUSED);
-        lv_obj_set_style_bg_color(tile, lv_palette_darken(item.palette, 4),
-                                  LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_color(tile, accent, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_width(tile, 3, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_opa(tile, LV_OPA_40, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_pad(tile, 2, LV_STATE_FOCUSED);
 
         // Pressed: brief bright flash via a slightly lighter tint.
-        lv_obj_set_style_bg_color(tile, lv_palette_darken(item.palette, 3),
+        lv_obj_set_style_bg_color(tile, lv_palette_darken(item.palette, 2),
                                   LV_STATE_PRESSED);
 
         lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(tile, LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_row(tile, 2, 0);
+        lv_obj_set_style_pad_row(tile, 3, 0);
 
         lv_obj_t* icon = lv_label_create(tile);
         lv_label_set_text(icon, item.symbol);
         lv_obj_set_style_text_font(icon, icon_font, 0);
         lv_obj_set_style_text_color(icon, accent, 0);
+        // On focus, lift the icon to pure white so it reads against the
+        // tinted tile fill without competing for attention with the border.
+        lv_obj_set_style_text_color(icon, UI_COLOR_FG, LV_STATE_FOCUSED);
 
         lv_obj_t* label = lv_label_create(tile);
         lv_label_set_text(label, item.label);
         lv_obj_set_style_text_color(label, UI_COLOR_FG, 0);
         lv_obj_set_style_text_font(label, label_font, 0);
-        lv_obj_set_width(label, tile_w - 8);
+        lv_obj_set_width(label, tile_w - 10);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
 
@@ -504,9 +544,9 @@ void MenuApp::onStart(lv_obj_t* parent) {
             lv_obj_set_style_bg_color(badge, lv_palette_main(LV_PALETTE_RED), 0);
             lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
             lv_obj_set_style_text_color(badge, UI_COLOR_FG, 0);
-            lv_obj_set_style_text_font(badge, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_font(badge, &lv_font_montserrat_14, 0);
             lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
-            lv_obj_set_style_pad_hor(badge, 4, 0);
+            lv_obj_set_style_pad_hor(badge, 5, 0);
             lv_obj_set_style_pad_ver(badge, 1, 0);
             lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
             s_badge_labels.push_back(badge);
