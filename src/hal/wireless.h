@@ -98,4 +98,6 @@ void hw_set_ble_kb_char(const char *c);
 void hw_set_ble_kb_key(uint8_t key);
 void hw_set_ble_kb_release();
 bool hw_get_ble_kb_connected();
+std::string hw_get_ble_kb_peer_address();
+void hw_disconnect_ble_kb();
 void hw_set_ble_key(media_key_value_t key);

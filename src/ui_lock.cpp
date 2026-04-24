@@ -40,12 +40,9 @@ static LockCtx *g_ctx = nullptr;
 static void set_error(LockCtx *ctx, const char *msg)
 {
     if (!ctx || !ctx->err_label) return;
+    /* Leave the label always visible — it has a reserved min-height so
+     * toggling its text on and off doesn't reflow the rest of the dialog. */
     lv_label_set_text(ctx->err_label, msg ? msg : "");
-    if (msg && *msg) {
-        lv_obj_remove_flag(ctx->err_label, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(ctx->err_label, LV_OBJ_FLAG_HIDDEN);
-    }
 }
 
 static void tear_down(LockCtx *ctx)
@@ -160,127 +157,168 @@ static void build(const char *title, const char *subtitle,
 
     enable_keyboard();
 
+    /* Dimmed backdrop — the card below sits on top. Using a semi-transparent
+     * overlay keeps whatever screen was visible as a faint background so the
+     * prompt feels like a dialog, not a context switch. */
     lv_obj_t *overlay = lv_obj_create(lv_layer_top());
     ctx->overlay = overlay;
     lv_obj_set_size(overlay, lv_pct(100), lv_pct(100));
     lv_obj_center(overlay);
-    lv_obj_set_style_bg_color(overlay, UI_COLOR_BG, 0);
-    lv_obj_set_style_bg_opa(overlay, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(overlay, LV_OPA_80, 0);
     lv_obj_set_style_border_width(overlay, 0, 0);
-    lv_obj_set_style_pad_all(overlay, 10, 0);
+    lv_obj_set_style_pad_all(overlay, 6, 0);
     lv_obj_set_flex_flow(overlay, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(overlay, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(overlay, 6, 0);
     lv_obj_clear_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
 
+    lv_obj_t *card = lv_obj_create(overlay);
+    lv_obj_set_width(card, lv_pct(96));
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x101010), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(card, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_opa(card, LV_OPA_40, 0);
+    lv_obj_set_style_radius(card, UI_RADIUS + 4, 0);
+    lv_obj_set_style_pad_all(card, 12, 0);
+    lv_obj_set_style_pad_row(card, 8, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Lock icon for password prompts — anchors the dialog visually. Skipped
+     * for plain text prompts where it would be misleading. */
+    if (password) {
+        lv_obj_t *icon = lv_label_create(card);
+        lv_label_set_text(icon, LV_SYMBOL_KEYBOARD);
+        lv_obj_set_style_text_color(icon, UI_COLOR_ACCENT, 0);
+        lv_obj_set_style_text_font(icon, lv_theme_get_font_large(icon), 0);
+    }
+
     if (title) {
-        lv_obj_t *t = lv_label_create(overlay);
+        lv_obj_t *t = lv_label_create(card);
         lv_label_set_text(t, title);
         lv_obj_set_style_text_color(t, UI_COLOR_FG, 0);
         lv_obj_set_style_text_font(t, lv_theme_get_font_large(t), 0);
+        lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(t, lv_pct(100));
+        lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
     }
     if (subtitle) {
-        lv_obj_t *s = lv_label_create(overlay);
+        lv_obj_t *s = lv_label_create(card);
         lv_label_set_text(s, subtitle);
         lv_obj_set_style_text_color(s, UI_COLOR_MUTED, 0);
         lv_label_set_long_mode(s, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(s, lv_pct(90));
+        lv_obj_set_width(s, lv_pct(100));
         lv_obj_set_style_text_align(s, LV_TEXT_ALIGN_CENTER, 0);
     }
 
     auto style_ta = [](lv_obj_t *ta) {
-        lv_obj_set_style_bg_color(ta, lv_color_black(), 0);
+        lv_obj_set_style_bg_color(ta, lv_color_hex(0x000000), 0);
         lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
         lv_obj_set_style_text_color(ta, UI_COLOR_FG, 0);
+        lv_obj_set_style_text_align(ta, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_radius(ta, UI_RADIUS, 0);
         lv_obj_set_style_border_color(ta, UI_COLOR_MUTED, 0);
         lv_obj_set_style_border_width(ta, 1, 0);
+        lv_obj_set_style_border_opa(ta, LV_OPA_60, 0);
+        lv_obj_set_style_pad_all(ta, 8, 0);
         lv_obj_set_style_border_color(ta, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
         lv_obj_set_style_border_width(ta, 2, LV_STATE_FOCUSED);
+        lv_obj_set_style_border_opa(ta, LV_OPA_COVER, LV_STATE_FOCUSED);
         lv_obj_set_style_outline_width(ta, 0, LV_STATE_FOCUS_KEY);
     };
 
-    ctx->ta1 = lv_textarea_create(overlay);
+    ctx->ta1 = lv_textarea_create(card);
     lv_textarea_set_one_line(ctx->ta1, true);
     lv_textarea_set_password_mode(ctx->ta1, password);
-    if (initial && *initial) lv_textarea_set_text(ctx->ta1, initial);
-    lv_obj_set_width(ctx->ta1, lv_pct(90));
+    if (initial && *initial) {
+        lv_textarea_set_text(ctx->ta1, initial);
+    } else {
+        lv_textarea_set_placeholder_text(
+            ctx->ta1, password ? "passphrase" : "");
+    }
+    lv_obj_set_width(ctx->ta1, lv_pct(100));
     style_ta(ctx->ta1);
     lv_group_add_obj(ctx->group, ctx->ta1);
     lv_obj_add_event_cb(ctx->ta1, ta_key_event_cb, LV_EVENT_KEY, ctx);
 
     if (confirm) {
-        ctx->ta2 = lv_textarea_create(overlay);
+        ctx->ta2 = lv_textarea_create(card);
         lv_textarea_set_one_line(ctx->ta2, true);
         lv_textarea_set_password_mode(ctx->ta2, true);
         lv_textarea_set_placeholder_text(ctx->ta2, "confirm");
-        lv_obj_set_width(ctx->ta2, lv_pct(90));
+        lv_obj_set_width(ctx->ta2, lv_pct(100));
         style_ta(ctx->ta2);
         lv_group_add_obj(ctx->group, ctx->ta2);
         lv_obj_add_event_cb(ctx->ta2, ta_key_event_cb, LV_EVENT_KEY, ctx);
     }
 
-    ctx->err_label = lv_label_create(overlay);
+    /* Always present, with a reserved min-height, so toggling the error text
+     * on and off doesn't shift the buttons up and down. */
+    ctx->err_label = lv_label_create(card);
     lv_label_set_text(ctx->err_label, "");
     lv_obj_set_style_text_color(ctx->err_label, lv_palette_main(LV_PALETTE_RED), 0);
     lv_label_set_long_mode(ctx->err_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(ctx->err_label, lv_pct(90));
+    lv_obj_set_width(ctx->err_label, lv_pct(100));
     lv_obj_set_style_text_align(ctx->err_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_add_flag(ctx->err_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_min_height(ctx->err_label, 18, 0);
 
-    lv_obj_t *btn_row = lv_obj_create(overlay);
-    lv_obj_set_size(btn_row, lv_pct(95), 44);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(btn_row, 0, 0);
-    lv_obj_set_style_pad_all(btn_row, 0, 0);
-    lv_obj_set_style_pad_column(btn_row, 6, 0);
-    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+    if (!hide_cancel || !hide_ok) {
+        lv_obj_t *btn_row = lv_obj_create(card);
+        lv_obj_set_width(btn_row, lv_pct(100));
+        lv_obj_set_height(btn_row, 40);
+        lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(btn_row, 0, 0);
+        lv_obj_set_style_pad_all(btn_row, 0, 0);
+        lv_obj_set_style_pad_column(btn_row, 8, 0);
+        lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Matches the remote screen's button styling (see make_key_button in
-     * ui_media_remote.cpp). */
-    auto style_btn = [](lv_obj_t *btn) {
-        lv_obj_set_flex_grow(btn, 1);
-        lv_obj_set_height(btn, lv_pct(100));
-        lv_obj_set_style_radius(btn, UI_RADIUS, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x151515), 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_text_color(btn, UI_COLOR_FG, 0);
-        lv_obj_set_style_border_color(btn, UI_COLOR_ACCENT, 0);
-        lv_obj_set_style_border_width(btn, 1, 0);
-        lv_obj_set_style_border_opa(btn, LV_OPA_40, 0);
-        lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
-        lv_obj_set_style_border_opa(btn, LV_OPA_COVER, LV_STATE_FOCUSED);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a1a00), LV_STATE_FOCUSED);
-        lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
-    };
+        /* Matches the remote screen's button styling (see make_key_button in
+         * ui_media_remote.cpp). */
+        auto style_btn = [](lv_obj_t *btn) {
+            lv_obj_set_flex_grow(btn, 1);
+            lv_obj_set_height(btn, lv_pct(100));
+            lv_obj_set_style_radius(btn, UI_RADIUS, 0);
+            lv_obj_set_style_bg_color(btn, lv_color_hex(0x151515), 0);
+            lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+            lv_obj_set_style_text_color(btn, UI_COLOR_FG, 0);
+            lv_obj_set_style_border_color(btn, UI_COLOR_ACCENT, 0);
+            lv_obj_set_style_border_width(btn, 1, 0);
+            lv_obj_set_style_border_opa(btn, LV_OPA_40, 0);
+            lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
+            lv_obj_set_style_border_opa(btn, LV_OPA_COVER, LV_STATE_FOCUSED);
+            lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a1a00), LV_STATE_FOCUSED);
+            lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
+        };
 
-    if (!hide_cancel) {
-        ctx->cancel_btn = lv_btn_create(btn_row);
-        style_btn(ctx->cancel_btn);
-        {
+        if (!hide_cancel) {
+            ctx->cancel_btn = lv_btn_create(btn_row);
+            style_btn(ctx->cancel_btn);
             lv_obj_t *lbl = lv_label_create(ctx->cancel_btn);
-            lv_label_set_text(lbl, "Cancel");
+            lv_label_set_text(lbl, LV_SYMBOL_CLOSE "  Cancel");
             lv_obj_set_style_text_color(lbl, UI_COLOR_FG, 0);
             lv_obj_center(lbl);
+            lv_obj_add_event_cb(ctx->cancel_btn, cancel_event_cb, LV_EVENT_CLICKED, ctx);
+            lv_group_add_obj(ctx->group, ctx->cancel_btn);
         }
-        lv_obj_add_event_cb(ctx->cancel_btn, cancel_event_cb, LV_EVENT_CLICKED, ctx);
-        lv_group_add_obj(ctx->group, ctx->cancel_btn);
-    }
 
-    if (!hide_ok) {
-        ctx->ok_btn = lv_btn_create(btn_row);
-        style_btn(ctx->ok_btn);
-        {
+        if (!hide_ok) {
+            ctx->ok_btn = lv_btn_create(btn_row);
+            style_btn(ctx->ok_btn);
             lv_obj_t *lbl = lv_label_create(ctx->ok_btn);
-            lv_label_set_text(lbl, "OK");
+            lv_label_set_text(lbl, LV_SYMBOL_OK "  OK");
             lv_obj_set_style_text_color(lbl, UI_COLOR_FG, 0);
             lv_obj_center(lbl);
+            lv_obj_add_event_cb(ctx->ok_btn, ok_event_cb, LV_EVENT_CLICKED, ctx);
+            lv_group_add_obj(ctx->group, ctx->ok_btn);
         }
-        lv_obj_add_event_cb(ctx->ok_btn, ok_event_cb, LV_EVENT_CLICKED, ctx);
-        lv_group_add_obj(ctx->group, ctx->ok_btn);
     }
 
     lv_group_focus_obj(ctx->ta1);

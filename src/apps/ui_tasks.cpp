@@ -83,14 +83,30 @@ static void task_event_cb(lv_event_t *e) {
         uint32_t key = lv_event_get_key(e);
         if (key == LV_KEY_BACKSPACE || key == LV_KEY_DEL) {
             // Find the task and remove it
+            size_t focus_idx = 0;
+            bool found = false;
             for (auto it = tasks.begin(); it != tasks.end(); ++it) {
                 if (it->obj == obj) {
                     tasks.erase(it);
+                    found = true;
                     break;
                 }
+                focus_idx++;
             }
-            save_tasks();
-            ui_tasks_refresh();
+            if (found) {
+                save_tasks();
+                ui_tasks_refresh();
+                if (!tasks.empty()) {
+                    if (focus_idx >= tasks.size()) {
+                        focus_idx = tasks.size() - 1;
+                    }
+                    if (tasks[focus_idx].obj) {
+                        lv_group_focus_obj(tasks[focus_idx].obj);
+                    }
+                } else if (add_ta) {
+                    lv_group_focus_obj(add_ta);
+                }
+            }
         }
     }
 }

@@ -132,18 +132,19 @@ lv_obj_t *ui_popup_create(const char *title)
     lv_obj_set_style_bg_color(overlay, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(overlay, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(overlay, 0, 0);
-    lv_obj_set_style_pad_all(overlay, 10, 0);
+    lv_obj_set_style_pad_all(overlay, 12, 0);
     lv_obj_set_flex_flow(overlay, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(overlay, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(overlay, 6, 0);
+    lv_obj_set_style_pad_row(overlay, 8, 0);
     lv_obj_clear_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
 
     if (title) {
         lv_obj_t *t = lv_label_create(overlay);
         lv_label_set_text(t, title);
-        lv_obj_set_style_text_color(t, UI_COLOR_FG, 0);
+        lv_obj_set_style_text_color(t, UI_COLOR_ACCENT, 0);
         lv_obj_set_style_text_font(t, lv_theme_get_font_large(t), 0);
+        lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
     }
     return overlay;
 }
@@ -151,6 +152,266 @@ lv_obj_t *ui_popup_create(const char *title)
 void ui_popup_destroy(lv_obj_t *popup)
 {
     if (popup) lv_obj_del(popup);
+}
+
+// ---------------------------------------------------------------------------
+// Unified loading / progress popup. See ui_define.h for contract.
+// ---------------------------------------------------------------------------
+
+static lv_obj_t *_loading_make_spinner(lv_obj_t *parent)
+{
+#if LVGL_VERSION_MAJOR == 9
+    lv_obj_t *sp = lv_spinner_create(parent);
+    lv_spinner_set_anim_params(sp, 1000, 200);
+#else
+    lv_obj_t *sp = lv_spinner_create(parent, 1000, 60);
+#endif
+    lv_obj_set_size(sp, 48, 48);
+    lv_obj_set_style_arc_color(sp, UI_COLOR_MUTED, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(sp, UI_COLOR_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(sp, 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(sp, 4, LV_PART_INDICATOR);
+    return sp;
+}
+
+static lv_obj_t *_loading_make_bar(lv_obj_t *parent)
+{
+    lv_obj_t *bar = lv_bar_create(parent);
+    lv_obj_set_size(bar, lv_pct(80), 10);
+    lv_bar_set_range(bar, 0, 100);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar, UI_COLOR_MUTED, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_30, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, UI_COLOR_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, 4, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 4, LV_PART_INDICATOR);
+    return bar;
+}
+
+void ui_loading_open(ui_loading_t *l, const char *title, const char *detail)
+{
+    if (!l) return;
+    l->overlay = ui_popup_create(title);
+    // Indicator slot (index 1, just under the title). Replaced between
+    // spinner/bar as set_progress() / set_indeterminate() is called.
+    l->spinner = _loading_make_spinner(l->overlay);
+    l->bar = nullptr;
+
+    l->counts = lv_label_create(l->overlay);
+    lv_label_set_text(l->counts, "");
+    lv_obj_set_style_text_color(l->counts, UI_COLOR_FG, 0);
+    lv_obj_set_style_text_align(l->counts, LV_TEXT_ALIGN_CENTER, 0);
+
+    l->detail = lv_label_create(l->overlay);
+    lv_label_set_text(l->detail, detail ? detail : "");
+    lv_obj_set_style_text_color(l->detail, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_text_align(l->detail, LV_TEXT_ALIGN_CENTER, 0);
+    // WRAP (rather than DOT) so callers can stack phase + filename on
+    // separate lines with "\n" — journal scan, bulk syncs use that.
+    lv_label_set_long_mode(l->detail, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(l->detail, lv_pct(80));
+    lv_obj_set_style_text_font(l->detail, get_small_font(), 0);
+
+    lv_refr_now(NULL);
+}
+
+void ui_loading_set_indeterminate(ui_loading_t *l, const char *detail)
+{
+    if (!l || !l->overlay) return;
+    if (l->bar) {
+        lv_obj_del(l->bar);
+        l->bar = nullptr;
+    }
+    if (!l->spinner) {
+        l->spinner = _loading_make_spinner(l->overlay);
+        lv_obj_move_to_index(l->spinner, 1);
+    }
+    if (l->counts) lv_label_set_text(l->counts, "");
+    if (l->detail) lv_label_set_text(l->detail, detail ? detail : "");
+}
+
+void ui_loading_set_progress(ui_loading_t *l, int cur, int total, const char *detail)
+{
+    if (!l || !l->overlay) return;
+    if (l->spinner) {
+        lv_obj_del(l->spinner);
+        l->spinner = nullptr;
+    }
+    if (!l->bar) {
+        l->bar = _loading_make_bar(l->overlay);
+        lv_obj_move_to_index(l->bar, 1);
+    }
+    int pct;
+    if (total > 0) {
+        pct = (int)((int64_t)cur * 100 / total);
+    } else {
+        pct = cur;
+    }
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    lv_bar_set_value(l->bar, pct, LV_ANIM_OFF);
+
+    if (l->counts) {
+        char buf[48];
+        if (total > 0) {
+            snprintf(buf, sizeof(buf), "%d / %d  -  %d%%", cur, total, pct);
+        } else {
+            snprintf(buf, sizeof(buf), "%d%%", pct);
+        }
+        lv_label_set_text(l->counts, buf);
+    }
+    if (l->detail) lv_label_set_text(l->detail, detail ? detail : "");
+}
+
+void ui_loading_close(ui_loading_t *l)
+{
+    if (!l) return;
+    if (l->overlay) ui_popup_destroy(l->overlay);
+    l->overlay = nullptr;
+    l->spinner = nullptr;
+    l->bar = nullptr;
+    l->counts = nullptr;
+    l->detail = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Structured result popup. Reuses the create_msgbox pipeline but replaces
+// the body with a flex column of "label : value" rows rendered at font_18
+// so counts line up vertically. Falls back to plain text when no rows are
+// supplied.
+// ---------------------------------------------------------------------------
+
+static lv_obj_t *s_result_msgbox = NULL;
+
+static void _result_close_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_result_msgbox) {
+        destroy_msgbox(s_result_msgbox);
+        s_result_msgbox = NULL;
+    }
+}
+
+void ui_result_show(const char *title, const char *subtitle,
+                    const ui_summary_row_t *rows, size_t n_rows)
+{
+    if (s_result_msgbox) return;  // only one result modal at a time
+    static const char *btns[] = {"OK", ""};
+
+    // create_msgbox renders the msg_txt via lv_msgbox_add_text(). Pass an
+    // empty string here and rebuild the body ourselves so rows can line up.
+    const char *msgbox_title = (title && strcmp(title, "News sync") == 0) ? "" : title;
+    s_result_msgbox = create_msgbox(lv_scr_act(), msgbox_title, "", btns,
+                                    _result_close_cb, NULL);
+    if (!s_result_msgbox) return;
+
+#if LVGL_VERSION_MAJOR == 9
+    lv_obj_t *content = lv_msgbox_get_content(s_result_msgbox);
+#else
+    lv_obj_t *content = lv_msgbox_get_text(s_result_msgbox);
+#endif
+    if (!content) return;
+
+    // Strip the default text label lv_msgbox_add_text created (an empty
+    // string label at the top) — we rebuild the body from scratch.
+    uint32_t n = lv_obj_get_child_count(content);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_del(lv_obj_get_child(content, 0));
+    }
+
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(content, 6, 0);
+
+    if (subtitle && subtitle[0]) {
+        lv_obj_t *sub = lv_label_create(content);
+        lv_label_set_text(sub, subtitle);
+        lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(sub, lv_pct(100));
+        lv_obj_set_style_text_color(sub, UI_COLOR_MUTED, 0);
+        lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_pad_bottom(sub, 4, 0);
+    }
+
+    // Stats card: a single rounded container holding the rows. The card
+    // sits inside the msgbox content with a muted accent outline so the
+    // data feels visually grouped, not just a loose list.
+    if (n_rows > 0) {
+        lv_obj_t *card = lv_obj_create(content);
+        lv_obj_remove_style_all(card);
+        lv_obj_set_width(card, lv_pct(100));
+        lv_obj_set_height(card, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                              LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+        lv_obj_set_style_bg_color(card, UI_COLOR_ACCENT, 0);
+        lv_obj_set_style_bg_opa(card, LV_OPA_10, 0);
+        lv_obj_set_style_border_color(card, UI_COLOR_ACCENT, 0);
+        lv_obj_set_style_border_width(card, 1, 0);
+        lv_obj_set_style_border_opa(card, LV_OPA_40, 0);
+        lv_obj_set_style_radius(card, UI_RADIUS, 0);
+        lv_obj_set_style_pad_hor(card, 12, 0);
+        lv_obj_set_style_pad_ver(card, 8, 0);
+        lv_obj_set_style_pad_row(card, 4, 0);
+        lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+        for (size_t i = 0; i < n_rows; i++) {
+            lv_obj_t *row = lv_obj_create(card);
+            lv_obj_remove_style_all(row);
+            lv_obj_set_width(row, lv_pct(100));
+            lv_obj_set_height(row, LV_SIZE_CONTENT);
+            lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                                  LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_column(row, 8, 0);
+            lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+            lv_obj_t *lbl = lv_label_create(row);
+            lv_label_set_text(lbl, rows[i].label ? rows[i].label : "");
+            lv_obj_set_style_text_color(lbl, UI_COLOR_MUTED, 0);
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+            lv_obj_set_flex_grow(lbl, 1);
+
+            // Value: right-aligned, accent-colored so numbers pop against
+            // the muted labels.
+            lv_obj_t *val = lv_label_create(row);
+            lv_label_set_text(val, rows[i].value ? rows[i].value : "");
+            lv_obj_set_style_text_color(val, UI_COLOR_ACCENT, 0);
+            lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
+        }
+    }
+
+#if LVGL_VERSION_MAJOR == 9
+    // lv_msgbox's SIZE_CHANGED handler only flips content->flex_grow to 1
+    // when the msgbox height is NOT LV_SIZE_CONTENT. With SIZE_CONTENT +
+    // max_height the msgbox clamps but children keep natural sizes, so tall
+    // bodies push the footer (OK) below the visible area on the short
+    // 480x222 pager. If we overflow max_height, switch to a fixed height so
+    // content gets flex_grow=1, shrinks, and scrolls internally.
+    lv_obj_update_layout(s_result_msgbox);
+    int32_t natural_h = lv_obj_get_height(s_result_msgbox);
+    int32_t screen_h =
+        lv_display_get_vertical_resolution(lv_obj_get_display(s_result_msgbox));
+    int32_t max_h = (screen_h * 85) / 100;
+    if (natural_h > max_h) {
+        lv_obj_set_height(s_result_msgbox, max_h);
+    }
+
+    if (strcmp(title, "News sync") == 0) {
+        lv_obj_t *footer = lv_msgbox_get_footer(s_result_msgbox);
+        if (footer && lv_obj_get_child_count(footer) > 0) {
+            lv_obj_t *btn = lv_obj_get_child(footer, 0);
+            lv_obj_set_style_pad_hor(btn, 8, 0);
+            lv_obj_set_style_pad_ver(btn, 2, 0);
+            lv_obj_set_style_min_width(btn, 40, 0);
+            lv_obj_set_height(btn, 24);
+            lv_obj_set_style_text_font(btn, get_small_font(), 0);
+        }
+    }
+#endif
 }
 
 lv_obj_t *create_msgbox(lv_obj_t *parent, const char *title_txt,
@@ -171,24 +432,100 @@ lv_obj_t *create_msgbox(lv_obj_t *parent, const char *title_txt,
 
     #if LVGL_VERSION_MAJOR == 9
     msgbox = lv_msgbox_create(lv_layer_top());
-    lv_msgbox_add_text(msgbox, msg_txt);
-    lv_obj_set_size(msgbox, lv_pct(90), lv_pct(60));
+
+    // Sizing: width caps at 90% so short messages don't stretch; height
+    // grows with content (min 30%, max 85%) so a one-liner doesn't render
+    // inside a huge mostly-empty panel. The inner scroll takes over if the
+    // content exceeds max_height.
+    lv_obj_set_width(msgbox, lv_pct(90));
+    lv_obj_set_height(msgbox, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(msgbox, lv_pct(85), 0);
+    lv_obj_set_style_min_height(msgbox, lv_pct(30), 0);
+
     lv_obj_set_style_bg_color(msgbox, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(msgbox, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(msgbox, UI_COLOR_ACCENT, 0);
     lv_obj_set_style_border_width(msgbox, UI_BORDER_W, 0);
     lv_obj_set_style_radius(msgbox, UI_RADIUS, 0);
     lv_obj_set_style_text_color(msgbox, UI_COLOR_FG, 0);
+    lv_obj_set_style_pad_all(msgbox, 0, 0);
+    lv_obj_set_style_shadow_width(msgbox, 18, 0);
+    lv_obj_set_style_shadow_opa(msgbox, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_color(msgbox, lv_color_black(), 0);
 
+    // Title (was previously dropped — v9's lv_msgbox_create doesn't take
+    // title_txt; has to be added via add_title). Accent-colored, large,
+    // sits in the header.
+    if (title_txt && title_txt[0]) {
+        lv_obj_t *tlbl = lv_msgbox_add_title(msgbox, title_txt);
+        lv_obj_set_style_text_color(tlbl, UI_COLOR_ACCENT, 0);
+        lv_obj_set_style_text_font(tlbl, lv_theme_get_font_large(tlbl), 0);
+        lv_obj_set_flex_grow(tlbl, 1);
+        lv_obj_set_style_text_align(tlbl, LV_TEXT_ALIGN_CENTER, 0);
+    }
+
+    // Strip the default theme chrome on header/content/footer — we want a
+    // single unified panel, not three visually-separated boxes.
+    lv_obj_t *hdr = lv_msgbox_get_header(msgbox);
+    if (hdr) {
+        lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_side(hdr, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_border_color(hdr, UI_COLOR_ACCENT, 0);
+        lv_obj_set_style_border_width(hdr, 1, 0);
+        lv_obj_set_style_pad_hor(hdr, 14, 0);
+        lv_obj_set_style_pad_ver(hdr, 10, 0);
+    }
+
+    lv_msgbox_add_text(msgbox, msg_txt);
+    lv_obj_t *content = lv_msgbox_get_content(msgbox);
+    if (content) {
+        lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(content, 0, 0);
+        lv_obj_set_style_pad_hor(content, 16, 0);
+        lv_obj_set_style_pad_ver(content, 14, 0);
+        lv_obj_set_style_pad_row(content, 6, 0);
+        lv_obj_set_style_text_color(content, UI_COLOR_FG, 0);
+        lv_obj_set_style_text_line_space(content, 3, 0);
+    }
+
+    // Button styling. Two styles: base (muted border) and focused/pressed
+    // (accent fill). Applied per-button so lv_msgbox_add_footer_button's
+    // theme defaults don't leak through.
+    static lv_style_t msgbox_btn_base_style;
     static lv_style_t msgbox_btn_focus_style;
     static bool msgbox_btn_style_inited = false;
     if (!msgbox_btn_style_inited) {
+        lv_style_init(&msgbox_btn_base_style);
+        lv_style_set_bg_color(&msgbox_btn_base_style, UI_COLOR_BG);
+        lv_style_set_bg_opa(&msgbox_btn_base_style, LV_OPA_COVER);
+        lv_style_set_border_width(&msgbox_btn_base_style, 1);
+        lv_style_set_border_color(&msgbox_btn_base_style, UI_COLOR_MUTED);
+        lv_style_set_text_color(&msgbox_btn_base_style, UI_COLOR_FG);
+        lv_style_set_radius(&msgbox_btn_base_style, UI_RADIUS);
+        lv_style_set_pad_hor(&msgbox_btn_base_style, 18);
+        lv_style_set_pad_ver(&msgbox_btn_base_style, 8);
+        lv_style_set_min_width(&msgbox_btn_base_style, 72);
+        lv_style_set_shadow_width(&msgbox_btn_base_style, 0);
+
         lv_style_init(&msgbox_btn_focus_style);
-        lv_style_set_border_width(&msgbox_btn_focus_style, UI_BORDER_W);
+        lv_style_set_bg_color(&msgbox_btn_focus_style, UI_COLOR_ACCENT);
+        lv_style_set_bg_opa(&msgbox_btn_focus_style, LV_OPA_COVER);
         lv_style_set_border_color(&msgbox_btn_focus_style, UI_COLOR_ACCENT);
-        lv_style_set_border_side(&msgbox_btn_focus_style, LV_BORDER_SIDE_FULL);
+        lv_style_set_border_width(&msgbox_btn_focus_style, 1);
+        lv_style_set_text_color(&msgbox_btn_focus_style, UI_COLOR_FG);
         lv_style_set_radius(&msgbox_btn_focus_style, UI_RADIUS);
         msgbox_btn_style_inited = true;
+    }
+
+    lv_obj_t *footer = lv_msgbox_get_footer(msgbox);
+    if (footer) {
+        lv_obj_set_style_bg_opa(footer, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(footer, 0, 0);
+        lv_obj_set_style_pad_hor(footer, 14, 0);
+        lv_obj_set_style_pad_ver(footer, 10, 0);
+        lv_obj_set_style_pad_column(footer, 10, 0);
+        lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     }
 
     uint32_t btn_cnt = 0;
@@ -196,10 +533,12 @@ lv_obj_t *create_msgbox(lv_obj_t *parent, const char *title_txt,
     lv_obj_t *first_btn = NULL;
     while (btns[btn_cnt] && btns[btn_cnt][0] != '\0') {
         btn = lv_msgbox_add_footer_button(msgbox, btns[btn_cnt]);
-        lv_obj_add_event_cb(btn, btns_event_cb, LV_EVENT_CLICKED, user_data);
-        lv_group_add_obj(msg_group, btn);
+        lv_obj_add_style(btn, &msgbox_btn_base_style, 0);
         lv_obj_add_style(btn, &msgbox_btn_focus_style, LV_STATE_FOCUS_KEY);
         lv_obj_add_style(btn, &msgbox_btn_focus_style, LV_STATE_FOCUSED);
+        lv_obj_add_style(btn, &msgbox_btn_focus_style, LV_STATE_PRESSED);
+        lv_obj_add_event_cb(btn, btns_event_cb, LV_EVENT_CLICKED, user_data);
+        lv_group_add_obj(msg_group, btn);
         if (btn_cnt == 0) first_btn = btn;
         btn_cnt++;
     }

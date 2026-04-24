@@ -33,7 +33,10 @@
 #include <vector>
 
 #ifdef ARDUINO
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <Preferences.h>
+#include "../core/scoped_lock.h"
 extern "C" {
 #include "cJSON.h"
 }
@@ -199,6 +202,10 @@ static lv_timer_t *s_bg_timer = nullptr;
 // that arrived while the device was off. Subsequent polls fire enabled
 // notifiers only when `sum > s_last_notified_unread`.
 static int s_last_notified_unread = -1;
+
+#ifdef ARDUINO
+static TaskHandle_t s_bg_task = nullptr;
+#endif
 
 // --- forward decls --------------------------------------------------------
 
@@ -414,6 +421,10 @@ static void render_chats()
 #ifdef ARDUINO
 static bool fetch_chats()
 {
+    if (s_bg_task != nullptr) {
+        set_status("Syncing in background...", UI_COLOR_MUTED);
+        return false;
+    }
     set_status("Loading...", UI_COLOR_ACCENT);
     lv_refr_now(nullptr);
 
@@ -544,6 +555,7 @@ static void mark_chat_read(int up_to_msg_id)
 {
     if (s_current_chat_id == 0 || up_to_msg_id <= 0) return;
     if (up_to_msg_id <= s_last_marked_msg_id) return;
+    if (s_bg_task != nullptr) return; // skip if bg sync is running
 
     char path[48];
     snprintf(path, sizeof(path), "/v1/chats/%lld/read", s_current_chat_id);
@@ -560,6 +572,10 @@ static void mark_chat_read(int up_to_msg_id)
 static bool fetch_messages()
 {
     if (s_current_chat_id == 0) return false;
+    if (s_bg_task != nullptr) {
+        set_status("Syncing in background...", UI_COLOR_MUTED);
+        return false;
+    }
 
     std::string body, err;
     char path[80];
@@ -618,6 +634,10 @@ static bool fetch_messages()
 static bool send_text(const char *text)
 {
     if (s_current_chat_id == 0 || !text || !*text) return false;
+    if (s_bg_task != nullptr) {
+        set_status("Please wait, syncing...", UI_COLOR_ACCENT);
+        return false;
+    }
     std::string body = json_text_body(text);
     char path[48];
     snprintf(path, sizeof(path), "/v1/chats/%lld/messages", s_current_chat_id);
@@ -644,13 +664,23 @@ static void poll_tick(lv_timer_t *t)
     // Pause fetches while the composer (or any textarea) is focused — HTTPS
     // calls here block the LVGL thread for ~1s and would stall keystrokes.
     if (core::isTextInputFocused()) return;
+
+    if (s_bg_task != nullptr) {
+        lv_timer_set_period(t, 1000);
+        return;
+    }
+
     switch (s_view) {
-        case V_LIST: fetch_chats();    break;
+        case V_LIST: 
+            fetch_chats();
+            lv_timer_set_period(t, TG_LIST_POLL_MS);
+            break;
         case V_CHAT:
             // Skip while the user is scrolling the history — a refetch
             // re-renders and pins scroll to the bottom, fighting them.
             if (s_msgs_scroll_mode) break;
             fetch_messages();
+            lv_timer_set_period(t, TG_CHAT_POLL_MS);
             break;
         default: break;
     }
@@ -884,8 +914,14 @@ static void show_chat_list()
         set_status("WiFi not connected", UI_COLOR_MUTED);
         return;
     }
-    bool ok = fetch_chats();
-    start_timer(TG_LIST_POLL_MS);
+    bool ok = false;
+    if (s_bg_task != nullptr) {
+        set_status("Waiting for sync...", UI_COLOR_ACCENT);
+        start_timer(1000);
+    } else {
+        ok = fetch_chats();
+        start_timer(TG_LIST_POLL_MS);
+    }
 
     // If the user has pinned exactly one favorite, jump straight into that
     // chat on app entry. Only fires when the fetch returned the chat in the
@@ -998,8 +1034,13 @@ static void show_chat(long long id, const char *title)
 
     s_msgs.clear();
 #ifdef ARDUINO
-    fetch_messages();
-    start_timer(TG_CHAT_POLL_MS);
+    if (s_bg_task != nullptr) {
+        set_status("Waiting for sync...", UI_COLOR_ACCENT);
+        start_timer(1000);
+    } else {
+        fetch_messages();
+        start_timer(TG_CHAT_POLL_MS);
+    }
 #endif
 }
 
@@ -1156,17 +1197,16 @@ static void fire_notifications(int delta)
 }
 
 #ifdef ARDUINO
-static void tg_bg_tick(lv_timer_t *t)
+static void tg_bg_task(void *arg)
 {
-    (void)t;
-    if (s_view != V_NONE) return;               // app is open → its timer drives updates
-    if (!hw_get_wifi_connected()) return;
-    // Skip while typing elsewhere: this tick runs an HTTPS fetch (~1s).
-    if (core::isTextInputFocused()) return;
-
     std::string url   = load_pref("url");
     std::string token = load_token_plain();
-    if (url.empty() || token.empty()) { scrub_string(token); return; }
+    if (url.empty() || token.empty()) { 
+        scrub_string(token); 
+        s_bg_task = nullptr;
+        vTaskDelete(NULL); 
+        return; 
+    }
 
     std::string auth = "Bearer " + token;
     scrub_string(token);  // plaintext is now only inside `auth`
@@ -1178,10 +1218,19 @@ static void tg_bg_tick(lv_timer_t *t)
     bool http_ok = hw_http_request(url.c_str(), "GET", nullptr, 0, nullptr,
                                    auth.c_str(), body, &code, nullptr);
     scrub_string(auth);
-    if (!http_ok) return;
+    if (!http_ok) { 
+        s_bg_task = nullptr;
+        vTaskDelete(NULL); 
+        return; 
+    }
 
     cJSON *arr = cJSON_Parse(body.c_str());
-    if (!arr || !cJSON_IsArray(arr)) { if (arr) cJSON_Delete(arr); return; }
+    if (!arr || !cJSON_IsArray(arr)) { 
+        if (arr) cJSON_Delete(arr); 
+        s_bg_task = nullptr;
+        vTaskDelete(NULL); 
+        return; 
+    }
     int sum = 0;
     int sz  = cJSON_GetArraySize(arr);
     for (int i = 0; i < sz; i++) {
@@ -1193,20 +1242,41 @@ static void tg_bg_tick(lv_timer_t *t)
         }
     }
     cJSON_Delete(arr);
-    s_unread_total = sum;
 
-    // Seed the baseline on the first successful poll so we don't fire on
-    // messages that arrived before the device booted. After that, any
-    // positive delta triggers the enabled notifiers once.
-    if (s_last_notified_unread < 0) {
-        s_last_notified_unread = sum;
-    } else if (sum > s_last_notified_unread) {
-        fire_notifications(sum - s_last_notified_unread);
-        s_last_notified_unread = sum;
-    } else if (sum < s_last_notified_unread) {
-        // Chats read elsewhere — follow the count down so we re-arm cleanly.
-        s_last_notified_unread = sum;
+    {
+        core::ScopedInstanceLock lock;
+        s_unread_total = sum;
+
+        // Seed the baseline on the first successful poll so we don't fire on
+        // messages that arrived before the device booted. After that, any
+        // positive delta triggers the enabled notifiers once.
+        if (s_last_notified_unread < 0) {
+            s_last_notified_unread = sum;
+        } else if (sum > s_last_notified_unread) {
+            fire_notifications(sum - s_last_notified_unread);
+            s_last_notified_unread = sum;
+        } else if (sum < s_last_notified_unread) {
+            // Chats read elsewhere — follow the count down so we re-arm cleanly.
+            s_last_notified_unread = sum;
+        }
     }
+
+    s_bg_task = nullptr;
+    vTaskDelete(NULL);
+}
+
+static void tg_bg_tick(lv_timer_t *t)
+{
+    (void)t;
+    if (s_view != V_NONE) return;               // app is open → its timer drives updates
+    if (!hw_get_wifi_connected()) return;
+    // Skip while typing elsewhere: this tick runs an HTTPS fetch (~1s).
+    if (core::isTextInputFocused()) return;
+
+    if (s_bg_task != nullptr) return; // Previous task still running
+
+    // Launch background task to avoid blocking the LVGL timer thread
+    xTaskCreate(tg_bg_task, "tg_bg", 6144, nullptr, 2, &s_bg_task);
 }
 #endif
 

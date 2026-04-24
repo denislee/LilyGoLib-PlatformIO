@@ -80,6 +80,56 @@ lv_obj_t *ui_create_process_bar(lv_obj_t *parent, const char *title);
 lv_obj_t *ui_popup_create(const char *title);
 void ui_popup_destroy(lv_obj_t *popup);
 
+/* Unified loading / progress popup. Every long-running screen (sync,
+ * download, index scan, storage ops) should use this instead of hand-
+ * building lv_obj_t trees atop ui_popup_create() — produces a consistent
+ * look: title at top, spinner OR progress bar centered, counts + detail
+ * lines below.
+ *
+ * Typical usage:
+ *   ui_loading_t ld;
+ *   ui_loading_open(&ld, "Syncing news", "Connecting...");
+ *   ui_loading_set_progress(&ld, i, total, fname);
+ *   ...
+ *   ui_loading_close(&ld);
+ *
+ * After open() the popup is indeterminate (spinner + detail line). The
+ * first set_progress() call swaps the spinner for a real progress bar
+ * and shows "cur / total (pct%)" counts. set_indeterminate() swaps back. */
+typedef struct {
+    lv_obj_t *overlay;
+    lv_obj_t *spinner;
+    lv_obj_t *bar;
+    lv_obj_t *counts;
+    lv_obj_t *detail;
+} ui_loading_t;
+
+void ui_loading_open(ui_loading_t *l, const char *title, const char *detail);
+void ui_loading_set_indeterminate(ui_loading_t *l, const char *detail);
+void ui_loading_set_progress(ui_loading_t *l, int cur, int total, const char *detail);
+void ui_loading_close(ui_loading_t *l);
+
+/* Structured result popup. Same two-button modal as ui_msg_pop_up, but the
+ * body is rendered as aligned "label: value" rows so numeric summaries
+ * (files synced / failed / skipped) read as a table instead of a comma-
+ * separated sentence. Pass nullptr/0 rows to fall back to a plain subtitle
+ * body.
+ *
+ * Example:
+ *   ui_summary_row_t rows[] = {
+ *       {"Synced",  "3 / 10"},
+ *       {"Failed",  "2"},
+ *       {"Skipped", "5"},
+ *   };
+ *   ui_result_show("News sync", "Done.", rows, 3); */
+typedef struct {
+    const char *label;
+    const char *value;
+} ui_summary_row_t;
+
+void ui_result_show(const char *title, const char *subtitle,
+                    const ui_summary_row_t *rows, size_t n_rows);
+
 void theme_init();
 
 void disable_input_devices();

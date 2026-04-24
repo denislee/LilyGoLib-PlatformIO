@@ -7,6 +7,7 @@
 #include "system.h"
 #include "input_focus.h"
 #include "../ui_define.h"
+#include "../hal/keyboard_task.h"
 
 #include "../apps/menu_app.h"
 
@@ -339,8 +340,9 @@ void System::setupGlobalUI() {
             if (settings.show_file_count) {
                 static uint8_t file_count_tick = 0;
                 static uint32_t cached_file_count = UINT32_MAX;
-                if (cached_file_count == UINT32_MAX || (file_count_tick++ % 5) == 0) {
+                if (cached_file_count == UINT32_MAX || ++file_count_tick >= 60) {
                     cached_file_count = hw_count_internal_files();
+                    file_count_tick = 0;
                 }
                 lv_label_set_text_fmt(self._statFileCountLabel, "%u", (unsigned)cached_file_count);
                 lv_obj_clear_flag(self._statFileCountLabel, LV_OBJ_FLAG_HIDDEN);
@@ -412,10 +414,32 @@ static void clear_back_button_events(lv_obj_t *btn) {
     }
 }
 
+// CLICKED on the back button typically tears down the current app and shows
+// a new screen synchronously. If the triggering key (Enter on the keypad, or
+// the SDL keydown repeat in the emulator) is still asserted when the next
+// screen comes up, the indev immediately re-fires on whatever is now focused,
+// looking like the Enter key "keeps repeating".
+//
+// lv_indev_wait_release only absorbs one press/release cycle — that's enough
+// for SDL keyboard repeat on the emulator. Not enough on the physical pager:
+// our keyboard_task synthesizes RELEASE+PRESS pairs every 90 ms while a key
+// is held past 500 ms, so the next synthesized PRESS lands on whatever is
+// now focused on the new screen. Telling the keyboard task to drop all
+// events until the user physically releases Enter stops that cascade at the
+// source.
+static void back_btn_wait_release_cb(lv_event_t *e) {
+    lv_indev_t *indev = lv_indev_get_act();
+    if (indev) lv_indev_wait_release(indev);
+    hw_keyboard_drop_until_release();
+}
+
 lv_obj_t* System::showBackButton(lv_event_cb_t cb) {
     if (!_statBackBtn) return nullptr;
     clear_back_button_events(_statBackBtn);
-    if (cb) lv_obj_add_event_cb(_statBackBtn, cb, LV_EVENT_CLICKED, NULL);
+    if (cb) {
+        lv_obj_add_event_cb(_statBackBtn, back_btn_wait_release_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(_statBackBtn, cb, LV_EVENT_CLICKED, NULL);
+    }
     _backBtnCb = cb;
     lv_obj_remove_flag(_statBackBtn, LV_OBJ_FLAG_HIDDEN);
     lv_group_t *g = lv_group_get_default();

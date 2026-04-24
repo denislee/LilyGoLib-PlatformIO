@@ -622,7 +622,7 @@ static void enter(lv_obj_t *parent)
     lv_label_set_long_mode(s_log_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_log_label, lv_pct(100));
     lv_obj_set_style_text_color(s_log_label, UI_COLOR_FG, 0);
-    lv_obj_set_style_text_font(s_log_label, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(s_log_label, &lv_font_montserrat_12, 0);
     lv_label_set_text(s_log_label, "");
 }
 

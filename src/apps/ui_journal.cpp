@@ -273,74 +273,42 @@ static int current_page = 0;
 static std::vector<JournalEntry> journal_entries;
 static bool cache_valid = false;
 
-struct LoaderUi {
-    lv_obj_t *overlay;
-    lv_obj_t *phase;
-    lv_obj_t *bar;
-    lv_obj_t *counts;
-    lv_obj_t *detail;
-};
-static LoaderUi loader{};
+static ui_loading_t loader = {};
 static uint32_t loader_started_ms = 0;
 
 static void loader_show()
 {
-    loader.overlay = ui_popup_create("Loading Journal");
-
-    loader.phase = lv_label_create(loader.overlay);
-    lv_label_set_text(loader.phase, "Starting...");
-    lv_obj_set_style_text_color(loader.phase, UI_COLOR_ACCENT, 0);
-
-    loader.bar = lv_bar_create(loader.overlay);
-    lv_obj_set_size(loader.bar, lv_pct(80), 10);
-    lv_bar_set_range(loader.bar, 0, 100);
-    lv_bar_set_value(loader.bar, 0, LV_ANIM_OFF);
-
-    loader.counts = lv_label_create(loader.overlay);
-    lv_label_set_text(loader.counts, "");
-    lv_obj_set_style_text_color(loader.counts, UI_COLOR_FG, 0);
-    lv_obj_set_style_text_font(loader.counts, get_small_font(), 0);
-
-    loader.detail = lv_label_create(loader.overlay);
-    lv_label_set_text(loader.detail, "");
-    lv_label_set_long_mode(loader.detail, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(loader.detail, lv_pct(80));
-    lv_obj_set_style_text_color(loader.detail, UI_COLOR_MUTED, 0);
-    lv_obj_set_style_text_font(loader.detail, get_small_font(), 0);
-    lv_obj_set_style_text_align(loader.detail, LV_TEXT_ALIGN_CENTER, 0);
-
+    ui_loading_open(&loader, "Loading Journal", "Starting...");
     loader_started_ms = lv_tick_get();
 }
 
+// Loader callback. Bridges the scan's (phase, cur/total, detail) triplet to
+// the unified popup: the phase string becomes the detail line when there's
+// no file name to show, and the progress bar tracks cur/total.
 static void loader_update(void *ud, const char *phase, int cur, int total, const char *detail)
 {
     (void)ud;
     if (!loader.overlay) return;
 
-    lv_label_set_text(loader.phase, phase ? phase : "");
-
-    int pct = (total > 0) ? (cur * 100 / total) : 0;
-    if (pct > 100) pct = 100;
-    lv_bar_set_value(loader.bar, pct, LV_ANIM_OFF);
-
-    char cbuf[48];
+    // Compose a two-line detail: phase on top, current filename below.
+    // Elapsed ms is appended to phase so debugging info stays visible
+    // without adding another label. Long filenames are DOT-trimmed by
+    // the shared detail label.
+    char line[96];
     uint32_t elapsed = lv_tick_elaps(loader_started_ms);
-    if (total > 1) {
-        snprintf(cbuf, sizeof(cbuf), "%d / %d  -  %lums", cur, total, (unsigned long)elapsed);
+    if (detail && detail[0]) {
+        snprintf(line, sizeof(line), "%s (%lums)\n%s",
+                 phase ? phase : "", (unsigned long)elapsed, detail);
     } else {
-        snprintf(cbuf, sizeof(cbuf), "%d%%  -  %lums", pct, (unsigned long)elapsed);
+        snprintf(line, sizeof(line), "%s (%lums)",
+                 phase ? phase : "", (unsigned long)elapsed);
     }
-    lv_label_set_text(loader.counts, cbuf);
-
-    lv_label_set_text(loader.detail, detail ? detail : " ");
+    ui_loading_set_progress(&loader, cur, total, line);
 }
 
 static void loader_hide()
 {
-    if (loader.overlay) {
-        ui_popup_destroy(loader.overlay);
-        loader.overlay = NULL;
-    }
+    ui_loading_close(&loader);
 }
 
 void ui_journal_enter(lv_obj_t *parent);

@@ -8,6 +8,7 @@
  */
 
 #include "nfc_reader.h"
+#include "../core/scoped_lock.h"
 
 #if defined(ARDUINO) && defined(USING_ST25R3916)
 
@@ -133,7 +134,9 @@ static void demoNotif(rfalNfcState st )
                 break;
             }
             NFCReader.rfalNfcaPollerSleep();
+            instanceLockGive();
             delay(130);
+            instanceLockTake();
         }
         log_d("Start discovery");
 #else

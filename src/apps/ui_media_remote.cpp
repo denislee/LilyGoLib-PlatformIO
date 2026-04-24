@@ -18,12 +18,19 @@ namespace {
 static lv_obj_t *status_label = nullptr;
 static lv_obj_t *ble_switch = nullptr;
 static lv_obj_t *kb_switch = nullptr;
+static lv_obj_t *disconnect_btn = nullptr;
 static lv_obj_t *volume_btn = nullptr;
 static lv_obj_t *volume_label = nullptr;
 static lv_timer_t *status_timer = nullptr;
 static bool last_connected = false;
 static bool last_bt_enabled = false;
 static bool kb_forward_on = false;
+
+static void disconnect_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    hw_disconnect_ble_kb();
+}
 
 static void forward_key_cb(int state, char &c)
 {
@@ -49,14 +56,18 @@ static void refresh_status()
     if (!bt_on) {
         lv_label_set_text(status_label, LV_SYMBOL_BLUETOOTH "  Off");
         lv_obj_set_style_text_color(status_label, UI_COLOR_MUTED, 0);
+        if (disconnect_btn) lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
     } else if (connected) {
-        lv_label_set_text(status_label, LV_SYMBOL_BLUETOOTH "  Connected");
+        std::string mac = hw_get_ble_kb_peer_address();
+        lv_label_set_text_fmt(status_label, LV_SYMBOL_BLUETOOTH "  %s", mac.c_str());
         lv_obj_set_style_text_color(status_label, UI_COLOR_ACCENT, 0);
+        if (disconnect_btn) lv_obj_clear_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_label_set_text_fmt(status_label,
             LV_SYMBOL_BLUETOOTH "  Pair \"%s\" on phone",
             hw_get_ble_kb_name());
         lv_obj_set_style_text_color(status_label, UI_COLOR_FG, 0);
+        if (disconnect_btn) lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -316,6 +327,17 @@ static void ui_media_remote_enter(lv_obj_t *parent)
         kb_switch = nullptr;
     }
 
+    disconnect_btn = lv_btn_create(parent);
+    lv_obj_set_width(disconnect_btn, lv_pct(100));
+    lv_obj_set_height(disconnect_btn, 34);
+    lv_obj_set_style_radius(disconnect_btn, UI_RADIUS, 0);
+    lv_obj_set_style_bg_color(disconnect_btn, lv_color_hex(0x600000), 0); // Dark red
+    lv_obj_add_event_cb(disconnect_btn, disconnect_btn_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *disconnect_lbl = lv_label_create(disconnect_btn);
+    lv_label_set_text(disconnect_lbl, "Disconnect");
+    lv_obj_center(disconnect_lbl);
+    lv_group_add_obj(grp, disconnect_btn);
+
     // Transport row: prev / play-pause / next. lv_pct fills remaining space.
     lv_obj_t *row1 = make_btn_row(parent, 44);
     lv_obj_t *prev_btn = make_key_button(row1, LV_SYMBOL_PREV,
@@ -375,6 +397,7 @@ static void ui_media_remote_exit(lv_obj_t *parent)
     status_label = nullptr;
     ble_switch = nullptr;
     kb_switch = nullptr;
+    disconnect_btn = nullptr;
     volume_btn = nullptr;
     volume_label = nullptr;
 }

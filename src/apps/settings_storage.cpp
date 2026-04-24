@@ -26,51 +26,29 @@ namespace {
 
 // Progress popup shared between the Storage subpage (copy-to-SD, manual
 // prune) and every Notes Security flow (set/change/disable passphrase,
-// encrypt SD). Only one can be visible at a time, so a file-local struct
+// encrypt SD). Only one can be visible at a time, so a file-local instance
 // is enough.
-struct {
-    lv_obj_t *overlay;
-    lv_obj_t *bar;
-    lv_obj_t *label;
-} storage_loader;
+ui_loading_t storage_loader = {};
 
 void storage_progress_cb(int cur, int total, const char *name)
 {
     if (!storage_loader.overlay) return;
-
     if (total > 0) {
-        lv_bar_set_value(storage_loader.bar, cur * 100 / total, LV_ANIM_OFF);
-        lv_label_set_text_fmt(storage_loader.label, "Processing (%d/%d):\n%s", cur, total, name);
+        ui_loading_set_progress(&storage_loader, cur, total, name);
     } else {
-        lv_label_set_text(storage_loader.label, name ? name : "Working...");
+        ui_loading_set_indeterminate(&storage_loader, name ? name : "Working...");
     }
     lv_refr_now(NULL);
 }
 
 void show_storage_loader(const char *title)
 {
-    storage_loader.overlay = ui_popup_create(title);
-
-    storage_loader.label = lv_label_create(storage_loader.overlay);
-    lv_label_set_text(storage_loader.label, "Preparing...");
-    lv_obj_set_style_text_color(storage_loader.label, UI_COLOR_FG, 0);
-    lv_obj_set_style_text_align(storage_loader.label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(storage_loader.label, lv_pct(80));
-
-    storage_loader.bar = lv_bar_create(storage_loader.overlay);
-    lv_obj_set_size(storage_loader.bar, lv_pct(70), 12);
-    lv_bar_set_range(storage_loader.bar, 0, 100);
-    lv_bar_set_value(storage_loader.bar, 0, LV_ANIM_OFF);
-
-    lv_refr_now(NULL);
+    ui_loading_open(&storage_loader, title, "Preparing...");
 }
 
 void hide_storage_loader()
 {
-    if (storage_loader.overlay) {
-        ui_popup_destroy(storage_loader.overlay);
-        storage_loader.overlay = NULL;
-    }
+    ui_loading_close(&storage_loader);
 }
 
 } // anonymous namespace

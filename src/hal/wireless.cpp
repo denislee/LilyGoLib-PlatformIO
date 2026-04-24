@@ -768,6 +768,32 @@ bool hw_get_ble_kb_connected()
     return false;
 }
 
+std::string hw_get_ble_kb_peer_address()
+{
+#if defined(ARDUINO) && defined(USING_BLE_KEYBOARD)
+#ifdef CONFIG_BLE_KEYBOARD
+    NimBLEServer *server = NimBLEDevice::getServer();
+    if (server && server->getConnectedCount() > 0) {
+        return server->getPeerInfo(0).getAddress().toString();
+    }
+#endif
+#endif
+    return "";
+}
+
+void hw_disconnect_ble_kb()
+{
+#if defined(ARDUINO) && defined(USING_BLE_KEYBOARD)
+#ifdef CONFIG_BLE_KEYBOARD
+    NimBLEServer *server = NimBLEDevice::getServer();
+    if (server && server->getConnectedCount() > 0) {
+        NimBLEConnInfo peerInfo = server->getPeerInfo(0);
+        server->disconnect(peerInfo.getConnHandle());
+    }
+#endif
+#endif
+}
+
 void hw_set_ble_key(media_key_value_t key)
 {
 #if defined(ARDUINO) && defined(USING_BLE_KEYBOARD)

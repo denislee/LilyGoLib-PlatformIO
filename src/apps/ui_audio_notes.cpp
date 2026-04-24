@@ -24,6 +24,7 @@ namespace {
 static const char *NOTES_DIR = "/mental_notes";
 
 enum ViewMode {
+    VIEW_MAIN,
     VIEW_LIST,
     VIEW_RECORD,
     VIEW_PLAYBACK,
@@ -42,7 +43,7 @@ static lv_obj_t *main_page = NULL;
 static lv_obj_t *quit_btn = NULL;
 static lv_timer_t *tick_timer = NULL;
 
-static ViewMode current_view = VIEW_LIST;
+static ViewMode current_view = VIEW_MAIN;
 static std::vector<Note> notes;
 static std::string selected_path;   // for playback view
 static std::string selected_name;
@@ -53,6 +54,7 @@ static std::string pending_rec_path; // set while recording
 static void ui_notes_enter(lv_obj_t *parent);
 static void ui_notes_exit(lv_obj_t *parent);
 static void render_view();
+static void enter_main();
 static void enter_list();
 static void enter_record();
 static void enter_playback(const Note &n);
@@ -146,9 +148,125 @@ static void reload_notes()
     });
 }
 
-// --- list view ---------------------------------------------------------
+// --- main view ---------------------------------------------------------
 
 static void record_btn_cb(lv_event_t *e) { enter_record(); }
+
+static void browse_btn_cb(lv_event_t *e) { enter_list(); }
+
+struct MainTile {
+    const char *label;
+    const char *symbol;
+    lv_palette_t palette;
+    lv_event_cb_t cb;
+};
+
+static const MainTile kMainTiles[] = {
+    {"Record", LV_SYMBOL_AUDIO, LV_PALETTE_RED,    record_btn_cb},
+    {"Browse", LV_SYMBOL_LIST,  LV_PALETTE_ORANGE, browse_btn_cb},
+};
+constexpr int kMainTileCount = sizeof(kMainTiles) / sizeof(kMainTiles[0]);
+
+static void build_main_view()
+{
+    bool mic_ok = hw_mic_available();
+
+    // Horizontal tile row matching the "Notes" launcher app.
+    lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(main_page, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(main_page, 8, 0);
+    lv_obj_set_style_pad_row(main_page, 8, 0);
+    lv_obj_set_style_pad_column(main_page, 8, 0);
+    lv_obj_remove_flag(main_page, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_update_layout(main_page);
+    int32_t panel_w = lv_obj_get_content_width(main_page);
+    int32_t panel_h = lv_obj_get_content_height(main_page);
+    if (panel_w <= 0) panel_w = 460;
+    if (panel_h <= 0) panel_h = 180;
+
+    const int gap = 8;
+    int32_t tile_w = (panel_w - (kMainTileCount - 1) * gap) / kMainTileCount;
+    int32_t tile_h = panel_h;
+    if (tile_w < 50) tile_w = 50;
+    if (tile_h < 50) tile_h = 50;
+
+    const lv_font_t *icon_font =
+        (tile_h >= 140) ? &lv_font_montserrat_48 :
+        (tile_h >= 90)  ? &lv_font_montserrat_32 :
+        (tile_h >= 70)  ? &lv_font_montserrat_28 :
+                          &lv_font_montserrat_24;
+    const lv_font_t *label_font = get_home_font();
+    lv_group_t *grp = lv_group_get_default();
+
+    lv_obj_t *first_enabled = NULL;
+
+    for (int i = 0; i < kMainTileCount; ++i) {
+        const MainTile &item = kMainTiles[i];
+        lv_color_t accent = lv_palette_main(item.palette);
+
+        lv_obj_t *tile = lv_btn_create(main_page);
+        lv_obj_set_size(tile, tile_w, tile_h);
+        lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_radius(tile, 12, 0);
+        lv_obj_set_style_bg_color(tile, lv_color_hex(0x151515), 0);
+        lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(tile, accent, 0);
+        lv_obj_set_style_border_width(tile, 1, 0);
+        lv_obj_set_style_border_opa(tile, LV_OPA_40, 0);
+        lv_obj_set_style_shadow_width(tile, 0, 0);
+        lv_obj_set_style_outline_width(tile, 0, 0);
+        lv_obj_set_style_pad_all(tile, 6, 0);
+        lv_obj_set_style_border_color(tile, accent, LV_STATE_FOCUSED);
+        lv_obj_set_style_border_width(tile, 2, LV_STATE_FOCUSED);
+        lv_obj_set_style_border_opa(tile, LV_OPA_COVER, LV_STATE_FOCUSED);
+        lv_obj_set_style_bg_color(tile, lv_palette_darken(item.palette, 4),
+                                  LV_STATE_FOCUSED);
+        lv_obj_set_style_bg_color(tile, lv_palette_darken(item.palette, 3),
+                                  LV_STATE_PRESSED);
+
+        lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(tile, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_row(tile, 4, 0);
+
+        // The Record tile is disabled if no microphone is present.
+        bool disabled = (item.cb == record_btn_cb && !mic_ok);
+        const char *symbol_text = disabled ? LV_SYMBOL_WARNING : item.symbol;
+        const char *label_text  = disabled ? "No mic"          : item.label;
+        if (disabled) lv_obj_add_state(tile, LV_STATE_DISABLED);
+
+        lv_obj_t *icon = lv_label_create(tile);
+        lv_label_set_text(icon, symbol_text);
+        lv_obj_set_style_text_font(icon, icon_font, 0);
+        lv_obj_set_style_text_color(icon, accent, 0);
+
+        lv_obj_t *label = lv_label_create(tile);
+        lv_label_set_text(label, label_text);
+        lv_obj_set_style_text_color(label, UI_COLOR_FG, 0);
+        lv_obj_set_style_text_font(label, label_font, 0);
+        lv_obj_set_width(label, tile_w - 12);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+
+        if (!disabled) {
+            lv_obj_add_event_cb(tile, item.cb, LV_EVENT_CLICKED, NULL);
+            if (!first_enabled) first_enabled = tile;
+        }
+        if (grp) lv_group_add_obj(grp, tile);
+    }
+
+    if (grp) {
+        if (first_enabled) {
+            lv_group_focus_obj(first_enabled);
+        } else if (lv_obj_get_child_count(main_page) > 0) {
+            lv_group_focus_obj(lv_obj_get_child(main_page, 0));
+        }
+    }
+}
+
+// --- list view ---------------------------------------------------------
 
 static void note_click_cb(lv_event_t *e)
 {
@@ -164,25 +282,6 @@ static void build_list_view()
     lv_obj_set_flex_align(main_page, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_all(main_page, 6, 0);
     lv_obj_set_style_pad_row(main_page, 6, 0);
-
-    // Record button.
-    lv_obj_t *rec_btn = lv_btn_create(main_page);
-    lv_obj_set_width(rec_btn, LV_PCT(100));
-    lv_obj_set_height(rec_btn, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(rec_btn, lv_palette_main(LV_PALETTE_RED), 0);
-    lv_obj_set_style_radius(rec_btn, UI_RADIUS, 0);
-    lv_obj_add_event_cb(rec_btn, record_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *rec_lbl = lv_label_create(rec_btn);
-    lv_label_set_text(rec_lbl, LV_SYMBOL_AUDIO "  Record new note");
-    lv_obj_set_style_text_color(rec_lbl, UI_COLOR_FG, 0);
-    lv_obj_center(rec_lbl);
-    lv_group_add_obj(lv_group_get_default(), rec_btn);
-
-    bool mic_ok = hw_mic_available();
-    if (!mic_ok) {
-        lv_obj_add_state(rec_btn, LV_STATE_DISABLED);
-        lv_label_set_text(rec_lbl, LV_SYMBOL_WARNING "  No microphone");
-    }
 
     // Notes list.
     lv_obj_t *list = lv_list_create(main_page);
@@ -227,9 +326,7 @@ static void build_list_view()
         }
     }
 
-    if (mic_ok) {
-        lv_group_focus_obj(rec_btn);
-    } else if (!notes.empty()) {
+    if (!notes.empty()) {
         lv_group_focus_obj(lv_obj_get_child(list, 0));
     }
 }
@@ -239,14 +336,15 @@ static void build_list_view()
 static lv_obj_t *rec_time_lbl = NULL;
 static lv_obj_t *rec_status_lbl = NULL;
 static lv_obj_t *rec_size_lbl = NULL;
+static lv_obj_t *rec_dot = NULL;
+static lv_obj_t *rec_bar = NULL;
 
 static void stop_rec_and_return(lv_event_t *e)
 {
     if (hw_rec_running()) {
         hw_rec_stop();
     }
-    reload_notes();
-    enter_list();
+    enter_main();
 }
 
 static void rec_tick_cb(lv_timer_t *t)
@@ -254,55 +352,122 @@ static void rec_tick_cb(lv_timer_t *t)
     if (!rec_time_lbl) return;
     uint32_t ms = hw_rec_elapsed_ms();
     uint32_t secs = ms / 1000;
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%02u:%02u / %02u:%02u",
-             (unsigned)(secs / 60), (unsigned)(secs % 60),
-             (unsigned)(HW_REC_MAX_MS / 60000),
-             (unsigned)((HW_REC_MAX_MS / 1000) % 60));
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02u:%02u",
+             (unsigned)(secs / 60), (unsigned)(secs % 60));
     lv_label_set_text(rec_time_lbl, buf);
+
+    if (rec_bar) {
+        lv_bar_set_value(rec_bar, (int32_t)secs, LV_ANIM_OFF);
+    }
 
     if (rec_size_lbl) {
         uint32_t bytes = hw_rec_bytes_written();
-        char sbuf[32];
-        snprintf(sbuf, sizeof(sbuf), "%u KB", (unsigned)(bytes / 1024));
+        char sbuf[48];
+        snprintf(sbuf, sizeof(sbuf), "max %u:%02u  -  %u KB",
+                 (unsigned)(HW_REC_MAX_MS / 60000),
+                 (unsigned)((HW_REC_MAX_MS / 1000) % 60),
+                 (unsigned)(bytes / 1024));
         lv_label_set_text(rec_size_lbl, sbuf);
     }
 
     if (!hw_rec_running()) {
-        // Auto-stop (cap hit) — return to list.
-        reload_notes();
-        enter_list();
+        // Auto-stop (cap hit) — return to main.
+        enter_main();
     }
+}
+
+static void rec_dot_anim_cb(void *var, int32_t v)
+{
+    lv_obj_set_style_bg_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
 }
 
 static void build_record_view()
 {
     lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(main_page, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(main_page, 16, 0);
-    lv_obj_set_style_pad_row(main_page, 12, 0);
+    lv_obj_set_style_pad_all(main_page, 8, 0);
+    lv_obj_set_style_pad_row(main_page, 6, 0);
+    lv_obj_remove_flag(main_page, LV_OBJ_FLAG_SCROLLABLE);
 
-    rec_status_lbl = lv_label_create(main_page);
-    lv_label_set_text(rec_status_lbl, LV_SYMBOL_AUDIO "  Recording");
+    // Header: pulsing red dot + "REC".
+    lv_obj_t *hdr = lv_obj_create(main_page);
+    lv_obj_remove_style_all(hdr);
+    lv_obj_set_size(hdr, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(hdr, 8, 0);
+    lv_obj_remove_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+
+    rec_dot = lv_obj_create(hdr);
+    lv_obj_remove_style_all(rec_dot);
+    lv_obj_set_size(rec_dot, 14, 14);
+    lv_obj_set_style_radius(rec_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(rec_dot, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_bg_opa(rec_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_shadow_color(rec_dot, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_shadow_width(rec_dot, 10, 0);
+    lv_obj_set_style_shadow_opa(rec_dot, LV_OPA_50, 0);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, rec_dot);
+    lv_anim_set_exec_cb(&a, rec_dot_anim_cb);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_20);
+    lv_anim_set_time(&a, 600);
+    lv_anim_set_playback_time(&a, 600);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a);
+
+    rec_status_lbl = lv_label_create(hdr);
+    lv_label_set_text(rec_status_lbl, "REC");
     lv_obj_set_style_text_color(rec_status_lbl, lv_palette_main(LV_PALETTE_RED), 0);
-    lv_obj_set_style_text_font(rec_status_lbl, get_header_font(), 0);
+    lv_obj_set_style_text_font(rec_status_lbl, &lv_font_montserrat_20, 0);
 
+    // Large centered elapsed time — fixed font so it never outgrows the page.
     rec_time_lbl = lv_label_create(main_page);
-    lv_label_set_text(rec_time_lbl, "00:00 / 05:00");
+    lv_label_set_text(rec_time_lbl, "00:00");
     lv_obj_set_style_text_color(rec_time_lbl, UI_COLOR_FG, 0);
+    lv_obj_set_style_text_font(rec_time_lbl, &lv_font_montserrat_48, 0);
 
+    // Progress bar: fraction of HW_REC_MAX_MS used.
+    rec_bar = lv_bar_create(main_page);
+    lv_obj_set_width(rec_bar, LV_PCT(80));
+    lv_obj_set_height(rec_bar, 6);
+    lv_bar_set_range(rec_bar, 0, (int32_t)(HW_REC_MAX_MS / 1000));
+    lv_bar_set_value(rec_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(rec_bar, UI_COLOR_MUTED, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(rec_bar, LV_OPA_30, LV_PART_MAIN);
+    lv_obj_set_style_radius(rec_bar, 3, LV_PART_MAIN);
+    lv_obj_set_style_border_width(rec_bar, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(rec_bar, lv_palette_main(LV_PALETTE_RED), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(rec_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(rec_bar, 3, LV_PART_INDICATOR);
+
+    // Secondary line: cap and bytes written.
     rec_size_lbl = lv_label_create(main_page);
-    lv_label_set_text(rec_size_lbl, "0 KB");
+    char ibuf[48];
+    snprintf(ibuf, sizeof(ibuf), "max %u:%02u  -  0 KB",
+             (unsigned)(HW_REC_MAX_MS / 60000),
+             (unsigned)((HW_REC_MAX_MS / 1000) % 60));
+    lv_label_set_text(rec_size_lbl, ibuf);
     lv_obj_set_style_text_color(rec_size_lbl, UI_COLOR_MUTED, 0);
     lv_obj_set_style_text_font(rec_size_lbl, get_small_font(), 0);
 
+    // Prominent red stop button.
     lv_obj_t *stop_btn = lv_btn_create(main_page);
-    lv_obj_set_style_bg_color(stop_btn, UI_COLOR_ACCENT, 0);
+    lv_obj_set_width(stop_btn, LV_PCT(80));
+    lv_obj_set_height(stop_btn, 44);
+    lv_obj_set_style_bg_color(stop_btn, lv_palette_main(LV_PALETTE_RED), 0);
     lv_obj_set_style_radius(stop_btn, UI_RADIUS, 0);
+    lv_obj_set_style_shadow_color(stop_btn, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_shadow_width(stop_btn, 18, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_opa(stop_btn, LV_OPA_40, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(stop_btn, stop_rec_and_return, LV_EVENT_CLICKED, NULL);
     lv_obj_t *stop_lbl = lv_label_create(stop_btn);
     lv_label_set_text(stop_lbl, LV_SYMBOL_STOP "  Stop");
     lv_obj_set_style_text_color(stop_lbl, UI_COLOR_FG, 0);
+    lv_obj_set_style_text_font(stop_lbl, &lv_font_montserrat_20, 0);
     lv_obj_center(stop_lbl);
     lv_group_add_obj(lv_group_get_default(), stop_btn);
     lv_group_focus_obj(stop_btn);
@@ -503,6 +668,8 @@ static void clear_view_refs()
     rec_time_lbl = NULL;
     rec_status_lbl = NULL;
     rec_size_lbl = NULL;
+    rec_dot = NULL;
+    rec_bar = NULL;
     pb_status_lbl = NULL;
     pb_vol_slider = NULL;
     pb_vol_pct_lbl = NULL;
@@ -516,14 +683,22 @@ static void render_view()
     kill_tick_timer();
 
     switch (current_view) {
+    case VIEW_MAIN:     build_main_view(); break;
     case VIEW_LIST:     build_list_view(); break;
     case VIEW_RECORD:   build_record_view(); break;
     case VIEW_PLAYBACK: build_playback_view(); break;
     }
 }
 
+static void enter_main()
+{
+    current_view = VIEW_MAIN;
+    render_view();
+}
+
 static void enter_list()
 {
+    reload_notes();
     current_view = VIEW_LIST;
     render_view();
 }
@@ -559,6 +734,12 @@ static void back_event_handler(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (lv_menu_back_btn_is_root(menu, obj)) {
+        if (current_view != VIEW_MAIN) {
+            if (hw_rec_running()) hw_rec_stop();
+            hw_set_play_stop();
+            enter_main();
+            return;
+        }
         ui_notes_exit(NULL);
         menu_show();
     }
@@ -566,6 +747,12 @@ static void back_event_handler(lv_event_t *e)
 
 static void exit_btn_cb(lv_event_t *e)
 {
+    if (current_view != VIEW_MAIN) {
+        if (hw_rec_running()) hw_rec_stop();
+        hw_set_play_stop();
+        enter_main();
+        return;
+    }
     if (hw_rec_running()) hw_rec_stop();
     hw_set_play_stop();
     ui_notes_exit(NULL);
@@ -579,13 +766,11 @@ static void ui_notes_enter(lv_obj_t *parent)
     enable_keyboard();
 
     ensure_notes_dir();
-    current_view = VIEW_LIST;
+    current_view = VIEW_MAIN;
     selected_path.clear();
     selected_name.clear();
     selected_bytes = 0;
     selected_mtime = 0;
-
-    reload_notes();
 
     menu = create_menu(parent, back_event_handler);
     main_page = lv_menu_page_create(menu, NULL);
@@ -594,12 +779,18 @@ static void ui_notes_enter(lv_obj_t *parent)
 
     ui_show_back_button(exit_btn_cb);
 
-    render_view();
-
     lv_menu_set_page(menu, main_page);
+
+    render_view();
 
 #ifdef USING_TOUCHPAD
     quit_btn = create_floating_button([](lv_event_t *e) {
+        if (current_view != VIEW_MAIN) {
+            if (hw_rec_running()) hw_rec_stop();
+            hw_set_play_stop();
+            enter_main();
+            return;
+        }
         if (hw_rec_running()) hw_rec_stop();
         hw_set_play_stop();
         ui_notes_exit(NULL);

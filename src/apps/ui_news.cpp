@@ -9,6 +9,8 @@
 #include "../hal/wireless.h"
 #include <vector>
 #include <string>
+#include <algorithm>
+#include <functional>
 
 static const char *NEWS_REMOTE_BASE = "https://denislee.github.io/hn/";
 
@@ -47,12 +49,29 @@ static lv_obj_t *download_page = NULL;
 static lv_obj_t *download_list = NULL;
 static std::vector<std::pair<std::string, std::string>> remote_entries; // (filename, size_str)
 
-static lv_obj_t *progress_popup = NULL;
-static lv_obj_t *progress_popup_lbl = NULL;
+static ui_loading_t s_progress = {};
 static size_t progress_last_percent = 101;
 static bool progress_cancelled = false;
 
 void ui_news_exit(lv_obj_t *parent);
+static std::string format_news_date(const std::string &filename) {
+    if (filename.length() < 10) return filename;
+    
+    size_t pos = filename.find_last_of('/');
+    std::string name = (pos == std::string::npos) ? filename : filename.substr(pos + 1);
+    
+    int year, month, day;
+    if (sscanf(name.c_str(), "%4d-%2d-%2d", &year, &month, &day) == 3) {
+        const char *months[] = {"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+        if (month >= 1 && month <= 12) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%s %d, %04d", months[month], day, year);
+            return std::string(buf);
+        }
+    }
+    return name;
+}
+
 static void refresh_ui();
 static void sync_menu_header();
 static void show_download_page();
@@ -61,6 +80,7 @@ static void load_files()
 {
     news_files.clear();
     hw_get_sd_news_files(news_files);
+    std::sort(news_files.begin(), news_files.end(), std::greater<std::string>());
 }
 
 // --- Remote news download ---------------------------------------------
@@ -104,29 +124,30 @@ static void parse_remote_index(const std::string &html,
 
 static void progress_popup_close()
 {
-    if (progress_popup) {
-        ui_popup_destroy(progress_popup);
-        progress_popup = NULL;
-        progress_popup_lbl = NULL;
-    }
+    ui_loading_close(&s_progress);
     progress_last_percent = 101;
     progress_cancelled = false;
 }
 
+// Per-file byte progress callback. Updates the shared loading popup's bar
+// when a total size is known; otherwise falls back to a KB counter in the
+// detail line.
 static bool download_progress_cb(size_t done, size_t total)
 {
-    if (progress_popup_lbl) {
-        int percent = total > 0 ? (int)((uint64_t)done * 100 / total) : -1;
-        if ((size_t)percent != progress_last_percent) {
-            progress_last_percent = percent;
-            char buf[64];
-            if (percent >= 0) {
-                snprintf(buf, sizeof(buf), "%d%%  (%u / %u KB)",
-                         percent, (unsigned)(done / 1024), (unsigned)(total / 1024));
-            } else {
-                snprintf(buf, sizeof(buf), "%u KB", (unsigned)(done / 1024));
-            }
-            lv_label_set_text(progress_popup_lbl, buf);
+    if (!s_progress.overlay) return !progress_cancelled;
+    int percent = total > 0 ? (int)((uint64_t)done * 100 / total) : -1;
+    if ((size_t)percent != progress_last_percent) {
+        progress_last_percent = percent;
+        if (percent >= 0) {
+            char detail[32];
+            snprintf(detail, sizeof(detail), "%u / %u KB",
+                     (unsigned)(done / 1024), (unsigned)(total / 1024));
+            ui_loading_set_progress(&s_progress, (int)(done / 1024),
+                                    (int)(total / 1024), detail);
+        } else {
+            char detail[32];
+            snprintf(detail, sizeof(detail), "%u KB", (unsigned)(done / 1024));
+            ui_loading_set_indeterminate(&s_progress, detail);
         }
     }
     lv_timer_handler();
@@ -139,16 +160,8 @@ static void download_file(const std::string &fname)
     url += fname;
     std::string dest = "/news/" + fname;
 
-    progress_popup = ui_popup_create("Downloading");
-    lv_obj_t *sub = lv_label_create(progress_popup);
-    lv_label_set_text(sub, fname.c_str());
-    lv_obj_set_style_text_color(sub, UI_COLOR_MUTED, 0);
-
-    progress_popup_lbl = lv_label_create(progress_popup);
-    lv_label_set_text(progress_popup_lbl, "0%");
-    lv_obj_set_style_text_color(progress_popup_lbl, UI_COLOR_FG, 0);
-
-    lv_refr_now(NULL);
+    ui_loading_open(&s_progress, "Downloading", fname.c_str());
+    progress_last_percent = 101;
 
     std::string err;
     size_t written = 0;
@@ -218,15 +231,12 @@ static void start_remote_browse()
         return;
     }
 
-    lv_obj_t *loading = ui_popup_create("Fetching index");
-    lv_obj_t *sub = lv_label_create(loading);
-    lv_label_set_text(sub, NEWS_REMOTE_BASE);
-    lv_obj_set_style_text_color(sub, UI_COLOR_MUTED, 0);
-    lv_refr_now(NULL);
+    ui_loading_t load;
+    ui_loading_open(&load, "Fetching index", NEWS_REMOTE_BASE);
 
     std::string html, err;
     bool ok = hw_http_get_string(NEWS_REMOTE_BASE, html, &err);
-    ui_popup_destroy(loading);
+    ui_loading_close(&load);
 
     if (!ok) {
         std::string msg = "Fetch failed: " + (err.empty() ? std::string("unknown") : err);
@@ -262,15 +272,12 @@ static void sync_all_btn_cb(lv_event_t *e)
         return;
     }
 
-    lv_obj_t *loading = ui_popup_create("Fetching index");
-    lv_obj_t *sub = lv_label_create(loading);
-    lv_label_set_text(sub, NEWS_REMOTE_BASE);
-    lv_obj_set_style_text_color(sub, UI_COLOR_MUTED, 0);
-    lv_refr_now(NULL);
+    ui_loading_t load;
+    ui_loading_open(&load, "Fetching index", NEWS_REMOTE_BASE);
 
     std::string html, err;
     bool ok = hw_http_get_string(NEWS_REMOTE_BASE, html, &err);
-    ui_popup_destroy(loading);
+    ui_loading_close(&load);
 
     if (!ok) {
         std::string msg = "Fetch failed: " + (err.empty() ? std::string("unknown") : err);
@@ -285,46 +292,48 @@ static void sync_all_btn_cb(lv_event_t *e)
         return;
     }
 
-    // Single progress popup spans the whole batch; the per-file callback
-    // repurposes progress_popup_lbl for per-item bytes.
-    progress_popup = ui_popup_create("Syncing news");
-    lv_obj_t *subf = lv_label_create(progress_popup);
-    lv_label_set_text(subf, "");
-    lv_obj_set_style_text_color(subf, UI_COLOR_MUTED, 0);
-
-    progress_popup_lbl = lv_label_create(progress_popup);
-    lv_label_set_text(progress_popup_lbl, "0%");
-    lv_obj_set_style_text_color(progress_popup_lbl, UI_COLOR_FG, 0);
+    // One popup spans the whole batch. The bar tracks overall batch
+    // progress (file index) so it's monotonic — per-file byte progress
+    // goes in the detail line. download_progress_cb is a no-op for
+    // the bar here because we stop at nullptr for cb when batching.
+    ui_loading_open(&s_progress, "Syncing news", "");
+    ui_loading_set_progress(&s_progress, 0, (int)entries.size(), "");
 
     int ok_count = 0, fail_count = 0;
     for (size_t i = 0; i < entries.size() && !progress_cancelled; i++) {
         const std::string &fname = entries[i].first;
-        char hdr[96];
-        snprintf(hdr, sizeof(hdr), "[%u/%u] %s",
-                 (unsigned)(i + 1), (unsigned)entries.size(), fname.c_str());
-        lv_label_set_text(subf, hdr);
-        progress_last_percent = 101;
+        ui_loading_set_progress(&s_progress, (int)i, (int)entries.size(), fname.c_str());
         lv_refr_now(NULL);
 
         std::string url = std::string(NEWS_REMOTE_BASE) + fname;
         std::string dest = "/news/" + fname;
         std::string derr;
+        // nullptr callback: we don't want download_progress_cb to repaint
+        // the bar, since the batch bar tracks the outer file-index counter.
         if (hw_http_download_to_file(url.c_str(), dest.c_str(),
-                                     nullptr, download_progress_cb, &derr)) {
+                                     nullptr, nullptr, &derr)) {
             ok_count++;
         } else {
             fail_count++;
         }
     }
+    ui_loading_set_progress(&s_progress, (int)entries.size(), (int)entries.size(), "");
     progress_popup_close();
 
     load_files();
     refresh_ui();
 
-    char summary[96];
-    snprintf(summary, sizeof(summary), "Synced %d/%d files (%d failed).",
-             ok_count, (int)entries.size(), fail_count);
-    ui_msg_pop_up("News sync", summary);
+    char synced[16], failed[16];
+    snprintf(synced, sizeof(synced), "%d / %d",
+             ok_count, (int)entries.size());
+    snprintf(failed, sizeof(failed), "%d", fail_count);
+    ui_summary_row_t rows[] = {
+        {"Synced", synced},
+        {"Failed", failed},
+    };
+    ui_result_show("News sync",
+                   fail_count == 0 ? "All files downloaded." : "Some files failed.",
+                   rows, 2);
 }
 
 static void back_event_handler(lv_event_t *e)
@@ -524,13 +533,10 @@ static void file_list_key_cb(lv_event_t *e)
     lv_obj_t *focused = lv_group_get_focused(g);
     if (!focused) return;
 
-    const char *filename = lv_list_get_button_text(file_list, focused);
-    if (!filename) return;
-    // The top action rows aren't files.
-    if (strcmp(filename, "Download from internet") == 0) return;
-    if (strcmp(filename, "Sync all news") == 0) return;
+    size_t idx = (size_t)(intptr_t)lv_obj_get_user_data(focused);
+    if (idx >= news_files.size()) return;
 
-    show_delete_confirm(resolve_news_path(filename));
+    show_delete_confirm(resolve_news_path(news_files[idx].c_str()));
 }
 
 static void jump_to_range(size_t start, size_t end)
@@ -614,10 +620,10 @@ static void show_index_page()
 static void file_click_cb(lv_event_t *e)
 {
     lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
-    const char *filename = lv_list_get_button_text(file_list, btn);
-    if (!filename) return;
+    size_t idx = (size_t)(intptr_t)lv_obj_get_user_data(btn);
+    if (idx >= news_files.size()) return;
 
-    std::string path = resolve_news_path(filename);
+    std::string path = resolve_news_path(news_files[idx].c_str());
 
     current_file_path = path;
     current_file_size = hw_get_file_size(current_file_path.c_str());
@@ -628,25 +634,12 @@ static void file_click_cb(lv_event_t *e)
     page_offsets.clear();
     page_offsets.push_back(0);
 
-    lv_obj_t *loading_cont = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(loading_cont, 200, 120);
-    lv_obj_center(loading_cont);
-    lv_obj_set_style_bg_color(loading_cont, UI_COLOR_BG, 0);
-    lv_obj_set_style_bg_opa(loading_cont, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(loading_cont, UI_COLOR_ACCENT, 0);
-    lv_obj_set_style_border_width(loading_cont, UI_BORDER_W, 0);
-    lv_obj_set_style_radius(loading_cont, UI_RADIUS, 0);
-    lv_obj_set_flex_flow(loading_cont, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(loading_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    lv_obj_t *loading_label = lv_label_create(loading_cont);
-    lv_label_set_text(loading_label, "Loading indexes...");
-
-    lv_refr_now(NULL);
+    ui_loading_t load;
+    ui_loading_open(&load, "Loading index", "Scanning headers...");
 
     hw_get_news_headers(current_file_path.c_str(), news_headers, index_progress_cb);
     news_headers_loaded = true;
-    lv_obj_del(loading_cont);
+    ui_loading_close(&load);
 
     if (news_headers.empty()) {
         jump_to_range(0, current_file_size);
@@ -660,56 +653,38 @@ static void refresh_ui()
     if (!file_list) return;
     lv_obj_clean(file_list);
 
-    // Always offer an internet-download entry at the top.
-    {
-        lv_obj_t *dl_btn = lv_list_add_btn(file_list, LV_SYMBOL_DOWNLOAD,
-                                           "Download from internet");
-        lv_obj_add_event_cb(dl_btn, download_btn_cb, LV_EVENT_CLICKED, NULL);
-        lv_group_add_obj(lv_group_get_default(), dl_btn);
-        lv_obj_t *lbl = lv_obj_get_child(dl_btn, 1);
-        if (lbl) {
-            lv_obj_set_width(lbl, 0);
-            lv_obj_set_flex_grow(lbl, 1);
-            lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-        }
-    }
-
-    // Bulk "sync all" — fetches the index and downloads every file in
-    // one go. Takes over what the Notes Sync screen used to do.
-    {
-        lv_obj_t *sync_btn = lv_list_add_btn(file_list, LV_SYMBOL_REFRESH,
-                                             "Sync all news");
-        lv_obj_add_event_cb(sync_btn, sync_all_btn_cb, LV_EVENT_CLICKED, NULL);
-        lv_group_add_obj(lv_group_get_default(), sync_btn);
-        lv_obj_t *lbl = lv_obj_get_child(sync_btn, 1);
-        if (lbl) {
-            lv_obj_set_width(lbl, 0);
-            lv_obj_set_flex_grow(lbl, 1);
-            lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-        }
-    }
-
     if (news_files.empty()) {
-        lv_list_add_text(file_list, "No files found in /news");
+        lv_obj_t *empty = lv_label_create(file_list);
+        lv_label_set_text(empty, "No news available.\\nTap Sync to download.");
+        lv_obj_set_style_text_color(empty, UI_COLOR_MUTED, 0);
+        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(empty, LV_PCT(100));
+        lv_obj_set_style_pad_all(empty, 20, 0);
     } else {
-        for (const auto &file : news_files) {
-            lv_obj_t *btn = lv_list_add_btn(file_list, LV_SYMBOL_FILE, file.c_str());
+        for (size_t i = 0; i < news_files.size(); i++) {
+            const auto &file = news_files[i];
+            std::string label_text = format_news_date(file);
+            lv_obj_t *btn = lv_list_add_btn(file_list, LV_SYMBOL_NEW_LINE, label_text.c_str());
+            lv_obj_set_user_data(btn, (void *)(intptr_t)i);
             lv_obj_add_event_cb(btn, file_click_cb, LV_EVENT_CLICKED, NULL);
             lv_group_add_obj(lv_group_get_default(), btn);
 
             lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_ver(btn, 4, 0);
+            lv_obj_set_style_pad_hor(btn, 8, 0);
 
             lv_obj_t *icon = lv_obj_get_child(btn, 0);
             lv_obj_t *lbl = lv_obj_get_child(btn, 1);
             if (icon) {
-                lv_obj_set_width(icon, 20);
+                lv_obj_set_width(icon, 18);
                 lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
             }
             if (lbl) {
                 lv_obj_set_width(lbl, 0);
                 lv_obj_set_flex_grow(lbl, 1);
                 lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+                lv_obj_set_style_text_font(lbl, get_md_font(), 0);
             }
         }
     }
@@ -742,10 +717,26 @@ void ui_news_enter(lv_obj_t *parent)
 
     main_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_flex_flow(main_page, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(main_page, 4, 0);
+    lv_obj_set_style_pad_row(main_page, 4, 0);
+
+    lv_obj_t *sync_btn = lv_btn_create(main_page);
+    lv_obj_set_width(sync_btn, LV_PCT(100));
+    lv_obj_set_height(sync_btn, 34);
+    lv_obj_set_style_bg_color(sync_btn, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_radius(sync_btn, UI_RADIUS, 0);
+    lv_obj_add_event_cb(sync_btn, sync_all_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *sync_lbl = lv_label_create(sync_btn);
+    lv_label_set_text(sync_lbl, LV_SYMBOL_REFRESH "  Sync Latest News");
+    lv_obj_set_style_text_color(sync_lbl, UI_COLOR_FG, 0);
+    lv_obj_set_style_text_font(sync_lbl, get_md_font(), 0);
+    lv_obj_center(sync_lbl);
+    lv_group_add_obj(lv_group_get_default(), sync_btn);
 
     file_list = lv_list_create(main_page);
     lv_obj_set_width(file_list, LV_PCT(100));
     lv_obj_set_flex_grow(file_list, 1);
+    lv_obj_set_style_radius(file_list, UI_RADIUS, 0);
     lv_obj_add_event_cb(file_list, file_list_key_cb, LV_EVENT_KEY, NULL);
 
     view_page = lv_menu_page_create(menu, NULL);
@@ -854,8 +845,7 @@ void ui_news_exit(lv_obj_t *parent)
     scroll_wrapper = NULL;
     text_area = NULL;
     lbl_progress = NULL;
-    progress_popup = NULL;
-    progress_popup_lbl = NULL;
+    ui_loading_close(&s_progress);
     remote_entries.clear();
 }
 

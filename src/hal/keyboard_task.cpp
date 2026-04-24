@@ -31,6 +31,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
+#include <atomic>
 
 #include "display.h"
 #include "system.h"
@@ -59,6 +60,12 @@ uint32_t      s_last_key    = 0;
 char       s_held_char   = '\0';
 TickType_t s_press_tick  = 0;
 TickType_t s_repeat_tick = 0;
+
+// Set by hw_keyboard_drop_until_release(). While true, the reader drops
+// every incoming event and clears auto-repeat state, so a still-held Enter
+// from a screen transition doesn't re-fire on the next screen. Cleared the
+// moment we see a physical KB_RELEASED from the vendor driver.
+std::atomic<bool> s_drop_until_release{false};
 
 // Keys whose release the vendor driver swallows (handleSpecialKeys returns -1
 // on release for backspace, so no KB_RELEASED surfaces). We rely on having
@@ -98,6 +105,17 @@ void keyboard_task_fn(void *)
                 int state = instance.kb.getKey(&c);
                 if (state != KB_PRESSED && state != KB_RELEASED) {
                     break;
+                }
+                // Drop-until-release: a recent nav action (back button)
+                // asked us to ignore whatever key is still held. Suppress
+                // press events and any auto-repeat until the vendor reports
+                // KB_RELEASED, at which point we clear the flag.
+                if (s_drop_until_release.load(std::memory_order_relaxed)) {
+                    if (state == KB_RELEASED) {
+                        s_drop_until_release.store(false, std::memory_order_relaxed);
+                        s_held_char = '\0';
+                    }
+                    continue;
                 }
                 if (state == KB_PRESSED) {
                     TickType_t now = xTaskGetTickCount();
@@ -139,7 +157,8 @@ void keyboard_task_fn(void *)
         // RELEASE + PRESS pair so LVGL treats it as a fresh event. Pingkeys
         // ('\b', 0x17) never reach this path because we don't set
         // s_held_char for them above.
-        if (s_held_char != '\0') {
+        if (s_held_char != '\0' &&
+            !s_drop_until_release.load(std::memory_order_relaxed)) {
             TickType_t now       = xTaskGetTickCount();
             uint32_t   held_ms   = (now - s_press_tick)  * portTICK_PERIOD_MS;
             uint32_t   since_rep = (now - s_repeat_tick) * portTICK_PERIOD_MS;
@@ -253,14 +272,26 @@ void hw_keyboard_task_start()
     }
 }
 
+void hw_keyboard_drop_until_release()
+{
+    s_drop_until_release.store(true, std::memory_order_relaxed);
+    // Purge any already-queued events from the press that triggered this
+    // call — LVGL would otherwise drain them into the newly-focused widget.
+    if (s_event_queue) {
+        xQueueReset(s_event_queue);
+    }
+}
+
 #else  // !USING_INPUT_DEV_KEYBOARD
 
 void hw_keyboard_task_start() {}
+void hw_keyboard_drop_until_release() {}
 
 #endif  // USING_INPUT_DEV_KEYBOARD
 
 #else  // !ARDUINO
 
 void hw_keyboard_task_start() {}
+void hw_keyboard_drop_until_release() {}
 
 #endif  // ARDUINO

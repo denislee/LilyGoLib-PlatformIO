@@ -600,8 +600,14 @@ static void list_files(std::vector<FileInfo> &list, fs::FS &fs, const char *dirn
     while (file) {
         if (!file.isDirectory()) {
             String filename = file.name();
+            // Normalize to leaf name - SD returns full path, FFat returns leaf.
+            int slash = filename.lastIndexOf('/');
+            if (slash >= 0) filename = filename.substring(slash + 1);
+
             if (filename.endsWith(ext)) {
-                list.push_back({filename.c_str(), file.getLastWrite()});
+                // Skip file.getLastWrite() as it can trigger a slow f_stat lookup on some ESP32 FAT
+                // implementations. We rely on the chronological filename fallback for sorting.
+                list.push_back({filename.c_str(), 0});
                 count++;
                 if (cb) cb(count, 0, filename.c_str());
             }
@@ -710,10 +716,11 @@ static void list_entries(std::vector<HwDirEntry> &list, fs::FS &fs,
         int slash = name.lastIndexOf('/');
         if (slash >= 0) name = name.substring(slash + 1);
         if (entry.isDirectory()) {
-            dirs.push_back({std::string(name.c_str()), true, (uint32_t)entry.getLastWrite(), 0u});
+            // Skip entry.getLastWrite() as it triggers a slow f_stat lookup on FAT.
+            dirs.push_back({std::string(name.c_str()), true, 0u, 0u});
         } else {
             if (!has_filter || name.endsWith(filter_ext)) {
-                files.push_back({std::string(name.c_str()), false, (uint32_t)entry.getLastWrite(), (uint32_t)entry.size()});
+                files.push_back({std::string(name.c_str()), false, 0u, (uint32_t)entry.size()});
             }
         }
         entry.close();
