@@ -2,10 +2,11 @@
  * @file      ui_news.cpp
  * @brief     Plain-text news viewer from SD card /news directory.
  */
-#include "ui_define.h"
-#include "core/app_manager.h"
-#include "hal/storage.h"
-#include "hal/wireless.h"
+#include "../ui_define.h"
+#include "app_registry.h"
+#include "../core/app_manager.h"
+#include "../hal/storage.h"
+#include "../hal/wireless.h"
 #include <vector>
 #include <string>
 
@@ -871,7 +872,5 @@ public:
     }
 };
 
-std::shared_ptr<core::App> make_news_app() {
-    return std::make_shared<NewsApp>();
-}
+APP_FACTORY(make_news_app, NewsApp)
 } // namespace apps

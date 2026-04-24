@@ -5,9 +5,9 @@
  * @date      2026-04-10
  *
  */
-#include "ui_define.h"
-#include "hal/notes_crypto.h"
-#include "core/input_focus.h"
+#include "../ui_define.h"
+#include "../hal/notes_crypto.h"
+#include "../core/input_focus.h"
 
 using std::string;
 
@@ -361,7 +361,7 @@ void ui_text_editor_exit(lv_obj_t *parent)
     current_file_path = "";
 }
 
-#include "apps/app_registry.h"
+#include "app_registry.h"
 
 namespace {
 class TextEditorApp : public core::App {
@@ -376,7 +376,5 @@ public:
 } // namespace
 
 namespace apps {
-std::shared_ptr<core::App> make_text_editor_app() {
-    return std::make_shared<TextEditorApp>();
-}
+APP_FACTORY(make_text_editor_app, TextEditorApp)
 } // namespace apps

@@ -8,8 +8,8 @@
  * When the "Keyboard → Phone" switch is on, every keypress on the physical
  * keyboard is also forwarded as a HID keystroke.
  */
-#include "ui_define.h"
-#include "apps/app_registry.h"
+#include "../ui_define.h"
+#include "app_registry.h"
 
 namespace {
 
@@ -392,7 +392,5 @@ public:
 } // namespace
 
 namespace apps {
-std::shared_ptr<core::App> make_media_remote_app() {
-    return std::make_shared<MediaRemoteApp>();
-}
+APP_FACTORY(make_media_remote_app, MediaRemoteApp)
 } // namespace apps

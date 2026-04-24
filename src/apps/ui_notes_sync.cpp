@@ -21,16 +21,16 @@
  * The news-index download (denislee.github.io/hn) lives on the News app
  * itself — this sync only touches notes.
  */
-#include "ui_define.h"
-#include "hal/storage.h"
-#include "hal/system.h"
-#include "hal/wireless.h"
-#include "hal/notes_crypto.h"
-#include "hal/secrets.h"
-#include "core/app.h"
-#include "core/app_manager.h"
-#include "core/system.h"
-#include "apps/app_registry.h"
+#include "../ui_define.h"
+#include "../hal/storage.h"
+#include "../hal/system.h"
+#include "../hal/wireless.h"
+#include "../hal/notes_crypto.h"
+#include "../hal/secrets.h"
+#include "../core/app.h"
+#include "../core/app_manager.h"
+#include "../core/system.h"
+#include "app_registry.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -677,9 +677,7 @@ public:
 
 namespace apps {
 
-std::shared_ptr<core::App> make_notes_sync_app() {
-    return std::make_shared<NotesSyncApp>();
-}
+APP_FACTORY(make_notes_sync_app, NotesSyncApp)
 
 // Called once at startup by register_all(). Drops the legacy plaintext
 // NVS slot so an older install that persisted the PAT unencrypted isn't

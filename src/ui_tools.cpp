@@ -585,24 +585,61 @@ LV_FONT_DECLARE(font_jbmono_16);
 LV_FONT_DECLARE(font_jbmono_20);
 LV_FONT_DECLARE(font_jbmono_24);
 
+// Installed fonts (Courier, Atkinson, JetBrains, Inter) were converted with
+// only ASCII / Latin-1 ranges, so LVGL symbol glyphs — LV_SYMBOL_* live in
+// the 0xF000-0xF8FF private-use area — render as empty boxes when those
+// faces are selected. Montserrat is generated with FontAwesome alongside
+// ASCII, so we copy each installed font into a mutable slot and point
+// .fallback at the matching Montserrat size. LVGL walks the fallback chain
+// for any codepoint the base face lacks, which lets icons render at the
+// right size regardless of the user's font choice.
+static lv_font_t s_courier_16_ic, s_courier_20_ic, s_courier_24_ic;
+static lv_font_t s_atkinson_14_ic, s_atkinson_16_ic, s_atkinson_18_ic, s_atkinson_20_ic;
+static lv_font_t s_jbmono_16_ic, s_jbmono_20_ic, s_jbmono_24_ic;
+static lv_font_t s_inter_14_ic, s_inter_16_ic, s_inter_18_ic, s_inter_20_ic;
+static bool s_icon_fallback_ready = false;
+
+static void init_icon_fallback_fonts()
+{
+    if (s_icon_fallback_ready) return;
+    s_courier_16_ic  = ui_font_courier_16; s_courier_16_ic.fallback  = &lv_font_montserrat_16;
+    s_courier_20_ic  = ui_font_courier_20; s_courier_20_ic.fallback  = &lv_font_montserrat_20;
+    s_courier_24_ic  = ui_font_courier_24; s_courier_24_ic.fallback  = &lv_font_montserrat_24;
+    s_atkinson_14_ic = font_atkinson_14;   s_atkinson_14_ic.fallback = &lv_font_montserrat_14;
+    s_atkinson_16_ic = font_atkinson_16;   s_atkinson_16_ic.fallback = &lv_font_montserrat_16;
+    s_atkinson_18_ic = font_atkinson_18;   s_atkinson_18_ic.fallback = &lv_font_montserrat_18;
+    s_atkinson_20_ic = font_atkinson_20;   s_atkinson_20_ic.fallback = &lv_font_montserrat_20;
+    s_jbmono_16_ic   = font_jbmono_16;     s_jbmono_16_ic.fallback   = &lv_font_montserrat_16;
+    s_jbmono_20_ic   = font_jbmono_20;     s_jbmono_20_ic.fallback   = &lv_font_montserrat_20;
+    s_jbmono_24_ic   = font_jbmono_24;     s_jbmono_24_ic.fallback   = &lv_font_montserrat_24;
+    s_inter_14_ic    = font_inter_14;      s_inter_14_ic.fallback    = &lv_font_montserrat_14;
+    s_inter_16_ic    = font_inter_16;      s_inter_16_ic.fallback    = &lv_font_montserrat_16;
+    s_inter_18_ic    = font_inter_18;      s_inter_18_ic.fallback    = &lv_font_montserrat_18;
+    s_inter_20_ic    = font_inter_20;      s_inter_20_ic.fallback    = &lv_font_montserrat_20;
+    s_icon_fallback_ready = true;
+}
+
 // Inter-with-emoji-fallback variants used only by the Telegram app. The
-// base Inter fonts are const and shared across other apps, so we keep a
-// mutable copy per size here with .fallback set to the emoji font. 14/16
-// fall back to emoji_16; 18/20 fall back to emoji_20 to keep line heights
-// roughly aligned.
+// chain is Inter -> emoji -> Montserrat so chat messages render glyphs,
+// color emoji, AND LVGL icons. 14/16 fall back to emoji_16; 18/20 fall
+// back to emoji_20 to keep line heights roughly aligned.
 static lv_font_t s_inter_emoji_14;
 static lv_font_t s_inter_emoji_16;
 static lv_font_t s_inter_emoji_18;
 static lv_font_t s_inter_emoji_20;
+static lv_font_t s_emoji_16_ic;
+static lv_font_t s_emoji_20_ic;
 static bool s_inter_emoji_ready = false;
 
 static void init_inter_emoji_fonts()
 {
     if (s_inter_emoji_ready) return;
-    s_inter_emoji_14 = font_inter_14; s_inter_emoji_14.fallback = &font_emoji_16;
-    s_inter_emoji_16 = font_inter_16; s_inter_emoji_16.fallback = &font_emoji_16;
-    s_inter_emoji_18 = font_inter_18; s_inter_emoji_18.fallback = &font_emoji_20;
-    s_inter_emoji_20 = font_inter_20; s_inter_emoji_20.fallback = &font_emoji_20;
+    s_emoji_16_ic = font_emoji_16; s_emoji_16_ic.fallback = &lv_font_montserrat_16;
+    s_emoji_20_ic = font_emoji_20; s_emoji_20_ic.fallback = &lv_font_montserrat_20;
+    s_inter_emoji_14 = font_inter_14; s_inter_emoji_14.fallback = &s_emoji_16_ic;
+    s_inter_emoji_16 = font_inter_16; s_inter_emoji_16.fallback = &s_emoji_16_ic;
+    s_inter_emoji_18 = font_inter_18; s_inter_emoji_18.fallback = &s_emoji_20_ic;
+    s_inter_emoji_20 = font_inter_20; s_inter_emoji_20.fallback = &s_emoji_20_ic;
     s_inter_emoji_ready = true;
 }
 
@@ -612,27 +649,28 @@ static const lv_font_t *pick_font(uint8_t idx, uint8_t size)
 {
     if (idx == 1) return &lv_font_unscii_8;
     if (idx == 2) return &lv_font_unscii_16;
+    if (idx >= 3 && idx <= 6) init_icon_fallback_fonts();
     if (idx == 3) {
-        if (size <= 16) return &ui_font_courier_16;
-        if (size <= 20) return &ui_font_courier_20;
-        return &ui_font_courier_24;
+        if (size <= 16) return &s_courier_16_ic;
+        if (size <= 20) return &s_courier_20_ic;
+        return &s_courier_24_ic;
     }
     if (idx == 4) {
-        if (size <= 14) return &font_inter_14;
-        if (size <= 16) return &font_inter_16;
-        if (size <= 18) return &font_inter_18;
-        return &font_inter_20;
+        if (size <= 14) return &s_inter_14_ic;
+        if (size <= 16) return &s_inter_16_ic;
+        if (size <= 18) return &s_inter_18_ic;
+        return &s_inter_20_ic;
     }
     if (idx == 5) {
-        if (size <= 14) return &font_atkinson_14;
-        if (size <= 16) return &font_atkinson_16;
-        if (size <= 18) return &font_atkinson_18;
-        return &font_atkinson_20;
+        if (size <= 14) return &s_atkinson_14_ic;
+        if (size <= 16) return &s_atkinson_16_ic;
+        if (size <= 18) return &s_atkinson_18_ic;
+        return &s_atkinson_20_ic;
     }
     if (idx == 6) {
-        if (size <= 16) return &font_jbmono_16;
-        if (size <= 20) return &font_jbmono_20;
-        return &font_jbmono_24;
+        if (size <= 16) return &s_jbmono_16_ic;
+        if (size <= 20) return &s_jbmono_20_ic;
+        return &s_jbmono_24_ic;
     }
     // Default to Montserrat
     switch (size) {

@@ -15,6 +15,12 @@
 #include <utility>
 #include <vector>
 
+// Expand inside an existing `namespace apps { ... }` block. Replaces the
+// boilerplate `std::shared_ptr<core::App> make_X_app() { return std::make_shared<XApp>(); }`
+// trailer every ui_*.cpp used to carry.
+#define APP_FACTORY(fn, cls) \
+    std::shared_ptr<core::App> fn() { return std::make_shared<cls>(); }
+
 namespace apps {
 
 std::shared_ptr<core::App> make_text_editor_app();

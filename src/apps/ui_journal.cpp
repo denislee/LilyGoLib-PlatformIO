@@ -2,9 +2,10 @@
  * @file      ui_journal.cpp
  * @brief     Chronological view of internal files with timestamps in blog style.
  */
-#include "ui_define.h"
-#include "core/app_manager.h"
-#include "hal/notes_crypto.h"
+#include "../ui_define.h"
+#include "app_registry.h"
+#include "../core/app_manager.h"
+#include "../hal/notes_crypto.h"
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -866,7 +867,5 @@ public:
     }
 };
 
-std::shared_ptr<core::App> make_journal_app() {
-    return std::make_shared<JournalApp>();
-}
+APP_FACTORY(make_journal_app, JournalApp)
 } // namespace apps

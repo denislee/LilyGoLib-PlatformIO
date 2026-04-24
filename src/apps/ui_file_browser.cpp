@@ -3,11 +3,12 @@
  * @brief     File browser with source selection, extension filter,
  *            and folder listing.
  */
-#include "ui_define.h"
-#include "core/app_manager.h"
-#include "hal/system.h"
-#include "hal/storage.h"
-#include "hal/notes_crypto.h"
+#include "../ui_define.h"
+#include "app_registry.h"
+#include "../core/app_manager.h"
+#include "../hal/system.h"
+#include "../hal/storage.h"
+#include "../hal/notes_crypto.h"
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -585,7 +586,5 @@ public:
     }
 };
 
-std::shared_ptr<core::App> make_file_browser_app() {
-    return std::make_shared<FileBrowserApp>();
-}
+APP_FACTORY(make_file_browser_app, FileBrowserApp)
 } // namespace apps

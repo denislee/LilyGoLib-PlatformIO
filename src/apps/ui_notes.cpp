@@ -5,10 +5,10 @@
  *            grid. Keeps the home screen compact and groups journal browsing
  *            next to note creation where users go looking for it.
  */
-#include "ui_define.h"
-#include "core/app_manager.h"
-#include "core/system.h"
-#include "apps/app_registry.h"
+#include "../ui_define.h"
+#include "../core/app_manager.h"
+#include "../core/system.h"
+#include "app_registry.h"
 
 namespace {
 
@@ -150,7 +150,5 @@ public:
 } // namespace
 
 namespace apps {
-std::shared_ptr<core::App> make_notes_menu_app() {
-    return std::make_shared<NotesMenuApp>();
-}
+APP_FACTORY(make_notes_menu_app, NotesMenuApp)
 } // namespace apps

@@ -3,12 +3,13 @@
  * @brief     Audio "mental notes" app — record voice memos to SD, play them
  *            back, delete. All files live in /mental_notes/ on the SD card.
  */
-#include "ui_define.h"
-#include "core/app_manager.h"
-#include "core/spi_lock.h"
-#include "hal/system.h"
-#include "hal/storage.h"
-#include "hal/audio.h"
+#include "../ui_define.h"
+#include "app_registry.h"
+#include "../core/app_manager.h"
+#include "../core/spi_lock.h"
+#include "../hal/system.h"
+#include "../hal/storage.h"
+#include "../hal/audio.h"
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -643,7 +644,5 @@ public:
     }
 };
 
-std::shared_ptr<core::App> make_audio_notes_app() {
-    return std::make_shared<AudioNotesApp>();
-}
+APP_FACTORY(make_audio_notes_app, AudioNotesApp)
 } // namespace apps

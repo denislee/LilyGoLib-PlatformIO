@@ -17,16 +17,16 @@
  * the glyph. The Inter font (idx 4) covers Latin-1 (á, é, ã, ç, …) — it's
  * the default for Telegram so Portuguese messages render out of the box.
  */
-#include "ui_define.h"
-#include "hal/wireless.h"
-#include "hal/system.h"
-#include "hal/notes_crypto.h"
-#include "hal/secrets.h"
-#include "core/app.h"
-#include "core/app_manager.h"
-#include "core/system.h"
-#include "core/input_focus.h"
-#include "apps/app_registry.h"
+#include "../ui_define.h"
+#include "../hal/wireless.h"
+#include "../hal/system.h"
+#include "../hal/notes_crypto.h"
+#include "../hal/secrets.h"
+#include "../core/app.h"
+#include "../core/app_manager.h"
+#include "../core/system.h"
+#include "../core/input_focus.h"
+#include "app_registry.h"
 #include <memory>
 #include <set>
 #include <string>
@@ -1213,9 +1213,7 @@ static void tg_bg_tick(lv_timer_t *t)
 } // namespace
 
 namespace apps {
-std::shared_ptr<core::App> make_telegram_app() {
-    return std::make_shared<TelegramApp>();
-}
+APP_FACTORY(make_telegram_app, TelegramApp)
 
 int tg_get_unread_count() { return s_unread_total; }
 

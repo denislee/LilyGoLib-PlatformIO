@@ -5,7 +5,7 @@
  * @date      2026-04-10
  *
  */
-#include "ui_define.h"
+#include "../ui_define.h"
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -387,7 +387,7 @@ void ui_tasks_exit(lv_obj_t *parent) {
     tasks.clear();
 }
 
-#include "apps/app_registry.h"
+#include "app_registry.h"
 
 namespace {
 class TasksApp : public core::App {
@@ -402,8 +402,6 @@ public:
 } // namespace
 
 namespace apps {
-std::shared_ptr<core::App> make_tasks_app() {
-    return std::make_shared<TasksApp>();
-}
+APP_FACTORY(make_tasks_app, TasksApp)
 } // namespace apps
 

@@ -27,11 +27,11 @@
  * and a leaked Montserrat-10 font on the panel would shrink every label in
  * the next app that inherits from it.
  */
-#include "ui_define.h"
-#include "hal/wireless.h"
-#include "hal/system.h"
-#include "core/app_manager.h"
-#include "apps/app_registry.h"
+#include "../ui_define.h"
+#include "../hal/wireless.h"
+#include "../hal/system.h"
+#include "../core/app_manager.h"
+#include "app_registry.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -867,9 +867,7 @@ public:
 } // namespace
 
 namespace apps {
-std::shared_ptr<core::App> make_weather_app() {
-    return std::make_shared<WeatherApp>();
-}
+APP_FACTORY(make_weather_app, WeatherApp)
 } // namespace apps
 
 // Settings-facing helpers for the user-chosen weather city. Defined in this
