@@ -32,6 +32,12 @@ void hw_wifi_get_saved_list(std::vector<std::string> &ssids);
 void hw_wifi_add_saved(const std::string &ssid, const std::string &password);
 void hw_wifi_forget();  // drop every saved network
 
+// Kick off a connection to the most recent saved credential. No-op if WiFi is
+// already connected or no credential is stored. Needed at boot because
+// setAutoReconnect(false) is in effect, so WiFi.mode(WIFI_STA) alone won't
+// restore the prior session — we have to drive WiFi.begin() ourselves.
+void hw_wifi_reconnect_saved();
+
 // --- HTTP (blocking; require an active WiFi connection) ---
 // GET the URL and append the body to `out`. Returns true on 2xx response.
 // `error` (optional) receives a short diagnostic on failure.

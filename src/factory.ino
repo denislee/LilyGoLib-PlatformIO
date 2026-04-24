@@ -16,6 +16,13 @@
 #include "event_define.h"
 #include "core/system_hooks.h"
 
+#include <string>
+
+std::string timezone_get_user_tz();
+bool timezone_fetch_offset(const char *tz, int &raw_offset_sec, int &dst_offset_sec, std::string &err);
+
+
+
 /* Defined in ui_lock.cpp — shows the unlock modal if crypto is enabled and
  * the session is locked. No-op otherwise. */
 void ui_device_lock_enforce();
@@ -76,20 +83,19 @@ void setup()
 
     beginLvglHelper(instance);
 
+    // Arm the SNTP and WiFi event callbacks BEFORE hw_init() — hw_init() calls
+    // hw_set_wifi_enable() which in turn fires WiFi.begin() from saved
+    // credentials. Registering the notification callback after WiFi.begin()
+    // races the first DHCP/GOT_IP event and can miss the sync that kicks off
+    // on cold boot, leaving the clock stuck at 1970.
+    sntp_set_time_sync_notification_cb(time_available);
+    WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
+    WiFi.setAutoReconnect(false);
+
     hw_init();
 
     apps::register_all();
     core::System::getInstance().init();
-
-    // Defer WiFi init until after GUI is showing
-    sntp_set_time_sync_notification_cb(time_available);
-    if (hw_get_wifi_enable()) {
-        WiFi.mode(WIFI_STA);
-    } else {
-        WiFi.mode(WIFI_OFF);
-    }
-    WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
-    WiFi.setAutoReconnect(false);
 
     // Passphrase-protected notes: if the session is locked, put an unlock
     // modal on top of the UI before rendering starts. The modal has no cancel
@@ -108,22 +114,33 @@ void setup()
 
 void loop()
 {
-    // Poll-based NTP trigger: the first time WiFi comes up in this boot
-    // session, start a fresh sync. Polling rather than reacting to the
-    // WiFi event handler is more robust — GOT_IP can fire on a FreeRTOS
-    // task before time_available's callback is ready, or miss altogether
-    // if SNTP is already in COMPLETED state from a previous session.
-    // hw_start_time_sync_ntp() runs sntp_stop() + configTime() to force a
-    // fresh sync cycle whose completion fires time_available().
-    static bool boot_ntp_sync_done = false;
-    static uint32_t last_wifi_check_ms = 0;
-    if (!boot_ntp_sync_done && millis() - last_wifi_check_ms > 2000) {
-        last_wifi_check_ms = millis();
-        if (hw_get_wifi_connected()) {
-            Serial.println("WiFi up — triggering first-boot NTP sync");
-            if (hw_start_time_sync_ntp()) {
-                boot_ntp_sync_done = true;
+    // Poll-based NTP driver: keep re-triggering configTime() while WiFi is
+    // up and the clock has not actually synced yet. A single trigger is not
+    // enough — lwIP's SNTP will retry on its own, but on a cold boot the
+    // first DNS lookup or UDP round-trip often drops (AP still handshaking,
+    // DHCP lease just arrived, etc.) and we want to force a fresh cycle
+    // until the time_available() callback fires. Re-triggers every 30 s so
+    // we don't thrash the tcpip task or the NTP pool.
+    static uint32_t last_ntp_attempt_ms = 0;
+    if (hw_get_time_sync_status() == 0 && hw_get_wifi_connected()) {
+        uint32_t now = millis();
+        if (last_ntp_attempt_ms == 0 || now - last_ntp_attempt_ms > 30000) {
+            Serial.println("Triggering NTP sync");
+            std::string tz = timezone_get_user_tz();
+            int offset_sec = 0;
+            if (!tz.empty()) {
+                int raw = 0, dst = 0;
+                std::string err;
+                if (timezone_fetch_offset(tz.c_str(), raw, dst, err)) {
+                    offset_sec = raw + dst;
+                    hw_start_time_sync_ntp(offset_sec);
+                } else {
+                    hw_start_time_sync_ntp();
+                }
+            } else {
+                hw_start_time_sync_ntp();
             }
+            last_ntp_attempt_ms = now;
         }
     }
 

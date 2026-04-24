@@ -117,14 +117,21 @@ void hw_set_wifi_enable(bool en) {
 #ifdef ARDUINO
     if (en) {
         WiFi.mode(WIFI_STA);
-        // Auto-reconnect using the last successful credentials.
-        std::string s, pw;
-        if (!WiFi.isConnected() && wifi_load_saved(s, pw)) {
-            WiFi.begin(s.c_str(), pw.c_str());
-        }
+        hw_wifi_reconnect_saved();
     } else {
         WiFi.disconnect(true);
         WiFi.mode(WIFI_OFF);
+    }
+#endif
+}
+
+void hw_wifi_reconnect_saved()
+{
+#ifdef ARDUINO
+    if (WiFi.isConnected()) return;
+    std::string s, pw;
+    if (wifi_load_saved(s, pw)) {
+        WiFi.begin(s.c_str(), pw.c_str());
     }
 #endif
 }
