@@ -3,13 +3,15 @@
  * @brief     System init, settings persistence, device info, sleep/shutdown,
  *            date/time, feedback, and the shared HAL state definitions.
  */
-#include "../hal_interface.h"   // umbrella: pulls all hal/ headers and `using std::string`.
+#include "../hal_interface.h"
 #include "internal.h"
 #include "notes_crypto.h"
 #include "keyboard_task.h"
 
 #include <cstring>
 #include <lvgl.h>
+
+using std::string;
 
 
 #define NVS_NAME    "pager"
@@ -157,10 +159,6 @@ static const char *hw_devices[] = {
 #endif
 
 };
-
-
-extern void hw_nrf24_begin();
-extern void hw_radio_begin();
 
 
 #ifndef ARDUINO

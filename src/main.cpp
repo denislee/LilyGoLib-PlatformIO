@@ -24,8 +24,7 @@
 #include "core/system_hooks.h"
 #include "apps/app_registry.h"
 
-extern void hw_init();
-
+// hw_init() is declared in hal/system.h (reachable via hal_interface.h).
 // instanceLockTake/Give come from core/instance_lock.cpp — compiled as no-ops
 // when !ARDUINO so this TU no longer needs to define them.
 

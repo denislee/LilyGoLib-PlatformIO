@@ -8,6 +8,8 @@
  */
 #include "ui_define.h"
 
+using std::string;
+
 static lv_obj_t *msgbox = NULL;
 
 static void msgbox_event(lv_event_t *e)

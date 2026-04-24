@@ -25,9 +25,8 @@
 #include "hal/peripherals.h"
 #include "hal/board_config.h"
 
-// Back-compat: previous revisions of this header exposed `string`/`vector`
-// unqualified. Keep the using-directives here so existing .cpp files that
-// include hal_interface.h compile unchanged. New code should include the
-// specific hal/ sub-header and use std::-qualified names.
-using std::string;
-using std::vector;
+// This umbrella header used to expose `using std::string;` and
+// `using std::vector;` for back-compat. Those leaked into every consumer
+// and made namespace hygiene impossible. New code must use std::-qualified
+// names; .cpp files that still rely on unqualified `string`/`vector` should
+// add file-local `using std::string;` after their includes.

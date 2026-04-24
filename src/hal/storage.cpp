@@ -126,6 +126,8 @@ void hw_mount_sd()
 
 static bool filesystem_dirty = false;
 
+// Vendor hooks from lib/LilyGoLib/src/USB_MSC.cpp — no header is exposed
+// upstream, so we declare them here rather than reaching into the lib/.
 extern bool is_usb_msc_reading();
 extern bool is_usb_msc_writing();
 extern bool is_usb_msc_mounted();

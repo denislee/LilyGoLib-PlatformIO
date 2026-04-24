@@ -9,6 +9,8 @@
 #include "hal/notes_crypto.h"
 #include "core/input_focus.h"
 
+using std::string;
+
 LV_FONT_DECLARE(lv_font_montserrat_12);
 
 static lv_obj_t *menu = NULL;

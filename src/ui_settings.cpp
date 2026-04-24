@@ -14,6 +14,9 @@
 #include "ui_list_picker.h"
 #include <vector>
 
+using std::string;
+using std::vector;
+
 // Defined in ui_weather.cpp — read/write the user-chosen city used by the
 // weather app. Empty city means "use IP-based auto location".
 std::string weather_get_user_city();
