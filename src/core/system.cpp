@@ -6,8 +6,8 @@
  */
 #include "system.h"
 #include "input_focus.h"
+#include "notify.h"
 #include "../ui_define.h"
-#include "../hal/keyboard_task.h"
 
 #include "../apps/menu_app.h"
 
@@ -31,10 +31,14 @@ System& System::getInstance() {
 
 void System::init() {
     setupGlobalUI();
-    
+
+    // Render banners for notify::post() calls from any task. Installed here
+    // so the renderer exists before the first app can fire a notification.
+    notify::install_default_renderer();
+
     // Register the MainMenu app
     AppManager::getInstance().registerApp(std::make_shared<apps::MenuApp>());
-    
+
     // Start with the menu
     AppManager::getInstance().switchApp("MainMenu", _menuPanel);
     showMenu();
@@ -390,6 +394,10 @@ bool System::isInMenu() const {
 
 void System::loop() {
     AppManager::getInstance().update();
+    // Drain pending notifications on the LVGL thread. `post()` is safe to
+    // call from any task; actual banner creation has to happen here so it
+    // runs under the instance lock held by the LVGL task.
+    notify::pump();
 }
 
 // Drop every event callback currently registered on the status-bar back
@@ -414,23 +422,18 @@ static void clear_back_button_events(lv_obj_t *btn) {
     }
 }
 
-// CLICKED on the back button typically tears down the current app and shows
-// a new screen synchronously. If the triggering key (Enter on the keypad, or
-// the SDL keydown repeat in the emulator) is still asserted when the next
-// screen comes up, the indev immediately re-fires on whatever is now focused,
-// looking like the Enter key "keeps repeating".
-//
-// lv_indev_wait_release only absorbs one press/release cycle — that's enough
-// for SDL keyboard repeat on the emulator. Not enough on the physical pager:
-// our keyboard_task synthesizes RELEASE+PRESS pairs every 90 ms while a key
-// is held past 500 ms, so the next synthesized PRESS lands on whatever is
-// now focused on the new screen. Telling the keyboard task to drop all
-// events until the user physically releases Enter stops that cascade at the
-// source.
+// CLICKED on the back button tears down the current app and shows a new screen
+// synchronously. If the triggering Enter is still asserted when the next screen
+// comes up, the indev could re-fire on whatever is now focused. Enter no longer
+// auto-repeats (see keyboard_task.cpp), so the vendor emits at most one PRESS
+// per physical tap — one wait_release cycle on the indev is enough to absorb
+// the stale press/release. The old drop-until-release hook was racy (the first
+// press on the new screen could arrive in the same poll burst as the release
+// that clears the flag, swallowing the user's intended click) and is no longer
+// needed.
 static void back_btn_wait_release_cb(lv_event_t *e) {
     lv_indev_t *indev = lv_indev_get_act();
     if (indev) lv_indev_wait_release(indev);
-    hw_keyboard_drop_until_release();
 }
 
 lv_obj_t* System::showBackButton(lv_event_cb_t cb) {

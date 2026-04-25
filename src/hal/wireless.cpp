@@ -410,8 +410,8 @@ static bool http_open(HttpClients &c, const char *url, std::string *error)
     }
     c.secure.setInsecure();  // GitHub Pages — we don't ship a root CA bundle.
     c.http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    c.http.setTimeout(3000);
-    c.http.setConnectTimeout(3000);
+    c.http.setTimeout(5000);
+    c.http.setConnectTimeout(5000);
     c.http.setUserAgent("LilyGoLib/1.0");
 
     bool ok;
@@ -503,8 +503,8 @@ bool hw_http_request(const char *url,
     HttpClients c;
     c.secure.setInsecure();
     c.http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    c.http.setTimeout(3000);
-    c.http.setConnectTimeout(3000);
+    c.http.setTimeout(5000);
+    c.http.setConnectTimeout(5000);
     c.http.setUserAgent("LilyGoLib/1.0");
 
     String u = url;

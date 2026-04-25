@@ -70,7 +70,6 @@ bool isinMenu()
 void menu_show()
 {
     core::System::getInstance().showMenu();
-    hw_feedback();
 }
 
 void menu_hidden()

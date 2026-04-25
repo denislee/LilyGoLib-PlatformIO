@@ -41,6 +41,7 @@ struct HomeItem {
     const char* appName;
     lv_palette_t palette;
     BadgeFn badge_fn;
+    bool requires_wifi;
 };
 
 // Order groups apps by what the user is doing:
@@ -54,12 +55,12 @@ struct HomeItem {
 // LIGHT_BLUE (messaging), Weather CYAN (sky), News INDIGO (reading, distinct
 // from Telegram's blue).
 static const HomeItem kItems[] = {
-    {"Notes",    LV_SYMBOL_EDIT,      "Notes",    LV_PALETTE_AMBER,       nullptr},
-    {"Tasks",    LV_SYMBOL_OK,        "Tasks",    LV_PALETTE_GREEN,       nullptr},
-    {"Recorder", LV_SYMBOL_AUDIO,     "Recorder", LV_PALETTE_PURPLE,      nullptr},
-    {"Telegram", LV_SYMBOL_ENVELOPE,  "Telegram", LV_PALETTE_LIGHT_BLUE,  tg_get_unread_count},
-    {"Weather",  LV_SYMBOL_TINT,      "Weather",  LV_PALETTE_CYAN,        nullptr},
-    {"News",     LV_SYMBOL_LIST,      "News",     LV_PALETTE_INDIGO,      nullptr},
+    {"Notes",    LV_SYMBOL_EDIT,      "Editor",   LV_PALETTE_AMBER,       nullptr,              false},
+    {"Tasks",    LV_SYMBOL_OK,        "Tasks",    LV_PALETTE_GREEN,       nullptr,              false},
+    {"Recorder", LV_SYMBOL_AUDIO,     "Recorder", LV_PALETTE_PURPLE,      nullptr,              false},
+    {"Telegram", LV_SYMBOL_ENVELOPE,  "Telegram", LV_PALETTE_LIGHT_BLUE,  tg_get_unread_count,  true },
+    {"Weather",  LV_SYMBOL_TINT,      "Weather",  LV_PALETTE_CYAN,        nullptr,              false},
+    {"News",     LV_SYMBOL_LIST,      "News",     LV_PALETTE_INDIGO,      nullptr,              false},
 };
 constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
 
@@ -68,6 +69,17 @@ constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
 static std::vector<lv_obj_t*> s_badge_labels;
 static std::vector<BadgeFn>   s_badge_fns;
 static lv_timer_t* s_badge_timer = nullptr;
+
+// Tiles whose backing app needs an active WiFi connection — greyed out and
+// click-blocked when WiFi is off or not connected. Tracked separately from
+// the full tile list so the live tick only touches the ones that change.
+struct WifiGatedTile {
+    lv_obj_t* tile;
+    lv_obj_t* icon;
+    lv_color_t accent;
+};
+static std::vector<WifiGatedTile> s_wifi_gated;
+static int s_wifi_gated_last_state = -1;  // -1 = not yet applied
 
 static void format_badge_text(int n, char *buf, size_t cap) {
     if (n > 99) snprintf(buf, cap, "99+");
@@ -226,11 +238,52 @@ static void set_media_buttons_visible(bool show) {
     s_media_last_visible = show;
 }
 
+static void apply_wifi_gated_state(bool connected) {
+    lv_group_t* grp = lv_group_get_default();
+    bool needs_focus_advance = false;
+
+    for (const WifiGatedTile& w : s_wifi_gated) {
+        if (!w.tile || !w.icon) continue;
+        if (connected) {
+            lv_obj_remove_state(w.tile, LV_STATE_DISABLED);
+            lv_obj_set_style_border_color(w.tile, w.accent, 0);
+            lv_obj_set_style_border_opa(w.tile, LV_OPA_40, 0);
+            lv_obj_set_style_text_color(w.icon, w.accent, 0);
+            lv_obj_set_style_opa(w.tile, LV_OPA_COVER, 0);
+        } else {
+            // LV_STATE_DISABLED makes lv_group_focus_next/prev skip the tile,
+            // so the encoder/keyboard nav jumps straight over it.
+            lv_obj_add_state(w.tile, LV_STATE_DISABLED);
+            lv_obj_set_style_border_color(w.tile, UI_COLOR_MUTED, 0);
+            lv_obj_set_style_border_opa(w.tile, LV_OPA_30, 0);
+            lv_obj_set_style_text_color(w.icon, UI_COLOR_MUTED, 0);
+            // Dim the whole tile (including label) so the disabled state reads
+            // at a glance even when not focused.
+            lv_obj_set_style_opa(w.tile, LV_OPA_60, 0);
+            // If this tile is currently focused (user toggled WiFi off while
+            // sitting on it), nudge focus forward — otherwise the encoder
+            // would still register a click on a now-inert tile.
+            if (grp && lv_group_get_focused(grp) == w.tile) {
+                needs_focus_advance = true;
+            }
+        }
+    }
+
+    if (needs_focus_advance && grp) lv_group_focus_next(grp);
+}
+
 static void media_visibility_tick(lv_timer_t* t) {
     (void)t;
     bool now = media_controls_should_show();
     if (now != s_media_last_visible) {
         set_media_buttons_visible(now);
+    }
+    // Re-evaluate WiFi-gated tiles on the same tick — cheap, and the user
+    // can flip the WiFi pill without leaving the menu.
+    int wifi_now = hw_get_wifi_connected() ? 1 : 0;
+    if (wifi_now != s_wifi_gated_last_state) {
+        apply_wifi_gated_state(wifi_now != 0);
+        s_wifi_gated_last_state = wifi_now;
     }
 }
 
@@ -283,6 +336,13 @@ void tile_click_cb(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     const HomeItem* item = (const HomeItem*)lv_event_get_user_data(e);
     if (!item || !item->appName) return;
+    // WiFi-gated tiles (e.g. Telegram) are inert when WiFi is disconnected —
+    // click haptic only, no app switch. The greyed-out visual already
+    // signals the disabled state, so a popup would just be noise.
+    if (item->requires_wifi && !hw_get_wifi_connected()) {
+        hw_feedback();
+        return;
+    }
     hw_feedback();
     core::System::getInstance().hideMenu();
     core::AppManager::getInstance().switchApp(item->appName,
@@ -307,6 +367,8 @@ void MenuApp::onStop() {
     s_volume_btn = nullptr;
     s_volume_icon = nullptr;
     s_media_last_visible = false;
+    s_wifi_gated.clear();
+    s_wifi_gated_last_state = -1;
     core::App::onStop();
 }
 
@@ -332,6 +394,8 @@ void MenuApp::onStart(lv_obj_t* parent) {
     s_volume_btn = nullptr;
     s_volume_icon = nullptr;
     s_media_last_visible = false;
+    s_wifi_gated.clear();
+    s_wifi_gated_last_state = -1;
     if (s_media_visibility_timer) {
         lv_timer_del(s_media_visibility_timer);
         s_media_visibility_timer = nullptr;
@@ -543,6 +607,10 @@ void MenuApp::onStart(lv_obj_t* parent) {
                             (void*)&item);
         if (grp) lv_group_add_obj(grp, tile);
 
+        if (item.requires_wifi) {
+            s_wifi_gated.push_back({tile, icon, accent});
+        }
+
         // Tiles with a badge_fn get a small red pill in the top-right
         // corner, hidden by default and toggled on by update_badges().
         if (item.badge_fn) {
@@ -576,9 +644,19 @@ void MenuApp::onStart(lv_obj_t* parent) {
         s_badge_timer = lv_timer_create(update_badges, 2000, nullptr);
     }
 
+    // Apply the disabled visual to wifi-gated tiles up front so the very
+    // first frame already reflects the connection state — otherwise the
+    // tile flashes its accent color until the 1 s tick fires.
+    if (!s_wifi_gated.empty()) {
+        bool connected = hw_get_wifi_connected();
+        apply_wifi_gated_state(connected);
+        s_wifi_gated_last_state = connected ? 1 : 0;
+    }
+
     // Poll BLE pairing state so media buttons appear/disappear while the
-    // menu is open (user connects from their phone without leaving home).
-    if (!s_media_buttons.empty()) {
+    // menu is open (user connects from their phone without leaving home),
+    // and re-evaluate WiFi-gated tiles on the same tick.
+    if (!s_media_buttons.empty() || !s_wifi_gated.empty()) {
         s_media_visibility_timer =
             lv_timer_create(media_visibility_tick, 1000, nullptr);
     }

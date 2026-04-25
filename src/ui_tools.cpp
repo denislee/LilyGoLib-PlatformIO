@@ -854,19 +854,19 @@ void enable_input_devices()
     }
 }
 
-// Tracks whether the I2C keyboard has been brought up. Re-running
-// hw_enable_keyboard() without an intervening disable re-runs kb.begin() and
-// re-attaches the ISR, which hangs on the TCA8418 — this flag keeps the
-// enable/disable pair idempotent across asymmetric call sites (e.g. fresh
-// boot → Settings, where the menu enabled it but MenuApp::onStop never ran
-// the disable side).
+// App-level keyboard toggling now only attaches/detaches the LVGL input
+// device — the I2C keyboard hardware itself is initialized once at boot
+// (via instance.begin()) and re-initialized only on sleep/wake through
+// hw_power_up_all(). Re-running initKeyboard() on every app transition
+// caused a brief backlight flash on home entry (the vendor init applies a
+// non-zero default before our user-configured brightness is restored), and
+// also risked re-attaching the TCA8418 ISR which can hang the chip.
 static bool s_keyboard_enabled = false;
 
 void disable_keyboard()
 {
     if (!s_keyboard_enabled) return;
     if (hw_has_keyboard()) {
-        hw_disable_keyboard();
         lv_indev_enable(lv_get_keyboard_indev(), false);
     }
     s_keyboard_enabled = false;
@@ -876,7 +876,6 @@ void enable_keyboard()
 {
     if (s_keyboard_enabled) return;
     if (hw_has_keyboard()) {
-        hw_enable_keyboard();
         lv_indev_enable(lv_get_keyboard_indev(), true);
     }
     s_keyboard_enabled = true;

@@ -11,9 +11,3 @@
 #pragma once
 
 void hw_keyboard_task_start();
-
-// Drop all queued press events and any further events until the currently
-// held key is physically released. Used after a navigation action (back
-// button, menu switch) so a still-held Enter key doesn't auto-repeat into
-// the newly-focused widget on the next screen.
-void hw_keyboard_drop_until_release();

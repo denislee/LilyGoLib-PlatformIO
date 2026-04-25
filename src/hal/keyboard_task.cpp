@@ -31,7 +31,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
-#include <atomic>
 
 #include "display.h"
 #include "system.h"
@@ -61,12 +60,6 @@ char       s_held_char   = '\0';
 TickType_t s_press_tick  = 0;
 TickType_t s_repeat_tick = 0;
 
-// Set by hw_keyboard_drop_until_release(). While true, the reader drops
-// every incoming event and clears auto-repeat state, so a still-held Enter
-// from a screen transition doesn't re-fire on the next screen. Cleared the
-// moment we see a physical KB_RELEASED from the vendor driver.
-std::atomic<bool> s_drop_until_release{false};
-
 // Keys whose release the vendor driver swallows (handleSpecialKeys returns -1
 // on release for backspace, so no KB_RELEASED surfaces). We rely on having
 // disabled vendor repeat (setRepeat(false) in display.cpp) so each physical
@@ -74,6 +67,12 @@ std::atomic<bool> s_drop_until_release{false};
 // tap, never tracking s_held_char for them, so no auto-repeat while held.
 // 0x17 is Alt+Backspace (word delete); '\b' is plain backspace.
 inline bool is_pingkey(char c) { return c == '\b' || c == 0x17; }
+
+// Enter must not auto-repeat: holding it should fire exactly one activation,
+// not a stream. The vendor driver does emit KB_RELEASED for it, so unlike
+// pingkeys we let the natural press/release pair flow through — we just skip
+// held-char tracking so the synthesized repeat below never engages.
+inline bool is_no_repeat_key(char c) { return c == '\n'; }
 
 void enqueue_event(const KeyEvent &ev)
 {
@@ -106,17 +105,6 @@ void keyboard_task_fn(void *)
                 if (state != KB_PRESSED && state != KB_RELEASED) {
                     break;
                 }
-                // Drop-until-release: a recent nav action (back button)
-                // asked us to ignore whatever key is still held. Suppress
-                // press events and any auto-repeat until the vendor reports
-                // KB_RELEASED, at which point we clear the flag.
-                if (s_drop_until_release.load(std::memory_order_relaxed)) {
-                    if (state == KB_RELEASED) {
-                        s_drop_until_release.store(false, std::memory_order_relaxed);
-                        s_held_char = '\0';
-                    }
-                    continue;
-                }
                 if (state == KB_PRESSED) {
                     TickType_t now = xTaskGetTickCount();
                     // Backspace and Alt+Backspace: the vendor's
@@ -130,6 +118,15 @@ void keyboard_task_fn(void *)
                     if (is_pingkey(c)) {
                         enqueue_event({KB_PRESSED,  c});
                         enqueue_event({KB_RELEASED, c});
+                        continue;
+                    }
+                    // Enter: pass through natural press/release without
+                    // engaging held-char tracking, so holding it never
+                    // auto-repeats and the dedupe below can't swallow a
+                    // legitimate second press.
+                    if (is_no_repeat_key(c)) {
+                        s_held_char = '\0';
+                        enqueue_event({KB_PRESSED, c});
                         continue;
                     }
                     // Drop duplicate presses for the same held char — the
@@ -155,10 +152,9 @@ void keyboard_task_fn(void *)
 
         // Synthesize auto-repeat while a regular key stays held — inject a
         // RELEASE + PRESS pair so LVGL treats it as a fresh event. Pingkeys
-        // ('\b', 0x17) never reach this path because we don't set
+        // ('\b', 0x17) and Enter never reach this path because we don't set
         // s_held_char for them above.
-        if (s_held_char != '\0' &&
-            !s_drop_until_release.load(std::memory_order_relaxed)) {
+        if (s_held_char != '\0') {
             TickType_t now       = xTaskGetTickCount();
             uint32_t   held_ms   = (now - s_press_tick)  * portTICK_PERIOD_MS;
             uint32_t   since_rep = (now - s_repeat_tick) * portTICK_PERIOD_MS;
@@ -272,26 +268,14 @@ void hw_keyboard_task_start()
     }
 }
 
-void hw_keyboard_drop_until_release()
-{
-    s_drop_until_release.store(true, std::memory_order_relaxed);
-    // Purge any already-queued events from the press that triggered this
-    // call — LVGL would otherwise drain them into the newly-focused widget.
-    if (s_event_queue) {
-        xQueueReset(s_event_queue);
-    }
-}
-
 #else  // !USING_INPUT_DEV_KEYBOARD
 
 void hw_keyboard_task_start() {}
-void hw_keyboard_drop_until_release() {}
 
 #endif  // USING_INPUT_DEV_KEYBOARD
 
 #else  // !ARDUINO
 
 void hw_keyboard_task_start() {}
-void hw_keyboard_drop_until_release() {}
 
 #endif  // ARDUINO

@@ -44,11 +44,14 @@ static void refresh_labels()
         lv_label_set_text_fmt(g_branch_label, "Branch: %s", v.c_str());
     }
     if (g_tok_label) {
+        // Single token_is_encrypted() probe shared with the display string —
+        // each call is an NVS open, so collapsing them halves the work the
+        // deferred refresh has to do.
+        bool encrypted = apps::nsync_cfg_token_is_encrypted();
         std::string tok = apps::nsync_cfg_get_token_display();
-        const char *suffix = apps::nsync_cfg_token_is_encrypted()
-                             ? "  [encrypted]" : "  [plaintext]";
         lv_label_set_text_fmt(g_tok_label, "Token: %s%s",
-                              tok.c_str(), suffix);
+                              tok.c_str(),
+                              encrypted ? "  [encrypted]" : "  [plaintext]");
     }
 #ifdef ARDUINO
     if (g_note_label) {
@@ -161,7 +164,19 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_obj_set_style_text_color(g_note_label, UI_COLOR_MUTED, 0);
 #endif
 
-    refresh_labels();
+    // Placeholder text so the page paints with content during the menu
+    // slide-in. The real refresh — NVS opens + PBKDF2/AES decrypt of the
+    // token — is deferred to a one-shot timer so it runs after the
+    // transition animation completes instead of stalling it.
+    lv_label_set_text(g_repo_label,   "Repo: \xE2\x80\xA6");
+    lv_label_set_text(g_branch_label, "Branch: \xE2\x80\xA6");
+    lv_label_set_text(g_tok_label,    "Token: \xE2\x80\xA6");
+#ifdef ARDUINO
+    if (g_note_label) lv_label_set_text(g_note_label, "");
+#endif
+    lv_timer_t *t = lv_timer_create([](lv_timer_t *) { refresh_labels(); },
+                                    1, nullptr);
+    lv_timer_set_repeat_count(t, 1);
 }
 
 } // namespace notes_sync_cfg

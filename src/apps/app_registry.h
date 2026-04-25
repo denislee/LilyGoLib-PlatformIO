@@ -24,13 +24,13 @@
 namespace apps {
 
 std::shared_ptr<core::App> make_text_editor_app();
-std::shared_ptr<core::App> make_notes_menu_app();
 std::shared_ptr<core::App> make_tasks_app();
 std::shared_ptr<core::App> make_sys_app();
 std::shared_ptr<core::App> make_file_browser_app();
 std::shared_ptr<core::App> make_journal_app();
 std::shared_ptr<core::App> make_news_app();
 std::shared_ptr<core::App> make_audio_notes_app();
+std::shared_ptr<core::App> make_audio_recordings_app();
 std::shared_ptr<core::App> make_media_remote_app();
 std::shared_ptr<core::App> make_weather_app();
 std::shared_ptr<core::App> make_telegram_app();

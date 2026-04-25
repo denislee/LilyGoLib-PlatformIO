@@ -24,6 +24,7 @@
 #include "../hal/secrets.h"
 #include "../core/app.h"
 #include "../core/app_manager.h"
+#include "../core/notify.h"
 #include "../core/system.h"
 #include "../core/input_focus.h"
 #include "app_registry.h"
@@ -353,8 +354,43 @@ static std::string json_text_body(const char *text)
 // --- HTTP -----------------------------------------------------------------
 
 #ifdef ARDUINO
+// Cached internet reachability. WiFi-associated does not imply the bridge is
+// reachable (captive portals, ISP outage, DNS down), and the bridge HTTPS
+// timeout is multi-second — so we probe TCP/53 to 1.1.1.1 and cache the
+// verdict. Success is cached longer than failure so a recovering link is
+// retried sooner without spamming the probe on every poll tick.
+static const uint32_t TG_INET_OK_TTL_MS   = 30000;
+static const uint32_t TG_INET_FAIL_TTL_MS = 5000;
+static const uint32_t TG_INET_PING_MS     = 1500;
+static uint32_t s_inet_check_ts = 0;
+static bool     s_inet_ok       = false;
+
+static bool internet_available()
+{
+    if (!hw_get_wifi_connected()) {
+        s_inet_ok = false;
+        s_inet_check_ts = lv_tick_get();
+        return false;
+    }
+    uint32_t ttl = s_inet_ok ? TG_INET_OK_TTL_MS : TG_INET_FAIL_TTL_MS;
+    if (s_inet_check_ts != 0 && lv_tick_elaps(s_inet_check_ts) < ttl) {
+        return s_inet_ok;
+    }
+    s_inet_ok = hw_ping_internet("1.1.1.1", 53, TG_INET_PING_MS, nullptr, nullptr);
+    s_inet_check_ts = lv_tick_get();
+    return s_inet_ok;
+}
+
+static bool require_internet(std::string *err)
+{
+    if (internet_available()) return true;
+    if (err) *err = hw_get_wifi_connected() ? "No internet" : "WiFi not connected";
+    return false;
+}
+
 static bool tg_get(const char *path, std::string &out, std::string *err = nullptr)
 {
+    if (!require_internet(err)) return false;
     std::string url = make_url(path);
     int code = 0;
     return hw_http_request(url.c_str(), "GET", nullptr, 0, nullptr,
@@ -364,6 +400,7 @@ static bool tg_get(const char *path, std::string &out, std::string *err = nullpt
 static bool tg_post_json(const char *path, const std::string &body,
                          std::string &out, std::string *err = nullptr)
 {
+    if (!require_internet(err)) return false;
     std::string url = make_url(path);
     int code = 0;
     return hw_http_request(url.c_str(), "POST",
@@ -660,7 +697,11 @@ static void poll_tick(lv_timer_t *t)
 {
     (void)t;
 #ifdef ARDUINO
-    if (!hw_get_wifi_connected() || !configured()) return;
+    if (!configured()) return;
+    if (!internet_available()) {
+        set_status("No internet", UI_COLOR_MUTED);
+        return;
+    }
     // Pause fetches while the composer (or any textarea) is focused — HTTPS
     // calls here block the LVGL thread for ~1s and would stall keystrokes.
     if (core::isTextInputFocused()) return;
@@ -914,6 +955,10 @@ static void show_chat_list()
         set_status("WiFi not connected", UI_COLOR_MUTED);
         return;
     }
+    if (!internet_available()) {
+        set_status("No internet", UI_COLOR_MUTED);
+        return;
+    }
     bool ok = false;
     if (s_bg_task != nullptr) {
         set_status("Waiting for sync...", UI_COLOR_ACCENT);
@@ -1034,6 +1079,10 @@ static void show_chat(long long id, const char *title)
 
     s_msgs.clear();
 #ifdef ARDUINO
+    if (!internet_available()) {
+        set_status("No internet", UI_COLOR_MUTED);
+        return;
+    }
     if (s_bg_task != nullptr) {
         set_status("Waiting for sync...", UI_COLOR_ACCENT);
         start_timer(1000);
@@ -1143,56 +1192,36 @@ public:
 
 // --- background unread-count poll -----------------------------------------
 
-// On-screen banner for new-message notifications. Attaches to lv_layer_top()
-// so it overlays whatever app is currently active. The attached timer
-// auto-deletes the label after a short display window. One-shot via
-// lv_timer_set_repeat_count so the banner disappears cleanly without the
-// callback having to touch the timer it runs under.
-static void notif_banner_dismiss_cb(lv_timer_t *t)
-{
-    lv_obj_t *banner = (lv_obj_t *)lv_timer_get_user_data(t);
-    if (banner) lv_obj_del(banner);
-}
-
-static void show_notif_banner(int delta)
-{
-    lv_obj_t *top = lv_layer_top();
-    lv_obj_t *banner = lv_label_create(top);
-    char buf[80];
-    if (delta <= 1) {
-        snprintf(buf, sizeof(buf), LV_SYMBOL_ENVELOPE "  New Telegram message");
-    } else {
-        snprintf(buf, sizeof(buf),
-                 LV_SYMBOL_ENVELOPE "  %d new Telegram messages", delta);
-    }
-    lv_label_set_text(banner, buf);
-    lv_obj_set_style_text_color(banner, UI_COLOR_FG, 0);
-    lv_obj_set_style_text_font(banner, get_telegram_font(), 0);
-    lv_obj_set_style_bg_color(banner, lv_color_hex(0x0b6fa8), 0);
-    lv_obj_set_style_bg_opa(banner, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(banner, 8, 0);
-    lv_obj_set_style_pad_ver(banner, 4, 0);
-    lv_obj_set_style_radius(banner, 6, 0);
-    lv_obj_add_flag(banner, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_align(banner, LV_ALIGN_TOP_MID, 0, 4);
-
-    lv_timer_t *t = lv_timer_create(notif_banner_dismiss_cb, 3000, banner);
-    lv_timer_set_repeat_count(t, 1);
-}
-
-// Fires enabled notifiers for `delta` new unread messages. Caller checks the
-// increase; we only read the per-channel enable flags and dispatch.
+// Fires enabled notifiers for `delta` new unread messages via the shared
+// notification bus. The prefs still gate each channel independently — a
+// user who wants a toast without a buzz (or vice versa) keeps that control.
+// Callable from the bg-poll task; notify::post() is thread-safe.
 static void fire_notifications(int delta)
 {
     if (delta <= 0) return;
-    if (load_bool_pref("notif_vib", true)) {
+    bool toast = load_bool_pref("notif_toast", true);
+    bool vib   = load_bool_pref("notif_vib",   true);
+
+    if (toast) {
+        core::notify::Notification n;
+        n.icon     = LV_SYMBOL_ENVELOPE;
+        if (delta <= 1) {
+            n.title = "New Telegram message";
+        } else {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "%d new Telegram messages", delta);
+            n.title = buf;
+        }
+        n.severity = core::notify::Severity::Info;
+        n.source   = "telegram";
+        n.haptic   = vib;   // bus buzzes once with the banner
+        core::notify::post(std::move(n));
+    } else if (vib) {
 #ifdef ARDUINO
-        // hw_feedback() already no-ops when the global haptic toggle is off.
+        // Toast disabled but haptic still on — fire directly. hw_feedback
+        // no-ops when the global haptic toggle is off.
         hw_feedback();
 #endif
-    }
-    if (load_bool_pref("notif_toast", true)) {
-        show_notif_banner(delta);
     }
 }
 
@@ -1201,11 +1230,17 @@ static void tg_bg_task(void *arg)
 {
     std::string url   = load_pref("url");
     std::string token = load_token_plain();
-    if (url.empty() || token.empty()) { 
-        scrub_string(token); 
+    if (url.empty() || token.empty()) {
+        scrub_string(token);
         s_bg_task = nullptr;
-        vTaskDelete(NULL); 
-        return; 
+        vTaskDelete(NULL);
+        return;
+    }
+    if (!internet_available()) {
+        scrub_string(token);
+        s_bg_task = nullptr;
+        vTaskDelete(NULL);
+        return;
     }
 
     std::string auth = "Bearer " + token;
@@ -1269,7 +1304,7 @@ static void tg_bg_tick(lv_timer_t *t)
 {
     (void)t;
     if (s_view != V_NONE) return;               // app is open → its timer drives updates
-    if (!hw_get_wifi_connected()) return;
+    if (!internet_available()) return;
     // Skip while typing elsewhere: this tick runs an HTTPS fetch (~1s).
     if (core::isTextInputFocused()) return;
 
@@ -1367,6 +1402,11 @@ bool tg_cfg_fetch_all_chats(std::vector<std::pair<long long, std::string>> &out,
         if (err) *err = token_is_encrypted()
                         ? "Token locked — open Notes to unlock."
                         : "Bearer token not set.";
+        return false;
+    }
+    if (!internet_available()) {
+        scrub_string(tok);
+        if (err) *err = hw_get_wifi_connected() ? "No internet" : "WiFi not connected";
         return false;
     }
     std::string auth = "Bearer " + tok;

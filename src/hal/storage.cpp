@@ -14,6 +14,7 @@
 #include <LilyGoLib.h>
 #include <SD.h>
 #include <FFat.h>
+#include <Preferences.h>
 #endif
 
 /* When notes_crypto is enabled+unlocked, the text I/O wrappers below
@@ -168,12 +169,51 @@ bool hw_is_usb_msc_mounted() {
 #endif
 }
 
-bool hw_get_filesystem_dirty() { return filesystem_dirty; }
-void hw_set_filesystem_dirty(bool dirty) { filesystem_dirty = dirty; }
+// Persisted across boots so consumers (e.g. the journal index) can trust a
+// cached snapshot when nothing has been written since the last refresh. The
+// flag lives in NVS namespace "fs"/"dirty" — lazy-loaded on first access and
+// only written when the value actually changes, so per-save callers pay the
+// flash cost at most once per dirty/clean transition.
+static bool dirty_loaded = false;
+
+static void load_filesystem_dirty()
+{
+#ifdef ARDUINO
+    if (dirty_loaded) return;
+    Preferences p;
+    if (p.begin("fs", true)) {
+        filesystem_dirty = p.getBool("dirty", false);
+        p.end();
+    }
+    dirty_loaded = true;
+#else
+    dirty_loaded = true;
+#endif
+}
+
+bool hw_get_filesystem_dirty()
+{
+    load_filesystem_dirty();
+    return filesystem_dirty;
+}
+
+void hw_set_filesystem_dirty(bool dirty)
+{
+    load_filesystem_dirty();
+    if (filesystem_dirty == dirty) return;
+    filesystem_dirty = dirty;
+#ifdef ARDUINO
+    Preferences p;
+    if (p.begin("fs", false)) {
+        p.putBool("dirty", dirty);
+        p.end();
+    }
+#endif
+}
 
 bool hw_save_file(const char *path, const char *content, std::string *error)
 {
-    filesystem_dirty = true;
+    hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
     std::vector<uint8_t> payload;
     if (!encode_for_write(path, content, payload, error)) return false;
@@ -229,7 +269,7 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
 
 bool hw_save_internal_file(const char *path, const char *content, std::string *error)
 {
-    filesystem_dirty = true;
+    hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
     std::vector<uint8_t> payload;
     if (!encode_for_write(path, content, payload, error)) return false;
@@ -267,7 +307,7 @@ bool hw_save_internal_file(const char *path, const char *content, std::string *e
 
 bool hw_delete_file(const char *path)
 {
-    filesystem_dirty = true;
+    hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     bool res_sd = false;
@@ -278,6 +318,14 @@ bool hw_delete_file(const char *path)
         instance.unlockSPI();
     }
     res_int = FFat.remove(str);
+    // Best-effort cleanup of the news header sidecar; ignored if absent.
+    String idx = str + ".idx";
+    if (HW_SD_ONLINE & hw_get_device_online()) {
+        instance.lockSPI();
+        SD.remove(idx);
+        instance.unlockSPI();
+    }
+    FFat.remove(idx);
     return res_sd || res_int;
 #else
     printf("Delete file: %s\n", path);
@@ -287,7 +335,7 @@ bool hw_delete_file(const char *path)
 
 bool hw_delete_internal_file(const char *path)
 {
-    filesystem_dirty = true;
+    hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     return FFat.remove(str);
@@ -333,7 +381,7 @@ static bool delete_path_recursive(fs::FS &fs, const String &path)
 
 bool hw_delete_path(const char *path, bool use_sd)
 {
-    filesystem_dirty = true;
+    hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
     if (!path || !path[0]) return false;
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
@@ -986,6 +1034,229 @@ void hw_get_news_headers(const char *path, std::vector<std::pair<std::string, si
 #endif
 }
 
+// ---- News header sidecar cache & persistent file reader ------------------
+//
+// Sidecar format (text):
+//     line 1: <source_file_size_in_bytes>
+//     line 2..N: <offset>\t<title>
+//
+// The first-line size is the freshness token: if the txt shrinks or grows,
+// the cache is considered stale and we rebuild. This is cheaper than mtime
+// and avoids depending on clocks.
+
+#ifdef ARDUINO
+static bool sidecar_read(const String &idx_path, size_t expected_txt_size,
+                         std::vector<std::pair<std::string, size_t>> &headers)
+{
+    File f;
+    bool lock = false;
+    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
+    if (is_sd) {
+        instance.lockSPI();
+        f = SD.open(idx_path, FILE_READ);
+        if (f) lock = true;
+        else instance.unlockSPI();
+    }
+    if (!f) f = FFat.open(idx_path, FILE_READ);
+    if (!f) return false;
+
+    size_t sz = f.size();
+    std::string buf;
+    buf.resize(sz);
+    if (sz > 0) f.read((uint8_t *)&buf[0], sz);
+    f.close();
+    if (lock) instance.unlockSPI();
+
+    // Parse: first line is the source txt size, remaining lines are entries.
+    size_t p = 0;
+    auto next_line = [&](std::string &out) -> bool {
+        if (p >= buf.size()) return false;
+        size_t nl = buf.find('\n', p);
+        if (nl == std::string::npos) { out.assign(buf, p, buf.size() - p); p = buf.size(); }
+        else { out.assign(buf, p, nl - p); p = nl + 1; }
+        if (!out.empty() && out.back() == '\r') out.pop_back();
+        return true;
+    };
+
+    std::string line;
+    if (!next_line(line)) return false;
+    size_t recorded_size = (size_t)strtoull(line.c_str(), nullptr, 10);
+    if (recorded_size != expected_txt_size) return false;
+
+    headers.clear();
+    while (next_line(line)) {
+        if (line.empty()) continue;
+        size_t tab = line.find('\t');
+        if (tab == std::string::npos) continue;
+        size_t off = (size_t)strtoull(line.c_str(), nullptr, 10);
+        headers.push_back({line.substr(tab + 1), off});
+    }
+    return true;
+}
+
+static void sidecar_write(const String &txt_path, const String &idx_path,
+                          size_t txt_size,
+                          const std::vector<std::pair<std::string, size_t>> &headers)
+{
+    std::string body;
+    body.reserve(32 + headers.size() * 48);
+    char num[32];
+    snprintf(num, sizeof(num), "%u\n", (unsigned)txt_size);
+    body += num;
+    for (const auto &h : headers) {
+        snprintf(num, sizeof(num), "%u\t", (unsigned)h.second);
+        body += num;
+        body += h.first;
+        body += '\n';
+    }
+
+    // Write to the same filesystem the txt lives on, so both move together.
+    bool is_sd = (HW_SD_ONLINE & hw_get_device_online()) && SD.exists(txt_path);
+    File f;
+    bool lock = false;
+    if (is_sd) {
+        instance.lockSPI();
+        f = SD.open(idx_path, "w");
+        if (f) lock = true;
+        else instance.unlockSPI();
+    }
+    if (!f) f = FFat.open(idx_path, "w");
+    if (!f) return;
+    f.write((const uint8_t *)body.data(), body.size());
+    f.close();
+    if (lock) instance.unlockSPI();
+}
+#endif
+
+void hw_get_news_headers_cached(const char *path,
+                                std::vector<std::pair<std::string, size_t>> &headers,
+                                bool (*progress_cb)(size_t, size_t))
+{
+    headers.clear();
+#ifdef ARDUINO
+    String txt = (path[0] == '/') ? String(path) : ("/" + String(path));
+    String idx = txt + ".idx";
+    size_t txt_size = hw_get_file_size(txt.c_str());
+    if (txt_size == 0) return;
+
+    if (sidecar_read(idx, txt_size, headers)) return;
+
+    hw_get_news_headers(path, headers, progress_cb);
+    if (!headers.empty()) {
+        sidecar_write(txt, idx, txt_size, headers);
+    }
+#else
+    hw_get_news_headers(path, headers, progress_cb);
+#endif
+}
+
+#ifdef ARDUINO
+namespace {
+static File s_reader_file;
+static bool s_reader_open = false;
+static bool s_reader_is_sd = false;
+static uint32_t s_reader_size = 0;
+}
+#endif
+
+bool hw_file_reader_open(const char *path)
+{
+    hw_file_reader_close();
+#ifdef ARDUINO
+    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
+    if (is_sd) {
+        instance.lockSPI();
+        s_reader_file = SD.open(str, FILE_READ);
+        if (s_reader_file) {
+            s_reader_is_sd = true;
+            s_reader_open = true;
+            s_reader_size = s_reader_file.size();
+            instance.unlockSPI();
+            return true;
+        }
+        instance.unlockSPI();
+    }
+    s_reader_file = FFat.open(str, FILE_READ);
+    if (s_reader_file) {
+        s_reader_is_sd = false;
+        s_reader_open = true;
+        s_reader_size = s_reader_file.size();
+        return true;
+    }
+    return false;
+#else
+    (void)path;
+    return true;
+#endif
+}
+
+uint32_t hw_file_reader_size()
+{
+#ifdef ARDUINO
+    return s_reader_open ? s_reader_size : 0;
+#else
+    return 1024;
+#endif
+}
+
+void hw_file_reader_close()
+{
+#ifdef ARDUINO
+    if (!s_reader_open) return;
+    if (s_reader_is_sd) instance.lockSPI();
+    s_reader_file.close();
+    if (s_reader_is_sd) instance.unlockSPI();
+    s_reader_open = false;
+    s_reader_size = 0;
+#endif
+}
+
+bool hw_file_reader_read(uint32_t offset, uint32_t size, std::string &content)
+{
+    content.clear();
+#ifdef ARDUINO
+    if (!s_reader_open) return false;
+    if (offset > s_reader_size) return false;
+
+    if (s_reader_is_sd) instance.lockSPI();
+    s_reader_file.seek(offset);
+    size_t avail = s_reader_size - offset;
+    size_t read_size = (size < avail) ? size : avail;
+    content.resize(read_size);
+    if (read_size > 0) {
+        s_reader_file.read((uint8_t *)&content[0], read_size);
+    }
+    if (s_reader_is_sd) instance.unlockSPI();
+
+    // Same word-boundary slicing as hw_read_file_chunk so the UI pager
+    // behaves identically whether it uses the one-shot chunk API or the
+    // persistent reader.
+    if (read_size == size && read_size > 0) {
+        int cut_pos = (int)read_size - 1;
+        while (cut_pos > 0 && content[cut_pos] != ' ' && content[cut_pos] != '\n' && content[cut_pos] != '\r') {
+            cut_pos--;
+        }
+        if (cut_pos > (int)(size / 2)) {
+            content.resize(cut_pos);
+        } else {
+            cut_pos = (int)read_size - 1;
+            while (cut_pos > 0 && (content[cut_pos] & 0xC0) == 0x80) {
+                cut_pos--;
+            }
+            if (cut_pos > 0 && (content[cut_pos] & 0x80) != 0) {
+                content.resize(cut_pos);
+            }
+        }
+    }
+    return true;
+#else
+    (void)offset; (void)size;
+    content = "Dummy chunk content";
+    return true;
+#endif
+}
+
 bool hw_get_storage_prefer_sd()
 {
     return user_setting.storage_prefer_sd != 0;
@@ -1034,75 +1305,86 @@ static bool storage_should_use_sd()
 void hw_prune_internal_storage(void (*cb)(int, int, const char *))
 {
 #ifdef ARDUINO
+    /* Batch-eviction policy: when the internal store hits the threshold, move
+     * the kEvictBatch oldest notes to SD in one shot, leaving headroom so the
+     * next eviction is dozens of saves away. This trades many tiny prunes for
+     * one larger I/O burst — fewer chances for a half-finished move to leave
+     * the user wondering where a note went. */
+    constexpr size_t kEvictThreshold = 50;
+    constexpr size_t kEvictBatch     = 35;
+
     if (cb) cb(0, 0, "Scanning internal storage...");
     std::vector<FileInfo> infos;
     list_files(infos, FFat, "/", ".txt");
 
-    // Filter out tasks.txt
+    // tasks.txt is a single rolling file managed by the Tasks app; it must
+    // not be evicted regardless of age.
     infos.erase(std::remove_if(infos.begin(), infos.end(),
                                [](const FileInfo &fi) {
                                    return fi.name == "/tasks.txt" || fi.name == "tasks.txt";
                                }),
                 infos.end());
 
-    if (infos.size() <= 50) {
-        if (cb) cb(0, 0, "No pruning needed (<= 50 files).");
+    if (infos.size() < kEvictThreshold) {
+        if (cb) cb(0, 0, "No eviction needed.");
         return;
     }
 
-    // Sort by time ascending (oldest first)
-    std::sort(infos.begin(), infos.end(), [](const FileInfo &a, const FileInfo &b) {
-        if (a.time != b.time) return a.time < b.time;
-        return a.name < b.name;
-    });
-
-    size_t total_to_delete = infos.size() - 50;
-
-    // Check if SD is available for backup
+    // SD is required — without it we'd be deleting the only copy.
     bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
     if (!sd_online) {
         hw_mount_sd();
         sd_online = (HW_SD_ONLINE & hw_get_device_online());
     }
-
-    // Phase 1: Backup (if SD available)
-    if (sd_online) {
-        for (size_t i = 0; i < total_to_delete; ++i) {
-            String path = infos[i].name.c_str();
-            if (!path.startsWith("/")) path = "/" + path;
-
-            if (cb) cb((int)i, (int)total_to_delete, ("Backing up: " + path).c_str());
-
-            File src = FFat.open(path);
-            if (src) {
-                size_t sz = src.size();
-                std::vector<uint8_t> buf(sz);
-                src.read(buf.data(), sz);
-                src.close();
-
-                instance.lockSPI();
-                File dst = SD.open(path, "w");
-                if (dst) {
-                    dst.write(buf.data(), sz);
-                    dst.close();
-                }
-                instance.unlockSPI();
-            }
-        }
+    if (!sd_online) {
+        if (cb) cb(0, 0, "SD unavailable; eviction skipped.");
+        return;
     }
 
-    // Phase 2: Pruning
-    for (size_t i = 0; i < total_to_delete; ++i) {
+    // Sort by time ascending (oldest first) so the batch we move out is the
+    // least-recently-touched notes.
+    std::sort(infos.begin(), infos.end(), [](const FileInfo &a, const FileInfo &b) {
+        if (a.time != b.time) return a.time < b.time;
+        return a.name < b.name;
+    });
+
+    size_t total_to_move = std::min<size_t>(kEvictBatch, infos.size());
+
+    for (size_t i = 0; i < total_to_move; ++i) {
         String path = infos[i].name.c_str();
         if (!path.startsWith("/")) path = "/" + path;
 
-        if (cb) cb((int)i, (int)total_to_delete, ("Deleting: " + path).c_str());
-        printf("Manual pruning: %s\n", path.c_str());
-        FFat.remove(path);
+        if (cb) cb((int)i, (int)total_to_move, ("Moving to SD: " + path).c_str());
+
+        File src = FFat.open(path);
+        if (!src) continue;
+        size_t sz = src.size();
+        std::vector<uint8_t> buf(sz);
+        if (sz) src.read(buf.data(), sz);
+        src.close();
+
+        bool copied = false;
+        {
+            instance.lockSPI();
+            File dst = SD.open(path, "w");
+            if (dst) {
+                size_t w = sz ? dst.write(buf.data(), sz) : 0;
+                dst.close();
+                copied = (w == sz);
+            }
+            instance.unlockSPI();
+        }
+
+        if (copied) {
+            printf("Eviction move: %s\n", path.c_str());
+            FFat.remove(path);
+        } else {
+            printf("Eviction copy failed, keeping: %s\n", path.c_str());
+        }
     }
 
-    if (cb) cb((int)total_to_delete, (int)total_to_delete, "Pruning complete.");
-    filesystem_dirty = true;
+    if (cb) cb((int)total_to_move, (int)total_to_move, "Eviction complete.");
+    hw_set_filesystem_dirty(true);
 #endif
 }
 
@@ -1116,7 +1398,7 @@ static void prune_internal_storage()
 
 bool hw_save_preferred_file(const char *path, const char *content, std::string *error)
 {
-    filesystem_dirty = true;
+    hw_set_filesystem_dirty(true);
 
 #ifdef ARDUINO
     /* Encode once so the internal and SD copies share identical bytes (and
@@ -1261,7 +1543,7 @@ bool hw_save_preferred_bytes(const char *path, const uint8_t *buf, size_t len, s
     // Don't set dirty for the index file itself!
     bool is_index = (strstr(path, "_idx.bin") != nullptr);
     if (!is_index) {
-        filesystem_dirty = true;
+        hw_set_filesystem_dirty(true);
     }
 
 #ifdef ARDUINO
@@ -1339,7 +1621,7 @@ bool hw_read_preferred_bytes(const char *path, std::vector<uint8_t> &buf)
 
 bool hw_delete_preferred_file(const char *path)
 {
-    filesystem_dirty = true;
+    hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     if (storage_should_use_sd()) {

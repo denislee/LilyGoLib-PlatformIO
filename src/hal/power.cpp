@@ -279,7 +279,7 @@ void hw_get_monitor_params(monitor_params_t &params)
     }
     last_refresh = millis();
 
-    memset(&params, 0, sizeof(monitor_params_t));
+    params = monitor_params_t{};
 
 #if defined(USING_PPM_MANAGE)
     params.type = MONITOR_PPM;

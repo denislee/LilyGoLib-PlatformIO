@@ -9,13 +9,13 @@ namespace apps {
 void register_all() {
     auto &am = core::AppManager::getInstance();
     am.registerApp(make_text_editor_app());
-    am.registerApp(make_notes_menu_app());
     am.registerApp(make_tasks_app());
     am.registerApp(make_sys_app());
     am.registerApp(make_file_browser_app());
     am.registerApp(make_journal_app());
     am.registerApp(make_news_app());
     am.registerApp(make_audio_notes_app());
+    am.registerApp(make_audio_recordings_app());
     am.registerApp(make_media_remote_app());
     am.registerApp(make_weather_app());
     am.registerApp(make_telegram_app());

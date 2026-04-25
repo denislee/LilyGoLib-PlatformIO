@@ -50,6 +50,10 @@ static std::string selected_name;
 static uint32_t    selected_bytes = 0;
 static uint32_t    selected_mtime = 0;
 static std::string pending_rec_path; // set while recording
+// Quick-record mode: home-screen shortcut launches us straight into a
+// recording. Stop / back / auto-cap exits the app instead of falling back
+// to the Record/Browse menu (which lives under Settings → Recordings).
+static bool        s_quick_record = false;
 
 static void ui_notes_enter(lv_obj_t *parent);
 static void ui_notes_exit(lv_obj_t *parent);
@@ -339,10 +343,22 @@ static lv_obj_t *rec_size_lbl = NULL;
 static lv_obj_t *rec_dot = NULL;
 static lv_obj_t *rec_bar = NULL;
 
+static void exit_to_menu()
+{
+    if (hw_rec_running()) hw_rec_stop();
+    hw_set_play_stop();
+    ui_notes_exit(NULL);
+    menu_show();
+}
+
 static void stop_rec_and_return(lv_event_t *e)
 {
     if (hw_rec_running()) {
         hw_rec_stop();
+    }
+    if (s_quick_record) {
+        exit_to_menu();
+        return;
     }
     enter_main();
 }
@@ -372,7 +388,12 @@ static void rec_tick_cb(lv_timer_t *t)
     }
 
     if (!hw_rec_running()) {
-        // Auto-stop (cap hit) — return to main.
+        // Auto-stop (cap hit). Quick-record exits the app; the full app
+        // returns to its Record/Browse menu.
+        if (s_quick_record) {
+            exit_to_menu();
+            return;
+        }
         enter_main();
     }
 }
@@ -730,33 +751,30 @@ static void enter_playback(const Note &n)
 
 // --- lifecycle ---------------------------------------------------------
 
+// In quick-record (home shortcut) every back press exits the app. In the
+// browse-only flow (Settings → Recordings) the list view is the root, so
+// VIEW_PLAYBACK pops back to it and VIEW_LIST exits.
 static void back_event_handler(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (lv_menu_back_btn_is_root(menu, obj)) {
-        if (current_view != VIEW_MAIN) {
-            if (hw_rec_running()) hw_rec_stop();
+        if (!s_quick_record && current_view == VIEW_PLAYBACK) {
             hw_set_play_stop();
-            enter_main();
+            enter_list();
             return;
         }
-        ui_notes_exit(NULL);
-        menu_show();
+        exit_to_menu();
     }
 }
 
 static void exit_btn_cb(lv_event_t *e)
 {
-    if (current_view != VIEW_MAIN) {
-        if (hw_rec_running()) hw_rec_stop();
+    if (!s_quick_record && current_view == VIEW_PLAYBACK) {
         hw_set_play_stop();
-        enter_main();
+        enter_list();
         return;
     }
-    if (hw_rec_running()) hw_rec_stop();
-    hw_set_play_stop();
-    ui_notes_exit(NULL);
-    menu_show();
+    exit_to_menu();
 }
 
 static void ui_notes_enter(lv_obj_t *parent)
@@ -766,11 +784,32 @@ static void ui_notes_enter(lv_obj_t *parent)
     enable_keyboard();
 
     ensure_notes_dir();
-    current_view = VIEW_MAIN;
     selected_path.clear();
     selected_name.clear();
     selected_bytes = 0;
     selected_mtime = 0;
+
+    // Pick the initial view.
+    //   - Quick-record (home shortcut) jumps straight into a fresh recording
+    //     when the mic is available; falls back to the browse list if the
+    //     mic is missing or hw_rec_start fails, so the user sees something
+    //     instead of a silent failure.
+    //   - Otherwise (Settings → Recordings) opens directly on the list.
+    if (s_quick_record && hw_mic_available()) {
+        if (hw_player_running()) hw_set_play_stop();
+        pending_rec_path = build_new_note_path();
+        if (hw_rec_start(pending_rec_path.c_str())) {
+            current_view = VIEW_RECORD;
+        } else {
+            s_quick_record = false;
+            reload_notes();
+            current_view = VIEW_LIST;
+        }
+    } else {
+        if (s_quick_record) s_quick_record = false;  // no mic — drop quick mode
+        reload_notes();
+        current_view = VIEW_LIST;
+    }
 
     menu = create_menu(parent, back_event_handler);
     main_page = lv_menu_page_create(menu, NULL);
@@ -785,16 +824,12 @@ static void ui_notes_enter(lv_obj_t *parent)
 
 #ifdef USING_TOUCHPAD
     quit_btn = create_floating_button([](lv_event_t *e) {
-        if (current_view != VIEW_MAIN) {
-            if (hw_rec_running()) hw_rec_stop();
+        if (!s_quick_record && current_view == VIEW_PLAYBACK) {
             hw_set_play_stop();
-            enter_main();
+            enter_list();
             return;
         }
-        if (hw_rec_running()) hw_rec_stop();
-        hw_set_play_stop();
-        ui_notes_exit(NULL);
-        menu_show();
+        exit_to_menu();
     }, NULL);
 #endif
 }
@@ -827,13 +862,26 @@ static void ui_notes_exit(lv_obj_t *parent)
 namespace apps {
 class AudioNotesApp : public core::App {
 public:
-    AudioNotesApp() : core::App("Recorder") {}
-    void onStart(lv_obj_t *parent) override { ui_notes_enter(parent); }
+    AudioNotesApp(const char *name, bool quick_record)
+        : core::App(name), m_quick_record(quick_record) {}
+    void onStart(lv_obj_t *parent) override {
+        s_quick_record = m_quick_record;
+        ui_notes_enter(parent);
+    }
     void onStop() override {
         ui_notes_exit(getRoot());
         core::App::onStop();
     }
+private:
+    bool m_quick_record;
 };
 
-APP_FACTORY(make_audio_notes_app, AudioNotesApp)
+std::shared_ptr<core::App> make_audio_notes_app() {
+    // Home-screen shortcut — jumps straight into recording.
+    return std::make_shared<AudioNotesApp>("Recorder", true);
+}
+std::shared_ptr<core::App> make_audio_recordings_app() {
+    // Settings → Recordings — opens the Record/Browse menu.
+    return std::make_shared<AudioNotesApp>("Recordings", false);
+}
 } // namespace apps

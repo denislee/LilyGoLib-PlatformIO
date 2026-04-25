@@ -62,8 +62,12 @@ enum IconKind {
 // restricted to shrink the response body we have to parse on-device.
 static const char *GEO_URL =
     "http://ip-api.com/json/?fields=status,lat,lon,city,regionName,country";
-#define WEATHER_PREFS_NS   "weather"
-#define WEATHER_CACHE_VER  1
+#define WEATHER_PREFS_NS       "weather"
+#define WEATHER_CACHE_VER      1
+// If the on-disk forecast is younger than this, the weather app opens with
+// zero network calls. Open-meteo's free tier recommends <= 1 req per minute,
+// so 15 min leaves plenty of margin while keeping numbers recent enough.
+#define WEATHER_FRESH_TTL_SEC  (15 * 60)
 
 // Default city used when the user has not chosen one. Seeded into the NVS
 // cache on first use so that without network we still have coordinates to
@@ -593,44 +597,108 @@ static int current_local_hour()
     return info.tm_hour;
 }
 
-static void render_hourly(cJSON *hourly)
+// --- forecast cache -------------------------------------------------------
+// The forecast itself is cached in NVS as a compact binary blob. Open-meteo's
+// 7-day response is ~5 KB raw and would blow past the NVS string limit, but
+// the subset we actually render (8 hourly cells, 7 daily cells) packs into
+// ~190 bytes — easy to persist and cheap to parse on open.
+//
+// The cache is keyed the same way as the geo cache (user_city or "auto"), so
+// switching location automatically invalidates it.
+
+struct CacheHour {
+    uint8_t hr;      // 0-23
+    uint8_t code;    // WMO weather code
+    int8_t  temp;    // Celsius
+    uint8_t pop;     // precipitation probability, 0-100
+};
+
+struct CacheDay {
+    char    date[11];   // "YYYY-MM-DD" + NUL — consumed by weekday_from_date()
+    uint8_t code;
+    int8_t  hi;
+    int8_t  lo;
+    uint8_t pop;
+};
+
+struct ForecastCache {
+    uint32_t  ts;           // unix time of fetch (0 = unknown clock)
+    uint8_t   hourly_count;
+    uint8_t   daily_count;
+    CacheHour hourly[8];
+    CacheDay  daily[7];
+};
+
+static bool load_forecast_cache(const std::string &want_key, ForecastCache &out)
 {
-    lv_obj_clean(hourly_col);
+    Preferences p;
+    if (!p.begin(WEATHER_PREFS_NS, true)) return false;
+    int ver = p.getInt("fcv", 0);
+    if (ver != WEATHER_CACHE_VER) { p.end(); return false; }
+    String key = p.getString("fck", "");
+    if (want_key != key.c_str()) { p.end(); return false; }
+    memset(&out, 0, sizeof(out));
+    size_t got = p.getBytes("fcd", &out, sizeof(out));
+    p.end();
+    return got == sizeof(out);
+}
+
+static void save_forecast_cache(const std::string &key, const ForecastCache &in)
+{
+    Preferences p;
+    if (!p.begin(WEATHER_PREFS_NS, false)) return;
+    p.putInt("fcv", WEATHER_CACHE_VER);
+    p.putString("fck", key.c_str());
+    p.putBytes("fcd", &in, sizeof(in));
+    p.end();
+}
+
+// Used when the user picks a new city — the stored forecast is tied to a
+// specific key, so we drop it rather than leave it occupying NVS space and
+// risking a miskeyed hit after a future schema change.
+static void clear_forecast_cache_nvs()
+{
+    Preferences p;
+    if (!p.begin(WEATHER_PREFS_NS, false)) return;
+    p.remove("fcv");
+    p.remove("fck");
+    p.remove("fcd");
+    p.end();
+}
+
+// --- JSON -> cache --------------------------------------------------------
+// open-meteo's `hourly` starts at the current day's 00:00 local — we walk
+// every 3rd entry from index 0 to land 8 points of 24h coverage.
+
+static void build_hourly_cache(cJSON *hourly, ForecastCache &out)
+{
+    out.hourly_count = 0;
     if (!hourly) return;
-    int now_hr = current_local_hour();
     cJSON *time_arr = cJSON_GetObjectItemCaseSensitive(hourly, "time");
     cJSON *t_arr = cJSON_GetObjectItemCaseSensitive(hourly, "temperature_2m");
     cJSON *w_arr = cJSON_GetObjectItemCaseSensitive(hourly, "weathercode");
     cJSON *p_arr = cJSON_GetObjectItemCaseSensitive(hourly, "precipitation_probability");
     if (!cJSON_IsArray(time_arr)) return;
     int n = cJSON_GetArraySize(time_arr);
-
-    // open-meteo's `hourly` starts at the current day's 00:00 local — walk
-    // every 3rd entry from index 0 to give 8 points of 24h coverage.
-    for (int i = 0; i < n && i < 24; i += 3) {
+    for (int i = 0; i < n && i < 24 && out.hourly_count < 8; i += 3) {
         cJSON *t = cJSON_GetArrayItem(time_arr, i);
         cJSON *tmp = cJSON_GetArrayItem(t_arr, i);
         cJSON *wc = cJSON_GetArrayItem(w_arr, i);
         cJSON *pp = cJSON_IsArray(p_arr) ? cJSON_GetArrayItem(p_arr, i) : nullptr;
         std::string tstr = (cJSON_IsString(t) && t->valuestring) ? t->valuestring : "";
-        int hr = 0;
-        if (tstr.size() >= 13) hr = atoi(tstr.substr(11, 2).c_str());
+        CacheHour &h = out.hourly[out.hourly_count++];
+        h.hr = (tstr.size() >= 13) ? (uint8_t)atoi(tstr.substr(11, 2).c_str()) : 0;
         int temp = cJSON_IsNumber(tmp) ? (int)tmp->valuedouble : 0;
-        int code = cJSON_IsNumber(wc) ? (int)wc->valuedouble : 0;
+        h.temp = (int8_t)(temp < -128 ? -128 : temp > 127 ? 127 : temp);
+        h.code = cJSON_IsNumber(wc) ? (uint8_t)wc->valuedouble : 0;
         int pop = cJSON_IsNumber(pp) ? (int)pp->valuedouble : 0;
-        char h_buf[8], t_buf[8], p_buf[8];
-        snprintf(h_buf, sizeof(h_buf), "%02dh", hr);
-        snprintf(t_buf, sizeof(t_buf), "%dC", temp);
-        snprintf(p_buf, sizeof(p_buf), "%d%%", pop);
-        // Slot covers [hr, hr+3); mark the one containing "now".
-        bool is_current = (now_hr >= 0 && now_hr >= hr && now_hr < hr + 3);
-        make_cell(hourly_col, h_buf, wmo_to_icon(code), t_buf, p_buf, is_current);
+        h.pop = (uint8_t)(pop < 0 ? 0 : pop > 100 ? 100 : pop);
     }
 }
 
-static void render_daily(cJSON *daily)
+static void build_daily_cache(cJSON *daily, ForecastCache &out)
 {
-    lv_obj_clean(daily_col);
+    out.daily_count = 0;
     if (!daily) return;
     cJSON *time_arr = cJSON_GetObjectItemCaseSensitive(daily, "time");
     cJSON *hi_arr = cJSON_GetObjectItemCaseSensitive(daily, "temperature_2m_max");
@@ -639,31 +707,62 @@ static void render_daily(cJSON *daily)
     cJSON *p_arr = cJSON_GetObjectItemCaseSensitive(daily, "precipitation_probability_max");
     if (!cJSON_IsArray(time_arr)) return;
     int n = cJSON_GetArraySize(time_arr);
-    for (int i = 0; i < n && i < 7; i++) {
+    for (int i = 0; i < n && out.daily_count < 7; i++) {
         cJSON *t = cJSON_GetArrayItem(time_arr, i);
         cJSON *hi = cJSON_GetArrayItem(hi_arr, i);
         cJSON *lo = cJSON_GetArrayItem(lo_arr, i);
         cJSON *wc = cJSON_GetArrayItem(w_arr, i);
         cJSON *pp = cJSON_IsArray(p_arr) ? cJSON_GetArrayItem(p_arr, i) : nullptr;
-        std::string date = (cJSON_IsString(t) && t->valuestring) ? t->valuestring : "";
-        int wday = weekday_from_date(date);
-        const char *name = (i == 0) ? "Tod" : day_short(wday);
+        CacheDay &d = out.daily[out.daily_count++];
+        memset(d.date, 0, sizeof(d.date));
+        if (cJSON_IsString(t) && t->valuestring) {
+            strncpy(d.date, t->valuestring, sizeof(d.date) - 1);
+        }
         int hi_v = cJSON_IsNumber(hi) ? (int)hi->valuedouble : 0;
         int lo_v = cJSON_IsNumber(lo) ? (int)lo->valuedouble : 0;
-        int code = cJSON_IsNumber(wc) ? (int)wc->valuedouble : 0;
+        d.hi = (int8_t)(hi_v < -128 ? -128 : hi_v > 127 ? 127 : hi_v);
+        d.lo = (int8_t)(lo_v < -128 ? -128 : lo_v > 127 ? 127 : lo_v);
+        d.code = cJSON_IsNumber(wc) ? (uint8_t)wc->valuedouble : 0;
         int pop = cJSON_IsNumber(pp) ? (int)pp->valuedouble : 0;
-        char tr_buf[12], p_buf[8];
-        snprintf(tr_buf, sizeof(tr_buf), "%d/%d", hi_v, lo_v);
-        snprintf(p_buf, sizeof(p_buf), "%d%%", pop);
-        make_cell(daily_col, name, wmo_to_icon(code), tr_buf, p_buf, i == 0);
+        d.pop = (uint8_t)(pop < 0 ? 0 : pop > 100 ? 100 : pop);
     }
 }
 
-// Fetches current conditions + hourly + daily in a single open-meteo call and
-// renders all three sections. Before the switch to ip-api.com we needed a
-// separate wttr.in call just for current conditions; open-meteo's `current=`
-// block covers everything we used from wttr so one HTTPS round-trip is enough.
-static bool fetch_weather(double lat, double lon, std::string &err)
+// --- cache -> UI ----------------------------------------------------------
+// Both the NVS-loaded cache path and the post-fetch path feed through here,
+// so the cold-start and fresh-fetch renders are pixel-identical.
+static void render_cache(const ForecastCache &c)
+{
+    lv_obj_clean(hourly_col);
+    lv_obj_clean(daily_col);
+
+    int now_hr = current_local_hour();
+    for (int i = 0; i < c.hourly_count; i++) {
+        const CacheHour &h = c.hourly[i];
+        char h_buf[8], t_buf[8], p_buf[8];
+        snprintf(h_buf, sizeof(h_buf), "%02dh", (int)h.hr);
+        snprintf(t_buf, sizeof(t_buf), "%dC", (int)h.temp);
+        snprintf(p_buf, sizeof(p_buf), "%d%%", (int)h.pop);
+        // Slot covers [hr, hr+3); mark the one containing "now".
+        bool is_current = (now_hr >= 0 && now_hr >= (int)h.hr &&
+                           now_hr < (int)h.hr + 3);
+        make_cell(hourly_col, h_buf, wmo_to_icon(h.code), t_buf, p_buf, is_current);
+    }
+    for (int i = 0; i < c.daily_count; i++) {
+        const CacheDay &d = c.daily[i];
+        int wday = weekday_from_date(std::string(d.date));
+        const char *name = (i == 0) ? "Tod" : day_short(wday);
+        char tr_buf[12], p_buf[8];
+        snprintf(tr_buf, sizeof(tr_buf), "%d/%d", (int)d.hi, (int)d.lo);
+        snprintf(p_buf, sizeof(p_buf), "%d%%", (int)d.pop);
+        make_cell(daily_col, name, wmo_to_icon(d.code), tr_buf, p_buf, i == 0);
+    }
+}
+
+// Single open-meteo call covering hourly (24h sampled) + daily (7d). Populates
+// `out` with the compact cache form used by render_cache().
+static bool fetch_weather(double lat, double lon, ForecastCache &out,
+                          std::string &err)
 {
     // Buffer headroom matters: the full URL with all params is ~300 chars
     // before lat/lon expand, and a too-small buffer silently truncates.
@@ -681,11 +780,16 @@ static bool fetch_weather(double lat, double lon, std::string &err)
     cJSON *j = cJSON_Parse(body.c_str());
     if (!j) { err = "forecast parse"; return false; }
 
-    cJSON *hourly = cJSON_GetObjectItemCaseSensitive(j, "hourly");
-    cJSON *daily  = cJSON_GetObjectItemCaseSensitive(j, "daily");
-    render_hourly(hourly);
-    render_daily(daily);
+    memset(&out, 0, sizeof(out));
+    build_hourly_cache(cJSON_GetObjectItemCaseSensitive(j, "hourly"), out);
+    build_daily_cache(cJSON_GetObjectItemCaseSensitive(j, "daily"), out);
     cJSON_Delete(j);
+
+    // Only record a usable timestamp when the system clock is actually set —
+    // otherwise freshness comparisons against a 1970 `ts` would treat the
+    // cache as ancient and defeat the point.
+    time_t now_t = time(nullptr);
+    out.ts = (now_t > 1000000000) ? (uint32_t)now_t : 0;
     return true;
 }
 
@@ -693,28 +797,66 @@ static bool fetch_weather(double lat, double lon, std::string &err)
 
 static void do_fetch()
 {
-    if (!hw_get_wifi_enable()) {
-        clear_all();
-        set_status("WiFi is off -- enable it in Settings.", UI_COLOR_MUTED);
-        return;
-    }
-    if (!hw_get_wifi_connected()) {
-        clear_all();
-        set_status("WiFi not connected.", UI_COLOR_MUTED);
-        return;
-    }
-
-    set_status("Fetching...", UI_COLOR_ACCENT);
-    lv_refr_now(NULL);
-
 #ifdef ARDUINO
-    std::string err;
-    GeoData g;
     std::string user_city = load_user_city();
     std::string key = user_city.empty() ? std::string("auto") : user_city;
 
-    bool from_cache = load_cached_geo(key, g);
-    if (!from_cache) {
+    // Load any cached forecast for the current key up front — we'll use it
+    // to render immediately (fresh *or* stale) so the panel is never blank
+    // while we figure out whether to hit the network.
+    ForecastCache cache;
+    bool have_cache = load_forecast_cache(key, cache);
+
+    time_t now_t = time(nullptr);
+    bool clock_ok = now_t > 1000000000;
+    bool cache_fresh = have_cache && clock_ok && cache.ts > 0 &&
+                       (uint32_t)now_t >= cache.ts &&
+                       ((uint32_t)now_t - cache.ts) < WEATHER_FRESH_TTL_SEC;
+
+    // Fresh cache hit → pure NVS path, no WiFi, no HTTPS, no parsing a 5 KB
+    // response. This is the whole point of the cache.
+    if (cache_fresh) {
+        render_cache(cache);
+        set_status("", UI_COLOR_MUTED);
+        return;
+    }
+
+    bool wifi_on = hw_get_wifi_enable();
+    bool wifi_up = wifi_on && hw_get_wifi_connected();
+
+    if (!wifi_up) {
+        // No network. If we have *any* cache, show it — stale weather is far
+        // more useful than a blank panel. Otherwise fall back to the old
+        // error-only behavior.
+        if (have_cache) {
+            render_cache(cache);
+            set_status(wifi_on ? "Offline -- showing cached."
+                               : "WiFi off -- showing cached.",
+                       UI_COLOR_MUTED);
+        } else {
+            clear_all();
+            set_status(wifi_on ? "WiFi not connected."
+                               : "WiFi is off -- enable it in Settings.",
+                       UI_COLOR_MUTED);
+        }
+        return;
+    }
+
+    // Have WiFi but the cache is missing or stale. Paint the stale cache
+    // under an "Updating..." banner so the user sees something instantly
+    // while the blocking HTTP call runs.
+    if (have_cache) {
+        render_cache(cache);
+        set_status("Updating...", UI_COLOR_ACCENT);
+    } else {
+        clear_all();
+        set_status("Fetching...", UI_COLOR_ACCENT);
+    }
+    lv_refr_now(NULL);
+
+    std::string err;
+    GeoData g;
+    if (!load_cached_geo(key, g)) {
         bool ok = user_city.empty() ? fetch_geo_ip(g, err)
                                     : fetch_geo_city(user_city, g, err);
         if (!ok && user_city == WEATHER_DEFAULT_CITY) {
@@ -727,20 +869,26 @@ static void do_fetch()
             ok            = true;
         }
         if (!ok) {
-            set_status(("geo fail: " + (err.empty() ? std::string("err") : err)).c_str(),
-                       lv_palette_main(LV_PALETTE_RED));
+            // Geo failed; leave the stale cache visible under a red banner.
+            std::string msg = "geo fail: " +
+                              (err.empty() ? std::string("err") : err);
+            set_status(msg.c_str(), lv_palette_main(LV_PALETTE_RED));
             return;
         }
         save_cached_geo(key, g);
     }
 
-    if (!fetch_weather(g.lat, g.lon, err)) {
-        set_status(("forecast: " + err).c_str(),
-                   lv_palette_main(LV_PALETTE_RED));
+    ForecastCache fresh;
+    if (!fetch_weather(g.lat, g.lon, fresh, err)) {
+        std::string msg = "forecast: " + err;
+        set_status(msg.c_str(), lv_palette_main(LV_PALETTE_RED));
         return;
     }
+    render_cache(fresh);
+    save_forecast_cache(key, fresh);
     set_status("", UI_COLOR_MUTED);
 #else
+    clear_all();
     set_status("Not supported on emulator.", UI_COLOR_MUTED);
 #endif
 }
@@ -776,11 +924,27 @@ static void ui_weather_enter(lv_obj_t *parent)
     lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(parent, root_click_cb, LV_EVENT_CLICKED, nullptr);
 
-    // Section label: 24h
-    lv_obj_t *h_hdr = lv_label_create(parent);
+    // Section label: 24h + status (status sits on the same row, right-aligned)
+    lv_obj_t *hdr_row = lv_obj_create(parent);
+    lv_obj_remove_style_all(hdr_row);
+    lv_obj_set_width(hdr_row, lv_pct(100));
+    lv_obj_set_height(hdr_row, LV_SIZE_CONTENT);
+    lv_obj_remove_flag(hdr_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(hdr_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(hdr_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *h_hdr = lv_label_create(hdr_row);
     lv_label_set_text(h_hdr, "24h");
     lv_obj_set_style_text_color(h_hdr, UI_COLOR_ACCENT, 0);
     lv_obj_set_style_text_font(h_hdr, get_weather_font(), 0);
+
+    status_label = lv_label_create(hdr_row);
+    lv_label_set_text(status_label, "");
+    lv_obj_set_flex_grow(status_label, 1);
+    lv_obj_set_style_text_color(status_label, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_text_font(status_label, get_weather_font(), 0);
+    lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_RIGHT, 0);
 
     hourly_col = lv_obj_create(parent);
     lv_obj_remove_style_all(hourly_col);
@@ -811,13 +975,6 @@ static void ui_weather_enter(lv_obj_t *parent)
     lv_obj_set_flex_align(daily_col, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_remove_flag(daily_col, LV_OBJ_FLAG_CLICKABLE);
-
-    status_label = lv_label_create(parent);
-    lv_label_set_text(status_label, "");
-    lv_obj_set_width(status_label, lv_pct(100));
-    lv_obj_set_style_text_color(status_label, UI_COLOR_MUTED, 0);
-    lv_obj_set_style_text_font(status_label, get_weather_font(), 0);
-    lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
 
     do_fetch();
 }
@@ -881,12 +1038,18 @@ void weather_set_user_city(const char *city)
     } else {
         p.remove("user_city");
     }
-    // Drop the cached lat/lon so the next fetch resolves the new source.
+    // Drop the cached lat/lon *and* the cached forecast so the next fetch
+    // resolves the new source from scratch — otherwise we'd render the old
+    // city's forecast until the key-mismatch check in load_forecast_cache
+    // eventually threw it out.
     p.remove("ver");
     p.remove("key");
     p.remove("loc");
     p.remove("lat");
     p.remove("lon");
+    p.remove("fcv");
+    p.remove("fck");
+    p.remove("fcd");
     p.end();
 #else
     (void)city;
@@ -912,6 +1075,12 @@ void weather_set_user_location(const char *city, double lat, double lon)
     p.putString("loc", city);       // displayed location label
     p.putFloat("lat", (float)lat);
     p.putFloat("lon", (float)lon);
+    // The new location shares the NVS namespace with any leftover forecast
+    // from the previous city; drop it so the next fetch starts clean rather
+    // than briefly rendering the old city's forecast under the new label.
+    p.remove("fcv");
+    p.remove("fck");
+    p.remove("fcd");
     p.end();
 #else
     (void)city; (void)lat; (void)lon;

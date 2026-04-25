@@ -138,6 +138,12 @@ static void add_ta_event_cb(lv_event_t *e) {
 
     if (code == LV_EVENT_FOCUSED) {
         set_add_ta_collapsed(ta, false);
+        // Match the Telegram composer's pattern: clear editing on focus so the
+        // physical keyboard delivers characters straight to the textarea. If
+        // we entered Tasks with the menu group still in editing mode (e.g.
+        // after the volume tile toggled it), the first LV_EVENT_KEY arrives
+        // while the indev is mid-edit-transition and the character is dropped.
+        if (g) lv_group_set_editing(g, false);
     } else if (code == LV_EVENT_DEFOCUSED) {
         set_add_ta_collapsed(ta, true);
     } else if (code == LV_EVENT_CLICKED) {
@@ -370,6 +376,10 @@ void ui_tasks_enter(lv_obj_t *parent) {
 
     lv_menu_set_page(menu, main_page);
     lv_group_focus_obj(add_ta);
+    // The previously-active app (or menu) may have left the group in editing
+    // mode. Clear it before the user types so the very first key reaches the
+    // textarea instead of being consumed by an edit-mode transition.
+    lv_group_set_editing(lv_group_get_default(), false);
 
 #ifdef USING_TOUCHPAD
     quit_btn = create_floating_button([](lv_event_t *e) {

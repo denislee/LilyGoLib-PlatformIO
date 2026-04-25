@@ -6,13 +6,31 @@
 #include "app_registry.h"
 #include "../core/app_manager.h"
 #include "../hal/storage.h"
+#include "../hal/system.h"
 #include "../hal/wireless.h"
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <ctime>
 #include <functional>
 
 static const char *NEWS_REMOTE_BASE = "https://denislee.github.io/hn/";
+
+// Parses "NNN.N KiB" / "NNN.N MiB" / "NNN B" into approximate bytes. Returns
+// 0 when the string is empty or unparseable — callers treat 0 as "unknown".
+static size_t parse_size_str(const std::string &s)
+{
+    if (s.empty()) return 0;
+    double n = atof(s.c_str());
+    char unit = 0;
+    for (char c : s) {
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) { unit = c; break; }
+    }
+    if (unit == 'K' || unit == 'k') return (size_t)(n * 1024.0);
+    if (unit == 'M' || unit == 'm') return (size_t)(n * 1024.0 * 1024.0);
+    if (unit == 'G' || unit == 'g') return (size_t)(n * 1024.0 * 1024.0 * 1024.0);
+    return (size_t)n;
+}
 
 namespace {
 
@@ -25,6 +43,8 @@ static lv_obj_t *index_page = NULL;
 static lv_obj_t *index_list = NULL;
 static lv_obj_t *scroll_wrapper = NULL;
 static lv_obj_t *text_area = NULL;
+static lv_obj_t *sync_btn = NULL;
+static lv_obj_t *sync_lbl = NULL;
 
 static lv_obj_t *lbl_progress = NULL;
 
@@ -75,6 +95,7 @@ static std::string format_news_date(const std::string &filename) {
 static void refresh_ui();
 static void sync_menu_header();
 static void show_download_page();
+static void apply_sync_btn_state();
 
 static void load_files()
 {
@@ -223,11 +244,11 @@ static void show_download_page()
 static void start_remote_browse()
 {
     if (!hw_get_wifi_enable()) {
-        ui_msg_pop_up("WiFi off", "Enable WiFi in Settings first.");
+        ui_msg_pop_up("", "Enable WiFi in Settings first.");
         return;
     }
     if (!hw_get_wifi_connected()) {
-        ui_msg_pop_up("No connection", "WiFi is not connected.");
+        ui_msg_pop_up("", "WiFi is not connected.");
         return;
     }
 
@@ -264,11 +285,11 @@ static void download_btn_cb(lv_event_t *e)
 static void sync_all_btn_cb(lv_event_t *e)
 {
     if (!hw_get_wifi_enable()) {
-        ui_msg_pop_up("WiFi off", "Enable WiFi in Settings first.");
+        ui_msg_pop_up("", "Enable WiFi in Settings first.");
         return;
     }
     if (!hw_get_wifi_connected()) {
-        ui_msg_pop_up("No connection", "WiFi is not connected.");
+        ui_msg_pop_up("", "WiFi is not connected.");
         return;
     }
 
@@ -299,14 +320,39 @@ static void sync_all_btn_cb(lv_event_t *e)
     ui_loading_open(&s_progress, "Syncing news", "");
     ui_loading_set_progress(&s_progress, 0, (int)entries.size(), "");
 
-    int ok_count = 0, fail_count = 0;
+    int ok_count = 0, fail_count = 0, skip_count = 0;
     for (size_t i = 0; i < entries.size() && !progress_cancelled; i++) {
         const std::string &fname = entries[i].first;
+        std::string dest = "/news/" + fname;
+
+        // Skip when a local file of matching size already exists. The
+        // server's size string is precise to 0.1 KiB so we allow a small
+        // tolerance. If no remote size is advertised we fall back to
+        // "any non-empty local file wins" — daily HN archives are
+        // immutable once published.
+        size_t local_bytes = hw_get_file_size(dest.c_str());
+        size_t remote_bytes = parse_size_str(entries[i].second);
+        bool already_have = false;
+        if (local_bytes > 0) {
+            if (remote_bytes == 0) {
+                already_have = true;
+            } else {
+                size_t diff = (local_bytes > remote_bytes)
+                              ? (local_bytes - remote_bytes)
+                              : (remote_bytes - local_bytes);
+                if (diff <= 1024) already_have = true;
+            }
+        }
+        if (already_have) {
+            skip_count++;
+            ui_loading_set_progress(&s_progress, (int)(i + 1), (int)entries.size(), fname.c_str());
+            continue;
+        }
+
         ui_loading_set_progress(&s_progress, (int)i, (int)entries.size(), fname.c_str());
         lv_refr_now(NULL);
 
         std::string url = std::string(NEWS_REMOTE_BASE) + fname;
-        std::string dest = "/news/" + fname;
         std::string derr;
         // nullptr callback: we don't want download_progress_cb to repaint
         // the bar, since the batch bar tracks the outer file-index counter.
@@ -323,17 +369,20 @@ static void sync_all_btn_cb(lv_event_t *e)
     load_files();
     refresh_ui();
 
-    char synced[16], failed[16];
-    snprintf(synced, sizeof(synced), "%d / %d",
-             ok_count, (int)entries.size());
+    char synced[16], skipped[16], failed[16];
+    snprintf(synced, sizeof(synced), "%d", ok_count);
+    snprintf(skipped, sizeof(skipped), "%d", skip_count);
     snprintf(failed, sizeof(failed), "%d", fail_count);
     ui_summary_row_t rows[] = {
-        {"Synced", synced},
+        {"Downloaded", synced},
+        {"Already up to date", skipped},
         {"Failed", failed},
     };
-    ui_result_show("News sync",
-                   fail_count == 0 ? "All files downloaded." : "Some files failed.",
-                   rows, 2);
+    const char *headline;
+    if (fail_count > 0) headline = "Some files failed.";
+    else if (ok_count == 0) headline = "Already up to date.";
+    else headline = "News updated.";
+    ui_result_show("News sync", headline, rows, 3);
 }
 
 static void back_event_handler(lv_event_t *e)
@@ -363,6 +412,8 @@ static void news_view_back_cb(lv_event_t *e)
             }
         }
     } else if (cur == index_page) {
+        hw_file_reader_close();
+        current_file_path.clear();
         lv_menu_set_page(menu, main_page);
         sync_menu_header();
     } else if (cur == download_page) {
@@ -381,6 +432,36 @@ static void sync_menu_header()
     if (header) lv_obj_add_flag(header, LV_OBJ_FLAG_HIDDEN);
 }
 
+// Reflect WiFi state visually on the Sync button, but keep it focusable
+// either way — the click handler already shows "Enable WiFi in Settings
+// first." when WiFi is off, which is more discoverable than silently
+// dropping the button from the focus group.
+static void apply_sync_btn_state()
+{
+    if (!sync_btn) return;
+    bool enabled = hw_get_wifi_enable();
+    lv_group_t *g = lv_group_get_default();
+    if (g) lv_group_add_obj(g, sync_btn);
+
+    if (enabled) {
+        lv_obj_remove_state(sync_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(sync_btn, UI_COLOR_ACCENT, 0);
+        if (sync_lbl) {
+            lv_obj_set_style_text_color(sync_lbl, UI_COLOR_FG, 0);
+            lv_obj_set_style_text_opa(sync_lbl, LV_OPA_COVER, 0);
+        }
+    } else {
+        lv_obj_add_state(sync_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(sync_btn, lv_color_hex(0x404040), 0);
+        if (sync_lbl) {
+            lv_obj_set_style_text_color(sync_lbl, UI_COLOR_FG, 0);
+            lv_obj_set_style_text_opa(sync_lbl, LV_OPA_50, 0);
+        }
+    }
+    lv_obj_set_style_bg_opa(sync_btn, LV_OPA_COVER, 0);
+    if (sync_lbl) lv_label_set_text(sync_lbl, LV_SYMBOL_REFRESH);
+}
+
 static void update_page()
 {
     if (current_file_path.empty()) return;
@@ -390,7 +471,7 @@ static void update_page()
     bool is_final_chunk = (read_size == remaining);
 
     std::string content;
-    if (read_size > 0 && !hw_read_file_chunk(current_file_path.c_str(), current_file_offset, read_size, content)) {
+    if (read_size > 0 && !hw_file_reader_read(current_file_offset, read_size, content)) {
         ui_msg_pop_up("Error", "Failed to read file.");
         return;
     }
@@ -634,10 +715,17 @@ static void file_click_cb(lv_event_t *e)
     page_offsets.clear();
     page_offsets.push_back(0);
 
+    // Persistent reader stays open for the duration of this viewing session
+    // so next/prev page don't re-open the file each time. Closed in
+    // news_view_back_cb when we leave back to the file list, and in
+    // ui_news_exit.
+    hw_file_reader_close();
+    hw_file_reader_open(current_file_path.c_str());
+
     ui_loading_t load;
     ui_loading_open(&load, "Loading index", "Scanning headers...");
 
-    hw_get_news_headers(current_file_path.c_str(), news_headers, index_progress_cb);
+    hw_get_news_headers_cached(current_file_path.c_str(), news_headers, index_progress_cb);
     news_headers_loaded = true;
     ui_loading_close(&load);
 
@@ -661,10 +749,19 @@ static void refresh_ui()
         lv_obj_set_width(empty, LV_PCT(100));
         lv_obj_set_style_pad_all(empty, 20, 0);
     } else {
+        struct tm now_tm = {};
+        hw_get_date_time(now_tm);
+        char today_buf[16];
+        snprintf(today_buf, sizeof(today_buf), "%04d-%02d-%02d",
+                 now_tm.tm_year + 1900, now_tm.tm_mon + 1, now_tm.tm_mday);
+        std::string today_str = today_buf;
+
         for (size_t i = 0; i < news_files.size(); i++) {
             const auto &file = news_files[i];
             std::string label_text = format_news_date(file);
-            lv_obj_t *btn = lv_list_add_btn(file_list, LV_SYMBOL_NEW_LINE, label_text.c_str());
+            bool is_today = file.find(today_str) != std::string::npos;
+            const char *icon_sym = is_today ? LV_SYMBOL_BELL : LV_SYMBOL_NEW_LINE;
+            lv_obj_t *btn = lv_list_add_btn(file_list, icon_sym, label_text.c_str());
             lv_obj_set_user_data(btn, (void *)(intptr_t)i);
             lv_obj_add_event_cb(btn, file_click_cb, LV_EVENT_CLICKED, NULL);
             lv_group_add_obj(lv_group_get_default(), btn);
@@ -679,12 +776,30 @@ static void refresh_ui()
             if (icon) {
                 lv_obj_set_width(icon, 18);
                 lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
+                if (is_today) {
+                    lv_obj_set_style_text_color(icon, UI_COLOR_ACCENT, 0);
+                }
             }
             if (lbl) {
                 lv_obj_set_width(lbl, 0);
                 lv_obj_set_flex_grow(lbl, 1);
                 lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
                 lv_obj_set_style_text_font(lbl, get_md_font(), 0);
+                if (is_today) {
+                    lv_obj_set_style_text_color(lbl, UI_COLOR_ACCENT, 0);
+                }
+            }
+
+            if (is_today) {
+                lv_obj_t *badge = lv_label_create(btn);
+                lv_label_set_text(badge, "Today");
+                lv_obj_set_style_text_color(badge, UI_COLOR_FG, 0);
+                lv_obj_set_style_text_font(badge, get_md_font(), 0);
+                lv_obj_set_style_bg_color(badge, UI_COLOR_ACCENT, 0);
+                lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+                lv_obj_set_style_radius(badge, UI_RADIUS, 0);
+                lv_obj_set_style_pad_hor(badge, 6, 0);
+                lv_obj_set_style_pad_ver(badge, 1, 0);
             }
         }
     }
@@ -720,24 +835,42 @@ void ui_news_enter(lv_obj_t *parent)
     lv_obj_set_style_pad_all(main_page, 4, 0);
     lv_obj_set_style_pad_row(main_page, 4, 0);
 
-    lv_obj_t *sync_btn = lv_btn_create(main_page);
-    lv_obj_set_width(sync_btn, LV_PCT(100));
-    lv_obj_set_height(sync_btn, 34);
+    sync_btn = lv_btn_create(main_page);
+    lv_obj_set_size(sync_btn, 36, 36);
+    lv_obj_add_flag(sync_btn, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_add_flag(sync_btn, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(sync_btn, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
+    lv_obj_set_style_radius(sync_btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(sync_btn, UI_COLOR_ACCENT, 0);
-    lv_obj_set_style_radius(sync_btn, UI_RADIUS, 0);
+    lv_obj_set_style_pad_all(sync_btn, 0, 0);
+    lv_obj_set_style_shadow_width(sync_btn, 8, 0);
+    lv_obj_set_style_shadow_opa(sync_btn, LV_OPA_30, 0);
+    lv_obj_set_style_outline_width(sync_btn, 2, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_color(sync_btn, UI_COLOR_FG, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_opa(sync_btn, LV_OPA_COVER, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_pad(sync_btn, 2, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_width(sync_btn, 2, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_outline_color(sync_btn, UI_COLOR_FG, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_outline_opa(sync_btn, LV_OPA_COVER, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_outline_pad(sync_btn, 2, LV_STATE_FOCUS_KEY);
     lv_obj_add_event_cb(sync_btn, sync_all_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *sync_lbl = lv_label_create(sync_btn);
-    lv_label_set_text(sync_lbl, LV_SYMBOL_REFRESH "  Sync Latest News");
+    sync_lbl = lv_label_create(sync_btn);
+    lv_label_set_text(sync_lbl, LV_SYMBOL_REFRESH);
     lv_obj_set_style_text_color(sync_lbl, UI_COLOR_FG, 0);
     lv_obj_set_style_text_font(sync_lbl, get_md_font(), 0);
     lv_obj_center(sync_lbl);
-    lv_group_add_obj(lv_group_get_default(), sync_btn);
+    apply_sync_btn_state();
 
     file_list = lv_list_create(main_page);
     lv_obj_set_width(file_list, LV_PCT(100));
     lv_obj_set_flex_grow(file_list, 1);
     lv_obj_set_style_radius(file_list, UI_RADIUS, 0);
     lv_obj_add_event_cb(file_list, file_list_key_cb, LV_EVENT_KEY, NULL);
+
+    // The floating sync button is painted in child-index order, so it would
+    // otherwise sit underneath file_list (which is created later and covers
+    // the full page). Bring it to the front so the icon is visible.
+    lv_obj_move_foreground(sync_btn);
 
     view_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_flex_flow(view_page, LV_FLEX_FLOW_COLUMN);
@@ -831,6 +964,8 @@ void ui_news_exit(lv_obj_t *parent)
 {
     ui_hide_back_button();
     disable_keyboard();
+    hw_file_reader_close();
+    current_file_path.clear();
     if (menu) {
         lv_obj_del(menu);
         menu = NULL;
@@ -844,6 +979,8 @@ void ui_news_exit(lv_obj_t *parent)
     download_list = NULL;
     scroll_wrapper = NULL;
     text_area = NULL;
+    sync_btn = NULL;
+    sync_lbl = NULL;
     lbl_progress = NULL;
     ui_loading_close(&s_progress);
     remote_entries.clear();

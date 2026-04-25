@@ -51,7 +51,7 @@ bool hw_get_gps_info(gps_params_t &param)
     }
     last_update = millis();
 
-    memset(&param, 0, sizeof(gps_params_t));
+    param = gps_params_t{};
 
 
     param.model = instance.gps.getModel().c_str();

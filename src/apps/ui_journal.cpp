@@ -571,9 +571,23 @@ static void journal_build_ui(lv_obj_t *parent)
     enable_keyboard();
     parent_obj = parent;
 
-    if (hw_get_filesystem_dirty()) {
+    bool was_dirty = hw_get_filesystem_dirty();
+    if (was_dirty) {
         cache_valid = false;
         hw_set_filesystem_dirty(false);
+    }
+
+    // Cold-boot fast path: if no save/delete has touched the filesystem since
+    // the last refresh (the dirty flag is persisted in NVS) we can trust the
+    // on-disk index and skip the directory scan + per-file decrypt entirely.
+    // Manual refresh ('r' key) clears cache_valid to force a rescan when the
+    // user wants one.
+    if (!cache_valid && journal_entries.empty() && !was_dirty) {
+        std::vector<JournalEntry> snapshot;
+        if (load_index_file(snapshot) && !snapshot.empty()) {
+            journal_entries = std::move(snapshot);
+            cache_valid = true;
+        }
     }
 
     bool show_loader = !cache_valid || journal_entries.empty();

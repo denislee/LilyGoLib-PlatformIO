@@ -9,6 +9,7 @@
 #include "../ui_define.h"
 #include "../hal/notes_crypto.h"
 #include "../core/app_manager.h"
+#include "../core/settings_registry.h"
 #include "../core/system.h"
 #include "app_registry.h"
 #include "../ui_list_picker.h"
@@ -41,7 +42,7 @@ static lv_obj_t *settings_exit_btn = NULL;
 
 void ui_sys_exit(lv_obj_t *parent);
 
-#define MAX_MAIN_PAGE_ITEMS 16
+#define MAX_MAIN_PAGE_ITEMS 24
 static lv_obj_t *main_page_group_items[MAX_MAIN_PAGE_ITEMS];
 static uint8_t main_page_group_count = 0;
 
@@ -302,6 +303,25 @@ static lv_obj_t *create_remote_item(lv_obj_t *main_page)
     return cont;
 }
 
+static void recordings_click_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    hw_feedback();
+    core::AppManager::getInstance().queueSwitchApp("Recordings",
+        core::System::getInstance().getAppPanel());
+}
+
+static lv_obj_t *create_recordings_item(lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+    style_menu_item_icon(cont, LV_SYMBOL_AUDIO, "Recordings");
+    lv_obj_add_event_cb(cont, recordings_click_cb, LV_EVENT_CLICKED, NULL);
+    return cont;
+}
+
 static void power_off_click_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
@@ -487,6 +507,28 @@ static lv_obj_t *create_subpage_connectivity(lv_obj_t *menu, lv_obj_t *main_page
     return cont;
 }
 
+// Build a grid tile from a registry entry. Subpage entries mirror
+// create_subpage_*() above; action entries mirror create_files_item() etc.
+static lv_obj_t *create_registered_entry(lv_obj_t *menu, lv_obj_t *main_page,
+                                         const core::SettingsEntry &e)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, e.icon, e.label);
+
+    if (e.build) {
+        lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+        lv_obj_set_user_data(sub_page, (void *)e.build);
+        lv_menu_set_load_page_event(menu, cont, sub_page);
+        if (e.set_page) e.set_page(sub_page);
+    } else if (e.on_click) {
+        lv_obj_add_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+        lv_obj_add_event_cb(cont, e.on_click, LV_EVENT_CLICKED, NULL);
+    }
+    return cont;
+}
+
 void ui_sys_enter(lv_obj_t *parent)
 {
     if (menu != NULL) return;
@@ -554,12 +596,22 @@ void ui_sys_enter(lv_obj_t *parent)
     cont = create_subpage_telegram(menu, main_page);     add_grid_item(cont);
     cont = create_subpage_notes_sync(menu, main_page);   add_grid_item(cont);
     cont = create_remote_item(main_page);                add_grid_item(cont);
+    cont = create_recordings_item(main_page);            add_grid_item(cont);
     cont = create_subpage_storage(menu, main_page);      add_grid_item(cont);
     cont = create_files_item(main_page);                 add_grid_item(cont);
     cont = create_subpage_notes_security(menu, main_page); add_grid_item(cont);
     cont = create_subpage_performance(menu, main_page);  add_grid_item(cont);
     cont = create_subpage_info(menu, main_page);         add_grid_item(cont);
     cont = create_device_probe(menu, main_page);         add_grid_item(cont);
+
+    // Plugged-in entries (see core/settings_registry.h). Rendered between
+    // the hand-wired grid and the Power Off tile so third-party tiles
+    // don't visually out-rank the first-party ones.
+    for (const auto &e : core::settings_entries()) {
+        cont = create_registered_entry(menu, main_page, e);
+        add_grid_item(cont);
+    }
+
     cont = create_power_off_item(main_page);             add_grid_item(cont);
 
     settings_main_page = main_page;
@@ -617,6 +669,7 @@ void ui_sys_exit(lv_obj_t *parent)
     weather_cfg::reset_state();
     telegram_cfg::reset_state();
     notes_sync_cfg::reset_state();
+    core::reset_settings_entries();
     main_page_group_count = 0;
     subpage_item_count = 0;
     memset(main_page_group_items, 0, sizeof(main_page_group_items));
