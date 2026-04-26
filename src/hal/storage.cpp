@@ -26,6 +26,17 @@ static bool content_has_salted_magic(const char *buf, size_t len)
     return len >= 8 && memcmp(buf, "Salted__", 8) == 0;
 }
 
+/* Build a normalized "/path" into a fixed stack buffer. Avoids the heap
+ * allocs of Arduino's `String("/") + String(path)` pattern in fs hot paths
+ * (save/delete/read called per UI op, sometimes in directory loops). */
+static void normalize_path(const char *in, char *out, size_t cap)
+{
+    if (cap == 0) return;
+    if (!in || !in[0]) { out[0] = '\0'; return; }
+    if (in[0] == '/') snprintf(out, cap, "%s", in);
+    else snprintf(out, cap, "/%s", in);
+}
+
 /* Returns true if the encoded bytes were written into `out`. Either a
  * passthrough (plaintext copy) or the ciphertext. Returns false only if the
  * caller should abort the save — i.e. crypto is enabled for this path but the
@@ -218,7 +229,8 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
     std::vector<uint8_t> payload;
     if (!encode_for_write(path, content, payload, error)) return false;
 
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
     File f;
     bool lock = false;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
@@ -227,8 +239,8 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
     // If it already exists on Internal, save it there to avoid confusion
     bool exists_internal = FFat.exists(str);
 
-    printf("Attempting to save to %s (SD: %s, Internal Exists: %s)\n",
-           str.c_str(), is_sd ? "Yes" : "No", exists_internal ? "Yes" : "No");
+    log_d("Saving to %s (SD: %s, Internal Exists: %s)",
+          str, is_sd ? "Yes" : "No", exists_internal ? "Yes" : "No");
 
     if (exists_internal) {
         f = FFat.open(str, "w");
@@ -242,7 +254,7 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
     }
 
     if (!f) {
-        printf("Failed to open file for writing: %s\n", str.c_str());
+        log_e("Failed to open file for writing: %s", str);
         if (lock) instance.unlockSPI();
         if (error) {
             *error = std::string("Cannot open ") + target + " file for writing.";
@@ -254,7 +266,7 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
     f.close();
     if (lock) instance.unlockSPI();
 
-    printf("Saved %u bytes to %s (%s)\n", (unsigned int)written, str.c_str(), lock ? "SD" : "Internal");
+    log_d("Saved %u bytes to %s (%s)", (unsigned int)written, str, lock ? "SD" : "Internal");
     bool ok = (written == payload.size());
     if (!ok && error) {
         *error = std::string("Write to ") + target + " failed (storage full?).";
@@ -274,15 +286,15 @@ bool hw_save_internal_file(const char *path, const char *content, std::string *e
     std::vector<uint8_t> payload;
     if (!encode_for_write(path, content, payload, error)) return false;
 
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
-    File f;
+    char str[256];
+    normalize_path(path, str, sizeof(str));
 
-    printf("Attempting to save to internal %s\n", str.c_str());
+    log_d("Saving to internal %s", str);
 
-    f = FFat.open(str, "w");
+    File f = FFat.open(str, "w");
 
     if (!f) {
-        printf("Failed to open internal file for writing: %s\n", str.c_str());
+        log_e("Failed to open internal file for writing: %s", str);
         if (error) {
             *error = "Cannot open Internal file for writing.";
         }
@@ -292,7 +304,7 @@ bool hw_save_internal_file(const char *path, const char *content, std::string *e
     size_t written = payload.empty() ? 0 : f.write(payload.data(), payload.size());
     f.close();
 
-    printf("Saved %u bytes to internal %s\n", (unsigned int)written, str.c_str());
+    log_d("Saved %u bytes to internal %s", (unsigned int)written, str);
     bool ok = (written == payload.size());
     if (!ok && error) {
         *error = "Write to Internal failed (storage full?).";
@@ -309,22 +321,20 @@ bool hw_delete_file(const char *path)
 {
     hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
+    char idx[260];
+    snprintf(idx, sizeof(idx), "%s.idx", str);
+
     bool res_sd = false;
-    bool res_int = false;
-    if (HW_SD_ONLINE & hw_get_device_online()) {
+    bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
+    if (sd_online) {
         instance.lockSPI();
         res_sd = SD.remove(str);
-        instance.unlockSPI();
-    }
-    res_int = FFat.remove(str);
-    // Best-effort cleanup of the news header sidecar; ignored if absent.
-    String idx = str + ".idx";
-    if (HW_SD_ONLINE & hw_get_device_online()) {
-        instance.lockSPI();
         SD.remove(idx);
         instance.unlockSPI();
     }
+    bool res_int = FFat.remove(str);
     FFat.remove(idx);
     return res_sd || res_int;
 #else
@@ -337,7 +347,8 @@ bool hw_delete_internal_file(const char *path)
 {
     hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
     return FFat.remove(str);
 #else
     printf("Delete internal file: %s\n", path);
@@ -384,7 +395,9 @@ bool hw_delete_path(const char *path, bool use_sd)
     hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
     if (!path || !path[0]) return false;
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char buf[256];
+    normalize_path(path, buf, sizeof(buf));
+    String str(buf); // delete_path_recursive uses String children list
     if (use_sd) {
         if (!(HW_SD_ONLINE & hw_get_device_online())) return false;
         instance.lockSPI();
@@ -403,7 +416,8 @@ bool hw_delete_path(const char *path, bool use_sd)
 bool hw_read_file(const char *path, std::string &content)
 {
 #ifdef ARDUINO
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
     File f;
     bool lock = false;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
@@ -423,7 +437,7 @@ bool hw_read_file(const char *path, std::string &content)
     }
 
     if (!f) {
-        printf("Failed to open file for reading: %s\n", str.c_str());
+        log_e("Failed to open file for reading: %s", str);
         return false;
     }
 
@@ -434,7 +448,7 @@ bool hw_read_file(const char *path, std::string &content)
     }
     f.close();
     if (lock) instance.unlockSPI();
-    printf("Read %u bytes from %s (%s)\n", (unsigned int)size, str.c_str(), lock ? "SD" : "Internal");
+    log_d("Read %u bytes from %s (%s)", (unsigned int)size, str, lock ? "SD" : "Internal");
     if (!decode_after_read(content)) {
         content.clear();
         return false;
@@ -450,7 +464,8 @@ bool hw_read_file(const char *path, std::string &content)
 size_t hw_get_file_size(const char *path)
 {
 #ifdef ARDUINO
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
     File f;
     bool lock = false;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
@@ -484,7 +499,8 @@ size_t hw_get_file_size(const char *path)
 bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::string &content)
 {
 #ifdef ARDUINO
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
     File f;
     bool lock = false;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
@@ -504,7 +520,7 @@ bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::s
     }
 
     if (!f) {
-        printf("Failed to open file for reading chunk: %s\n", str.c_str());
+        log_e("Failed to open file for reading chunk: %s", str);
         return false;
     }
 
@@ -560,7 +576,8 @@ bool hw_read_internal_bytes_raw(const char *path, std::vector<uint8_t> &buf)
 {
     buf.clear();
 #ifdef ARDUINO
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
     File f = FFat.open(str, FILE_READ);
     if (!f) return false;
     size_t size = f.size();
@@ -579,7 +596,8 @@ bool hw_read_sd_bytes_raw(const char *path, std::vector<uint8_t> &buf)
     buf.clear();
 #ifdef ARDUINO
     if (!(HW_SD_ONLINE & hw_get_device_online())) return false;
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
     instance.lockSPI();
     File f = SD.open(str, FILE_READ);
     if (!f) {
@@ -601,15 +619,15 @@ bool hw_read_sd_bytes_raw(const char *path, std::vector<uint8_t> &buf)
 bool hw_read_internal_file(const char *path, std::string &content)
 {
 #ifdef ARDUINO
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
-    File f;
+    char str[256];
+    normalize_path(path, str, sizeof(str));
 
-    printf("Attempting to read internal %s\n", str.c_str());
+    log_d("Reading internal %s", str);
 
-    f = FFat.open(str, FILE_READ);
+    File f = FFat.open(str, FILE_READ);
 
     if (!f) {
-        printf("Failed to open internal file for reading: %s\n", str.c_str());
+        log_e("Failed to open internal file for reading: %s", str);
         return false;
     }
     size_t size = f.size();
@@ -618,7 +636,7 @@ bool hw_read_internal_file(const char *path, std::string &content)
         f.read((uint8_t *)&content[0], size);
     }
     f.close();
-    printf("Read %u bytes from internal %s\n", (unsigned int)size, str.c_str());
+    log_d("Read %u bytes from internal %s", (unsigned int)size, str);
     if (!decode_after_read(content)) {
         content.clear();
         return false;
@@ -909,7 +927,8 @@ void hw_get_news_headers(const char *path, std::vector<std::pair<std::string, si
 {
     headers.clear();
 #ifdef ARDUINO
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
     File f;
     bool lock = false;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
@@ -1134,9 +1153,13 @@ void hw_get_news_headers_cached(const char *path,
 {
     headers.clear();
 #ifdef ARDUINO
-    String txt = (path[0] == '/') ? String(path) : ("/" + String(path));
-    String idx = txt + ".idx";
-    size_t txt_size = hw_get_file_size(txt.c_str());
+    char txt_buf[256];
+    normalize_path(path, txt_buf, sizeof(txt_buf));
+    char idx_buf[260];
+    snprintf(idx_buf, sizeof(idx_buf), "%s.idx", txt_buf);
+    String txt(txt_buf);
+    String idx(idx_buf);
+    size_t txt_size = hw_get_file_size(txt_buf);
     if (txt_size == 0) return;
 
     if (sidecar_read(idx, txt_size, headers)) return;
@@ -1163,7 +1186,8 @@ bool hw_file_reader_open(const char *path)
 {
     hw_file_reader_close();
 #ifdef ARDUINO
-    String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    char str[256];
+    normalize_path(path, str, sizeof(str));
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
     if (is_sd) {
         instance.lockSPI();

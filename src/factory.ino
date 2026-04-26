@@ -166,19 +166,28 @@ void loop()
             last_freq = fake_sleep_freq;
         }
     } else {
-        user_setting_params_t settings;
-        hw_get_user_setting(settings);
-        uint32_t active_freq = settings.cpu_freq_mhz;
+        // Settings are an in-memory struct, but the loop runs at 20 Hz —
+        // refreshing the user-configured CPU freq once per second is plenty
+        // and keeps the cached active_freq path branch-only on most ticks.
+        static uint32_t last_settings_refresh_ms = 0;
+        static uint32_t cached_active_freq = 240;
+        uint32_t now_ms = millis();
+        if (cached_active_freq == 0 || now_ms - last_settings_refresh_ms > 1000) {
+            user_setting_params_t settings;
+            hw_get_user_setting(settings);
+            cached_active_freq = settings.cpu_freq_mhz;
+            last_settings_refresh_ms = now_ms;
+        }
 
-        if (inactive_time > 2000 && active_freq > 80) {
+        if (inactive_time > 2000 && cached_active_freq > 80) {
             if (last_freq != 80) {
                 setCpuFrequencyMhz(80);
                 last_freq = 80;
             }
         } else {
-            if (last_freq != active_freq) {
-                setCpuFrequencyMhz(active_freq);
-                last_freq = active_freq;
+            if (last_freq != cached_active_freq) {
+                setCpuFrequencyMhz(cached_active_freq);
+                last_freq = cached_active_freq;
             }
         }
     }

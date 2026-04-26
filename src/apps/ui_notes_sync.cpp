@@ -1,22 +1,29 @@
 /**
  * @file      ui_notes_sync.cpp
- * @brief     GitHub notes sync — the on-device counterpart of the host
- *            lilygo-notes-sync.sh script.
+ * @brief     GitHub notes sync — additive push of on-device notes to a
+ *            GitHub repo via the REST Contents API.
  *
- * The firmware can't run git, so we drive the note-sync half of the host
- * script through the GitHub REST Contents API over HTTPS:
- *   - Upload every top-level note on the SD card via PUT
- *     /repos/{owner}/{repo}/contents/notes/{file} (carrying the previous
- *     SHA when the file already exists so GitHub treats it as an update,
- *     not a conflict).
- *   - Delete anything under notes/ on the repo side that no longer
- *     exists on the SD card.
+ * The firmware can't run git, so we drive the push through the GitHub
+ * REST Contents API over HTTPS:
+ *   - GET /repos/{owner}/{repo}/contents/notes?ref=<branch> to learn
+ *     which filenames are already present on the remote.
+ *   - PUT /repos/{owner}/{repo}/contents/notes/{file} for every local
+ *     note whose name is NOT already on the remote.
  *
- * The card is the sync source of truth — that matches what the host
- * script sees when it mounts the MSC, and it keeps notes that only live
- * in internal FFat from being pushed to a shared repo. Bytes go to the
- * repo as raw ciphertext when notes crypto is enabled — we read via
- * hw_read_sd_bytes_raw() which bypasses the decrypt-on-read path.
+ * Sources, in priority order: internal FFat first, SD card second.
+ * When the same filename exists on both, FFat wins and the SD copy is
+ * ignored — a just-edited internal note is what gets pushed even if a
+ * stale SD copy with the same name still sits on the card.
+ *
+ * The push is strictly additive: files already on the remote are
+ * skipped (never updated, never deleted). On-device edits to a name
+ * already pushed will not propagate by themselves — by design, this
+ * is a backup-only flow, not a mirror. To re-push a changed note,
+ * delete or rename it on the remote first.
+ *
+ * Bytes go to the repo as raw ciphertext when notes crypto is enabled;
+ * hw_read_internal_bytes_raw() / hw_read_sd_bytes_raw() bypass the
+ * decrypt-on-read path so the repo gets the opaque Salted__ blob.
  *
  * The news-index download (denislee.github.io/hn) lives on the News app
  * itself — this sync only touches notes.
@@ -42,7 +49,6 @@
 #ifdef ARDUINO
 #include <Preferences.h>
 #include <mbedtls/base64.h>
-#include <mbedtls/sha1.h>
 extern "C" {
 #include "cJSON.h"
 }
@@ -151,33 +157,6 @@ static std::string gh_error(int code, const std::string &body,
 // --- base64 (mbedtls) -----------------------------------------------------
 
 #ifdef ARDUINO
-// GitHub's Contents API reports a file's `sha` as the Git blob SHA-1, which
-// hashes the bytes `"blob <len>\0<content>"` — not a plain SHA-1 over the
-// file. Computing it locally lets us skip uploads when the bytes already
-// match the remote, which otherwise produces a fresh commit per file on
-// every sync regardless of changes.
-static std::string git_blob_sha1(const uint8_t *data, size_t len)
-{
-    char header[32];
-    int hlen = snprintf(header, sizeof(header), "blob %u", (unsigned)len);
-    mbedtls_sha1_context ctx;
-    mbedtls_sha1_init(&ctx);
-    mbedtls_sha1_starts(&ctx);
-    mbedtls_sha1_update(&ctx, (const unsigned char *)header, (size_t)hlen + 1);
-    if (len) mbedtls_sha1_update(&ctx, data, len);
-    unsigned char out[20];
-    mbedtls_sha1_finish(&ctx, out);
-    mbedtls_sha1_free(&ctx);
-    static const char hex[] = "0123456789abcdef";
-    std::string s;
-    s.resize(40);
-    for (int i = 0; i < 20; i++) {
-        s[i * 2]     = hex[(out[i] >> 4) & 0xF];
-        s[i * 2 + 1] = hex[out[i] & 0xF];
-    }
-    return s;
-}
-
 static bool b64_encode(const uint8_t *data, size_t len, std::string &out)
 {
     size_t olen = 0;
@@ -290,27 +269,17 @@ static bool load_config(Config &c, std::string *err)
 
 #ifdef ARDUINO
 
-// Listing a folder that doesn't exist yet returns 404 with an empty body; a
-// caller shouldn't treat that as fatal — it just means nothing to reconcile.
-struct RemoteEntry {
-    std::string name;
-    std::string sha;
-};
-
-static std::string api_url(const Config &c, const std::string &path)
-{
-    // GitHub treats leading/trailing slashes literally — path is already of
-    // the form "notes" or "notes/foo.txt".
-    return std::string("https://api.github.com/repos/") + c.repo +
-           "/contents/" + path + "?ref=" + c.branch;
-}
+// Listing a folder that doesn't exist yet returns 404 with an empty body;
+// callers shouldn't treat that as fatal — it just means the remote has no
+// notes yet, so every local note is a candidate to push.
 
 static bool list_remote_notes(const Config &c,
-                              std::vector<RemoteEntry> &out,
+                              std::vector<std::string> &out,
                               std::string *err)
 {
     out.clear();
-    std::string url = api_url(c, "notes");
+    std::string url = std::string("https://api.github.com/repos/") + c.repo +
+                      "/contents/notes?ref=" + c.branch;
     std::string auth = "Bearer " + c.token;
     std::string body;
     int code = 0;
@@ -334,28 +303,22 @@ static bool list_remote_notes(const Config &c,
         for (int i = 0; i < n; i++) {
             cJSON *it = cJSON_GetArrayItem(arr, i);
             cJSON *jn = cJSON_GetObjectItemCaseSensitive(it, "name");
-            cJSON *js = cJSON_GetObjectItemCaseSensitive(it, "sha");
             cJSON *jt = cJSON_GetObjectItemCaseSensitive(it, "type");
             if (!jn || !cJSON_IsString(jn)) continue;
             if (jt && cJSON_IsString(jt) && strcmp(jt->valuestring, "file") != 0) continue;
-            RemoteEntry e;
-            e.name = jn->valuestring;
-            if (js && cJSON_IsString(js)) e.sha = js->valuestring;
-            out.push_back(std::move(e));
+            out.emplace_back(jn->valuestring);
         }
     }
     cJSON_Delete(arr);
     return true;
 }
 
-// Upload (create or update) notes/{name} with the given raw bytes. When the
-// file already exists on the remote, `prev_sha` must be the blob SHA so the
-// Contents API treats this as an update — passing an empty sha for an
-// existing file makes GitHub reject the call with a 422.
+// Create notes/{name} on the remote with the given raw bytes. Additive-only:
+// callers must have already confirmed the name does not exist remotely, so
+// we never carry a prev-sha and a 422 here means somebody else raced us.
 static bool put_remote_file(const Config &c,
                             const std::string &name,
                             const std::vector<uint8_t> &bytes,
-                            const std::string &prev_sha,
                             std::string *err)
 {
     std::string b64;
@@ -364,17 +327,13 @@ static bool put_remote_file(const Config &c,
         return false;
     }
     std::string path = "notes/" + name;
-    std::string msg = "sync: update " + name;
+    std::string msg = "sync: add " + name;
 
     std::string body;
-    body.reserve(64 + b64.size() + prev_sha.size());
+    body.reserve(64 + b64.size());
     body += "{\"message\":\"";  body += json_escape(msg); body += "\",";
     body += "\"content\":\"";   body += b64;              body += "\",";
-    body += "\"branch\":\"";    body += json_escape(c.branch); body += "\"";
-    if (!prev_sha.empty()) {
-        body += ",\"sha\":\""; body += prev_sha; body += "\"";
-    }
-    body += "}";
+    body += "\"branch\":\"";    body += json_escape(c.branch); body += "\"}";
 
     std::string url = std::string("https://api.github.com/repos/") + c.repo +
                       "/contents/" + path;
@@ -389,36 +348,6 @@ static bool put_remote_file(const Config &c,
     scrub_string(auth);
     if (!ok) {
         if (err) *err = gh_error(code, resp, terr.empty() ? "PUT failed" : terr);
-        return false;
-    }
-    return true;
-}
-
-static bool delete_remote_file(const Config &c,
-                               const std::string &name,
-                               const std::string &sha,
-                               std::string *err)
-{
-    std::string path = "notes/" + name;
-    std::string msg = "sync: remove " + name;
-    std::string body;
-    body += "{\"message\":\"";  body += json_escape(msg); body += "\",";
-    body += "\"sha\":\"";       body += sha;              body += "\",";
-    body += "\"branch\":\"";    body += json_escape(c.branch); body += "\"}";
-
-    std::string url = std::string("https://api.github.com/repos/") + c.repo +
-                      "/contents/" + path;
-    std::string auth = "Bearer " + c.token;
-    std::string resp;
-    int code = 0;
-    std::string terr;
-    bool ok = hw_http_request(url.c_str(), "DELETE",
-                              body.c_str(), body.size(),
-                              "application/json",
-                              auth.c_str(), resp, &code, &terr);
-    scrub_string(auth);
-    if (!ok) {
-        if (err) *err = gh_error(code, resp, terr.empty() ? "DELETE failed" : terr);
         return false;
     }
     return true;
@@ -441,86 +370,96 @@ static void run_sync()
         log_append("ERR: WiFi not connected.");
         return;
     }
-    if (!(HW_SD_ONLINE & hw_get_device_online())) {
-        log_append("ERR: SD card not mounted. Insert the card and retry.");
-        return;
-    }
 
     log_appendf("Repo: %s  Branch: %s", cfg.repo.c_str(), cfg.branch.c_str());
 
-    // 1. Enumerate top-level *.txt notes on the SD card. The card is the
-    //    sync source of truth — matches the host script, which only sees
-    //    what USB MSC exposes.
-    std::vector<std::string> local;
-    hw_get_sd_txt_files(local);
+    // 1. Build the local candidate list: FFat first, SD second. Same name on
+    //    both sides → FFat wins (the SD copy is dropped from the candidate
+    //    list and never read). The `internal` flag steers the raw read in
+    //    step 4 to the right backing store.
+    struct LocalNote {
+        std::string name;
+        bool internal;
+    };
 
-    // Strip the leading slash so filenames match GitHub's response shape.
-    for (auto &p : local) {
+    auto strip_slash = [](std::string &p) {
         if (!p.empty() && p[0] == '/') p.erase(0, 1);
-    }
-    log_appendf("Local notes: %u", (unsigned)local.size());
+    };
 
-    // 2. Fetch current remote state.
-    std::vector<RemoteEntry> remote;
+    std::vector<std::string> ffat_files;
+    hw_get_internal_txt_files(ffat_files);
+    std::vector<LocalNote> local;
+    local.reserve(ffat_files.size());
+    for (auto &p : ffat_files) {
+        strip_slash(p);
+        if (!p.empty()) local.push_back({p, true});
+    }
+    unsigned ffat_count = (unsigned)local.size();
+
+    unsigned sd_skipped_dup = 0;
+    bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
+    if (sd_online) {
+        std::vector<std::string> sd_files;
+        hw_get_sd_txt_files(sd_files);
+        for (auto &p : sd_files) {
+            strip_slash(p);
+            if (p.empty()) continue;
+            bool dup = false;
+            for (const auto &n : local) if (n.name == p) { dup = true; break; }
+            if (dup) { sd_skipped_dup++; continue; }
+            local.push_back({p, false});
+        }
+        log_appendf("Local notes: %u (FFat %u, SD %u, dup %u)",
+                    (unsigned)local.size(), ffat_count,
+                    (unsigned)local.size() - ffat_count, sd_skipped_dup);
+    } else {
+        log_appendf("Local notes: %u (FFat %u, SD offline)",
+                    (unsigned)local.size(), ffat_count);
+    }
+
+    // 2. Fetch current remote state — names only; we never overwrite, so
+    //    there's no need for the blob SHAs.
+    std::vector<std::string> remote;
     if (!list_remote_notes(cfg, remote, &err)) {
         log_appendf("ERR: list: %s", err.c_str());
         return;
     }
     log_appendf("Remote notes: %u", (unsigned)remote.size());
 
-    // 3. Upload each local file whose content differs from the remote.
-    //    Skip unchanged files — a blind PUT creates a no-op commit on
-    //    GitHub even when bytes match, so syncing a dozen notes with one
-    //    edit used to produce a dozen commits. Compare the Git blob SHA
-    //    locally to the `sha` we got from the listing.
-    int uploaded = 0, unchanged = 0, skipped = 0, up_failed = 0;
-    for (const auto &fname : local) {
+    // 3. Additive push: upload each local file whose name is NOT already on
+    //    the remote. Files already on the remote are skipped untouched —
+    //    edits won't propagate by themselves, by design.
+    int uploaded = 0, already = 0, skipped = 0, up_failed = 0;
+    for (const auto &n : local) {
+        bool on_remote = false;
+        for (const auto &r : remote) if (r == n.name) { on_remote = true; break; }
+        if (on_remote) {
+            log_appendf("  skip %s (on remote)", n.name.c_str());
+            already++;
+            continue;
+        }
         std::vector<uint8_t> bytes;
-        std::string abs = "/" + fname;
-        if (!hw_read_sd_bytes_raw(abs.c_str(), bytes)) {
-            log_appendf("  read %s: skip", fname.c_str());
+        std::string abs = "/" + n.name;
+        bool ok = n.internal ? hw_read_internal_bytes_raw(abs.c_str(), bytes)
+                             : hw_read_sd_bytes_raw(abs.c_str(), bytes);
+        if (!ok) {
+            log_appendf("  read %s: skip", n.name.c_str());
             skipped++;
             continue;
         }
-        std::string prev_sha;
-        for (const auto &r : remote) {
-            if (r.name == fname) { prev_sha = r.sha; break; }
-        }
-        if (!prev_sha.empty() &&
-            git_blob_sha1(bytes.data(), bytes.size()) == prev_sha) {
-            unchanged++;
-            continue;
-        }
         std::string perr;
-        if (put_remote_file(cfg, fname, bytes, prev_sha, &perr)) {
-            log_appendf("  up %s (%u B)", fname.c_str(), (unsigned)bytes.size());
+        if (put_remote_file(cfg, n.name, bytes, &perr)) {
+            log_appendf("  up %s (%c, %u B)", n.name.c_str(),
+                        n.internal ? 'I' : 'S', (unsigned)bytes.size());
             uploaded++;
         } else {
-            log_appendf("  up %s FAIL: %s", fname.c_str(), perr.c_str());
+            log_appendf("  up %s FAIL: %s", n.name.c_str(), perr.c_str());
             up_failed++;
         }
     }
 
-    // 4. Delete remote files that no longer exist locally.
-    int deleted = 0, del_failed = 0;
-    for (const auto &r : remote) {
-        bool still_local = false;
-        for (const auto &fname : local) {
-            if (fname == r.name) { still_local = true; break; }
-        }
-        if (still_local) continue;
-        std::string derr;
-        if (delete_remote_file(cfg, r.name, r.sha, &derr)) {
-            log_appendf("  rm %s", r.name.c_str());
-            deleted++;
-        } else {
-            log_appendf("  rm %s FAIL: %s", r.name.c_str(), derr.c_str());
-            del_failed++;
-        }
-    }
-
-    log_appendf("Notes: +%d -%d =%d (fail +%d -%d, skip %d)",
-                uploaded, deleted, unchanged, up_failed, del_failed, skipped);
+    log_appendf("Notes: +%d =%d (fail %d, skip %d)",
+                uploaded, already, up_failed, skipped);
 
     scrub_string(cfg.token);
 }
