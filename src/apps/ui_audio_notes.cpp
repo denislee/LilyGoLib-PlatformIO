@@ -319,10 +319,9 @@ static void build_list_view()
                 lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
             }
 
-            // Trailing: duration + date.
+            // Trailing: duration.
             lv_obj_t *meta = lv_label_create(btn);
-            std::string txt = format_duration_s(bytes_to_seconds(n.data_bytes))
-                            + "  " + format_date(n.mtime);
+            std::string txt = format_duration_s(bytes_to_seconds(n.data_bytes));
             lv_label_set_text(meta, txt.c_str());
             lv_obj_set_style_text_color(meta, UI_COLOR_MUTED, 0);
             lv_obj_set_style_text_font(meta, get_small_font(), 0);

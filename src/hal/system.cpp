@@ -310,6 +310,8 @@ void hw_load_setting()
     user_setting.weather_font_index = 4; // Inter — Latin-1 glyphs for diacritics
     user_setting.telegram_font_size = 14;
     user_setting.telegram_font_index = 4; // Inter — needed for Portuguese, Spanish, French accents
+    user_setting.ssh_font_size = 10;
+    user_setting.ssh_font_index = 0;     // Montserrat — packs more content per line; user can switch to a mono face
     user_setting.charge_limit_en = false;
     user_setting.wifi_enable = 0;
     user_setting.bt_enable = 0;

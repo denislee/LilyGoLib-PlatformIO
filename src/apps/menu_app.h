@@ -17,4 +17,13 @@ public:
     void onStop() override;
 };
 
+// Home-screen tile registry, exposed so Settings » Home Apps can list and
+// toggle each entry. Indices are stable for the lifetime of the build (the
+// menu defines them inline) — Settings reads/writes by index here.
+int          home_apps_count();
+const char  *home_apps_label(int idx);
+const char  *home_apps_symbol(int idx);
+bool         home_apps_is_visible(int idx);   // default true when no NVS slot
+void         home_apps_set_visible(int idx, bool on);
+
 } // namespace apps

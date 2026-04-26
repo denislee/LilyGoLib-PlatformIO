@@ -906,6 +906,9 @@ LV_FONT_DECLARE(lv_font_montserrat_30);
 LV_FONT_DECLARE(lv_font_montserrat_32);
 LV_FONT_DECLARE(lv_font_unscii_8);
 LV_FONT_DECLARE(lv_font_unscii_16);
+LV_FONT_DECLARE(ui_font_courier_10);
+LV_FONT_DECLARE(ui_font_courier_12);
+LV_FONT_DECLARE(ui_font_courier_14);
 LV_FONT_DECLARE(ui_font_courier_16);
 LV_FONT_DECLARE(ui_font_courier_20);
 LV_FONT_DECLARE(ui_font_courier_24);
@@ -919,6 +922,9 @@ LV_FONT_DECLARE(font_atkinson_14);
 LV_FONT_DECLARE(font_atkinson_16);
 LV_FONT_DECLARE(font_atkinson_18);
 LV_FONT_DECLARE(font_atkinson_20);
+LV_FONT_DECLARE(font_jbmono_10);
+LV_FONT_DECLARE(font_jbmono_12);
+LV_FONT_DECLARE(font_jbmono_14);
 LV_FONT_DECLARE(font_jbmono_16);
 LV_FONT_DECLARE(font_jbmono_20);
 LV_FONT_DECLARE(font_jbmono_24);
@@ -931,8 +937,10 @@ LV_FONT_DECLARE(font_jbmono_24);
 // .fallback at the matching Montserrat size. LVGL walks the fallback chain
 // for any codepoint the base face lacks, which lets icons render at the
 // right size regardless of the user's font choice.
+static lv_font_t s_courier_10_ic, s_courier_12_ic, s_courier_14_ic;
 static lv_font_t s_courier_16_ic, s_courier_20_ic, s_courier_24_ic;
 static lv_font_t s_atkinson_14_ic, s_atkinson_16_ic, s_atkinson_18_ic, s_atkinson_20_ic;
+static lv_font_t s_jbmono_10_ic, s_jbmono_12_ic, s_jbmono_14_ic;
 static lv_font_t s_jbmono_16_ic, s_jbmono_20_ic, s_jbmono_24_ic;
 static lv_font_t s_inter_14_ic, s_inter_16_ic, s_inter_18_ic, s_inter_20_ic;
 static bool s_icon_fallback_ready = false;
@@ -940,6 +948,9 @@ static bool s_icon_fallback_ready = false;
 static void init_icon_fallback_fonts()
 {
     if (s_icon_fallback_ready) return;
+    s_courier_10_ic  = ui_font_courier_10; s_courier_10_ic.fallback  = &lv_font_montserrat_10;
+    s_courier_12_ic  = ui_font_courier_12; s_courier_12_ic.fallback  = &lv_font_montserrat_12;
+    s_courier_14_ic  = ui_font_courier_14; s_courier_14_ic.fallback  = &lv_font_montserrat_14;
     s_courier_16_ic  = ui_font_courier_16; s_courier_16_ic.fallback  = &lv_font_montserrat_16;
     s_courier_20_ic  = ui_font_courier_20; s_courier_20_ic.fallback  = &lv_font_montserrat_20;
     s_courier_24_ic  = ui_font_courier_24; s_courier_24_ic.fallback  = &lv_font_montserrat_24;
@@ -947,6 +958,9 @@ static void init_icon_fallback_fonts()
     s_atkinson_16_ic = font_atkinson_16;   s_atkinson_16_ic.fallback = &lv_font_montserrat_16;
     s_atkinson_18_ic = font_atkinson_18;   s_atkinson_18_ic.fallback = &lv_font_montserrat_18;
     s_atkinson_20_ic = font_atkinson_20;   s_atkinson_20_ic.fallback = &lv_font_montserrat_20;
+    s_jbmono_10_ic   = font_jbmono_10;     s_jbmono_10_ic.fallback   = &lv_font_montserrat_10;
+    s_jbmono_12_ic   = font_jbmono_12;     s_jbmono_12_ic.fallback   = &lv_font_montserrat_12;
+    s_jbmono_14_ic   = font_jbmono_14;     s_jbmono_14_ic.fallback   = &lv_font_montserrat_14;
     s_jbmono_16_ic   = font_jbmono_16;     s_jbmono_16_ic.fallback   = &lv_font_montserrat_16;
     s_jbmono_20_ic   = font_jbmono_20;     s_jbmono_20_ic.fallback   = &lv_font_montserrat_20;
     s_jbmono_24_ic   = font_jbmono_24;     s_jbmono_24_ic.fallback   = &lv_font_montserrat_24;
@@ -989,6 +1003,9 @@ static const lv_font_t *pick_font(uint8_t idx, uint8_t size)
     if (idx == 2) return &lv_font_unscii_16;
     if (idx >= 3 && idx <= 6) init_icon_fallback_fonts();
     if (idx == 3) {
+        if (size <= 10) return &s_courier_10_ic;
+        if (size <= 12) return &s_courier_12_ic;
+        if (size <= 14) return &s_courier_14_ic;
         if (size <= 16) return &s_courier_16_ic;
         if (size <= 20) return &s_courier_20_ic;
         return &s_courier_24_ic;
@@ -1006,6 +1023,9 @@ static const lv_font_t *pick_font(uint8_t idx, uint8_t size)
         return &s_atkinson_20_ic;
     }
     if (idx == 6) {
+        if (size <= 10) return &s_jbmono_10_ic;
+        if (size <= 12) return &s_jbmono_12_ic;
+        if (size <= 14) return &s_jbmono_14_ic;
         if (size <= 16) return &s_jbmono_16_ic;
         if (size <= 20) return &s_jbmono_20_ic;
         return &s_jbmono_24_ic;
@@ -1109,6 +1129,13 @@ const lv_font_t *get_telegram_font()
         return &s_inter_emoji_20;
     }
     return pick_font(settings.telegram_font_index, settings.telegram_font_size);
+}
+
+const lv_font_t *get_ssh_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    return pick_font(settings.ssh_font_index, settings.ssh_font_size);
 }
 
 const lv_font_t *get_telegram_list_font()

@@ -20,6 +20,7 @@ void register_all() {
     am.registerApp(make_weather_app());
     am.registerApp(make_telegram_app());
     am.registerApp(make_notes_sync_app());
+    am.registerApp(make_ssh_app());
     // Drop any plaintext PAT left over from a pre-encryption-required
     // build; doing it here means it runs exactly once per boot, before
     // any UI can read the legacy slot.

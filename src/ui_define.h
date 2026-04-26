@@ -189,6 +189,7 @@ const lv_font_t *get_system_font();
 const lv_font_t *get_weather_font();
 const lv_font_t *get_telegram_font();
 const lv_font_t *get_telegram_list_font();
+const lv_font_t *get_ssh_font();
 
 lv_obj_t *create_floating_button(lv_event_cb_t event_cb, void* user_data);
 lv_obj_t *create_menu(lv_obj_t *parent, lv_event_cb_t event_cb);

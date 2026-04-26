@@ -743,25 +743,16 @@ static void refresh_ui()
 
     if (news_files.empty()) {
         lv_obj_t *empty = lv_label_create(file_list);
-        lv_label_set_text(empty, "No news available.\\nTap Sync to download.");
+        lv_label_set_text(empty, "No news available.\nTap Sync to download.");
         lv_obj_set_style_text_color(empty, UI_COLOR_MUTED, 0);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(empty, LV_PCT(100));
         lv_obj_set_style_pad_all(empty, 20, 0);
     } else {
-        struct tm now_tm = {};
-        hw_get_date_time(now_tm);
-        char today_buf[16];
-        snprintf(today_buf, sizeof(today_buf), "%04d-%02d-%02d",
-                 now_tm.tm_year + 1900, now_tm.tm_mon + 1, now_tm.tm_mday);
-        std::string today_str = today_buf;
-
         for (size_t i = 0; i < news_files.size(); i++) {
             const auto &file = news_files[i];
             std::string label_text = format_news_date(file);
-            bool is_today = file.find(today_str) != std::string::npos;
-            const char *icon_sym = is_today ? LV_SYMBOL_BELL : LV_SYMBOL_NEW_LINE;
-            lv_obj_t *btn = lv_list_add_btn(file_list, icon_sym, label_text.c_str());
+            lv_obj_t *btn = lv_list_add_btn(file_list, LV_SYMBOL_NEW_LINE, label_text.c_str());
             lv_obj_set_user_data(btn, (void *)(intptr_t)i);
             lv_obj_add_event_cb(btn, file_click_cb, LV_EVENT_CLICKED, NULL);
             lv_group_add_obj(lv_group_get_default(), btn);
@@ -769,38 +760,27 @@ static void refresh_ui()
             lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
             lv_obj_set_style_pad_ver(btn, 4, 0);
-            lv_obj_set_style_pad_hor(btn, 8, 0);
 
             lv_obj_t *icon = lv_obj_get_child(btn, 0);
             lv_obj_t *lbl = lv_obj_get_child(btn, 1);
-            if (icon) {
-                lv_obj_set_width(icon, 18);
-                lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
-                if (is_today) {
-                    lv_obj_set_style_text_color(icon, UI_COLOR_ACCENT, 0);
-                }
-            }
+            if (icon) lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);
             if (lbl) {
                 lv_obj_set_width(lbl, 0);
                 lv_obj_set_flex_grow(lbl, 1);
                 lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-                lv_obj_set_style_text_font(lbl, get_md_font(), 0);
-                if (is_today) {
-                    lv_obj_set_style_text_color(lbl, UI_COLOR_ACCENT, 0);
-                }
+                lv_obj_set_style_text_font(lbl, get_small_font(), 0);
             }
+        }
+    }
 
-            if (is_today) {
-                lv_obj_t *badge = lv_label_create(btn);
-                lv_label_set_text(badge, "Today");
-                lv_obj_set_style_text_color(badge, UI_COLOR_FG, 0);
-                lv_obj_set_style_text_font(badge, get_md_font(), 0);
-                lv_obj_set_style_bg_color(badge, UI_COLOR_ACCENT, 0);
-                lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
-                lv_obj_set_style_radius(badge, UI_RADIUS, 0);
-                lv_obj_set_style_pad_hor(badge, 6, 0);
-                lv_obj_set_style_pad_ver(badge, 1, 0);
-            }
+    // Push the floating sync button to the end of the focus order so it is
+    // the last stop after every date row. apply_sync_btn_state() adds it on
+    // enter (before the list exists); rebuild the membership here to move it.
+    if (sync_btn) {
+        lv_group_t *g = lv_group_get_default();
+        if (g) {
+            lv_group_remove_obj(sync_btn);
+            lv_group_add_obj(g, sync_btn);
         }
     }
 

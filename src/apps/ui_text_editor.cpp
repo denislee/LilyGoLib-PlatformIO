@@ -349,7 +349,15 @@ static void editor_build_ui(lv_obj_t *parent)
     lv_obj_set_flex_grow(text_area, 1);
     lv_textarea_set_placeholder_text(text_area, "");
     lv_obj_set_style_text_font(text_area, get_editor_font(), 0);
-    lv_obj_set_style_border_width(text_area, 0, 0);
+    lv_obj_set_style_bg_color(text_area, lv_color_hex(0x080808), 0);
+    lv_obj_set_style_bg_opa(text_area, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(text_area, UI_RADIUS, 0);
+    lv_obj_set_style_border_color(text_area, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_border_width(text_area, 1, 0);
+    lv_obj_set_style_border_opa(text_area, LV_OPA_60, 0);
+    lv_obj_set_style_border_color(text_area, UI_COLOR_ACCENT, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(text_area, UI_BORDER_W, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_opa(text_area, LV_OPA_COVER, LV_STATE_FOCUSED);
 
     /* Cursor style */
     lv_obj_set_style_bg_color(text_area, lv_color_white(), LV_PART_CURSOR | LV_STATE_FOCUSED);

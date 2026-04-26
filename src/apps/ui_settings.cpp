@@ -507,6 +507,16 @@ static lv_obj_t *create_subpage_connectivity(lv_obj_t *menu, lv_obj_t *main_page
     return cont;
 }
 
+static lv_obj_t *create_subpage_home_apps(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_HOME, "Home Apps");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)&home_apps_cfg::build_subpage);
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
 // Build a grid tile from a registry entry. Subpage entries mirror
 // create_subpage_*() above; action entries mirror create_files_item() etc.
 static lv_obj_t *create_registered_entry(lv_obj_t *menu, lv_obj_t *main_page,
@@ -587,22 +597,32 @@ void ui_sys_enter(lv_obj_t *parent)
     // restore_main_page_group() can focus it when returning from a subpage.
     settings_exit_btn = ui_show_back_button(settings_exit_cb);
 
-    cont = create_subpage_backlight(menu, main_page);    add_grid_item(cont);
-    cont = create_subpage_fonts(menu, main_page);        add_grid_item(cont);
-    cont = create_subpage_datetime(menu, main_page);     add_grid_item(cont);
-    cont = create_subpage_otg(menu, main_page);          add_grid_item(cont);
-    cont = create_subpage_connectivity(menu, main_page); add_grid_item(cont);
-    cont = create_subpage_weather(menu, main_page);      add_grid_item(cont);
-    cont = create_subpage_telegram(menu, main_page);     add_grid_item(cont);
-    cont = create_subpage_notes_sync(menu, main_page);   add_grid_item(cont);
-    cont = create_remote_item(main_page);                add_grid_item(cont);
-    cont = create_recordings_item(main_page);            add_grid_item(cont);
-    cont = create_subpage_storage(menu, main_page);      add_grid_item(cont);
-    cont = create_files_item(main_page);                 add_grid_item(cont);
+    // Appearance
+    cont = create_subpage_backlight(menu, main_page);      add_grid_item(cont);
+    cont = create_subpage_fonts(menu, main_page);          add_grid_item(cont);
+    // Time & power
+    cont = create_subpage_datetime(menu, main_page);       add_grid_item(cont);
+    cont = create_subpage_otg(menu, main_page);            add_grid_item(cont);
+    // Connectivity & hardware
+    cont = create_subpage_connectivity(menu, main_page);   add_grid_item(cont);
+    cont = create_device_probe(menu, main_page);           add_grid_item(cont);
+    // Home screen
+    cont = create_subpage_home_apps(menu, main_page);      add_grid_item(cont);
+    // Online services
+    cont = create_subpage_weather(menu, main_page);        add_grid_item(cont);
+    cont = create_subpage_telegram(menu, main_page);       add_grid_item(cont);
+    // Notes
+    cont = create_subpage_notes_sync(menu, main_page);     add_grid_item(cont);
     cont = create_subpage_notes_security(menu, main_page); add_grid_item(cont);
-    cont = create_subpage_performance(menu, main_page);  add_grid_item(cont);
-    cont = create_subpage_info(menu, main_page);         add_grid_item(cont);
-    cont = create_device_probe(menu, main_page);         add_grid_item(cont);
+    // Storage & files
+    cont = create_subpage_storage(menu, main_page);        add_grid_item(cont);
+    cont = create_files_item(main_page);                   add_grid_item(cont);
+    // App shortcuts
+    cont = create_recordings_item(main_page);              add_grid_item(cont);
+    cont = create_remote_item(main_page);                  add_grid_item(cont);
+    // System
+    cont = create_subpage_performance(menu, main_page);    add_grid_item(cont);
+    cont = create_subpage_info(menu, main_page);           add_grid_item(cont);
 
     // Plugged-in entries (see core/settings_registry.h). Rendered between
     // the hand-wired grid and the Power Off tile so third-party tiles

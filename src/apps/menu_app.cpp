@@ -19,6 +19,9 @@
 #include "../hal/wireless.h"
 #include "app_registry.h"
 #include <vector>
+#ifdef ARDUINO
+#include <Preferences.h>
+#endif
 
 LV_FONT_DECLARE(lv_font_montserrat_12);
 LV_FONT_DECLARE(lv_font_montserrat_14);
@@ -61,6 +64,7 @@ static const HomeItem kItems[] = {
     {"Telegram", LV_SYMBOL_ENVELOPE,  "Telegram", LV_PALETTE_LIGHT_BLUE,  tg_get_unread_count,  true },
     {"Weather",  LV_SYMBOL_TINT,      "Weather",  LV_PALETTE_CYAN,        nullptr,              false},
     {"News",     LV_SYMBOL_LIST,      "News",     LV_PALETTE_INDIGO,      nullptr,              false},
+    {"SSH",      LV_SYMBOL_KEYBOARD,  "SSH",      LV_PALETTE_TEAL,        nullptr,              true },
 };
 constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
 
@@ -533,20 +537,64 @@ void MenuApp::onStart(lv_obj_t* parent) {
     if (grid_h <= 0) grid_h = panel_full_h - toggle_h - 6;
     if (grid_h < 50) grid_h = 50;
 
-    // Fixed 3 tiles per row on every panel — tiles stay big and readable, and
-    // the two-row layout (6 apps) balances the strip above visually.
-    int cols = 3;
-    int rows = (kItemCount + cols - 1) / cols;
+    // Count what's actually going on the grid first: layout has to scale to
+    // the visible-tile count, not the total registry size. Without this the
+    // row arithmetic below would still divide the available height by the
+    // full kItemCount, leaving big empty bands when the user hides tiles.
+    int visible_count = 0;
+    for (int oi = 0; oi < kItemCount; oi++) {
+        if (home_apps_is_visible(oi)) visible_count++;
+    }
+
+    // Empty state: user hid every tile. Drop a small hint so home isn't a
+    // black void, and bail before the layout math (which would divide by 0).
+    if (visible_count == 0) {
+        lv_obj_t* hint = lv_label_create(grid);
+        lv_label_set_text(hint, "No apps on home.\nSettings " LV_SYMBOL_RIGHT
+                                " Home Apps to enable.");
+        lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(hint, UI_COLOR_MUTED, 0);
+        lv_obj_center(hint);
+        // Still hand focus somewhere reachable so the encoder isn't stranded.
+        if (grp && lv_obj_get_child_count(toggle_bar) > 0) {
+            lv_group_focus_obj(lv_obj_get_child(toggle_bar, 0));
+        }
+        return;
+    }
+
+    // Pick a column count that pairs the tiles neatly:
+    //   1 item    → 1 col   (full-width hero)
+    //   2 items   → 2 cols
+    //   4 items   → 2 cols  (2x2 reads better than 3+orphan)
+    //   3 / 5+    → 3 cols  (default, matches the original layout)
+    int cols;
+    if (visible_count <= 1)      cols = 1;
+    else if (visible_count == 2) cols = 2;
+    else if (visible_count == 4) cols = 2;
+    else                         cols = 3;
+    int rows = (visible_count + cols - 1) / cols;
     const int gap = 8;
     int32_t tile_w = (panel_w - (cols - 1) * gap) / cols;
     int32_t tile_h = (grid_h - (rows - 1) * gap) / rows;
     if (tile_w < 50) tile_w = 50;
     if (tile_h < 50) tile_h = 50;
+    // Cap tile size so a single-tile (or 2-up) layout doesn't blow into a
+    // giant button. The original 3x3 sizing implicitly capped these — once
+    // the grid scales down it's worth keeping the upper bound.
+    const int32_t kMaxTileW = 180;
+    const int32_t kMaxTileH = 140;
+    if (tile_w > kMaxTileW) tile_w = kMaxTileW;
+    if (tile_h > kMaxTileH) tile_h = kMaxTileH;
 
     const lv_font_t* icon_font = pick_icon_font(tile_h);
     const lv_font_t* label_font = get_home_font();
 
     for (int oi = 0; oi < kItemCount; oi++) {
+        // Honor user's home-screen visibility preference. Hidden tiles are
+        // skipped entirely — they don't take a grid slot and aren't in the
+        // focus group, but the underlying app remains registered and can
+        // still be launched from Settings/shortcuts.
+        if (!home_apps_is_visible(oi)) continue;
         const HomeItem& item = kItems[oi];
         lv_color_t accent = lv_palette_main(item.palette);
 
@@ -660,6 +708,65 @@ void MenuApp::onStart(lv_obj_t* parent) {
         s_media_visibility_timer =
             lv_timer_create(media_visibility_tick, 1000, nullptr);
     }
+}
+
+// ---- Home apps visibility API -------------------------------------------
+// NVS-backed (Preferences "homeapps" namespace), keyed by appName so the
+// stored value survives reordering kItems. Default is "shown" — a missing
+// slot returns true. The settings UI flips slots; the menu reads them on
+// each rebuild (see the loop in onStart).
+
+namespace {
+
+// NVS keys are capped at 15 chars including the null. "v_" prefix keeps us
+// well clear of the limit (longest current appName is "Recordings" → 12).
+constexpr const char *kHomeAppsNs = "homeapps";
+
+void make_vis_key(const char *appName, char out[16]) {
+    snprintf(out, 16, "v_%s", appName ? appName : "");
+}
+
+} // anonymous namespace
+
+int home_apps_count() { return kItemCount; }
+
+const char *home_apps_label(int idx) {
+    if (idx < 0 || idx >= kItemCount) return "";
+    return kItems[idx].label;
+}
+
+const char *home_apps_symbol(int idx) {
+    if (idx < 0 || idx >= kItemCount) return "";
+    return kItems[idx].symbol;
+}
+
+bool home_apps_is_visible(int idx) {
+    if (idx < 0 || idx >= kItemCount) return false;
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin(kHomeAppsNs, true)) return true;
+    char key[16];
+    make_vis_key(kItems[idx].appName, key);
+    bool v = p.getBool(key, true);
+    p.end();
+    return v;
+#else
+    return true;
+#endif
+}
+
+void home_apps_set_visible(int idx, bool on) {
+    if (idx < 0 || idx >= kItemCount) return;
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin(kHomeAppsNs, false)) return;
+    char key[16];
+    make_vis_key(kItems[idx].appName, key);
+    p.putBool(key, on);
+    p.end();
+#else
+    (void)on;
+#endif
 }
 
 } // namespace apps

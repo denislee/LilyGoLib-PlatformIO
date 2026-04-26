@@ -59,6 +59,7 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 #include "hal/lvgl_task.h"
 #include "hal/nfc_task.h"
 #include "hal/rotary_task.h"
+#include "hal/charge_task.h"
 
 void setup()
 {
@@ -108,6 +109,7 @@ void setup()
     hw_lvgl_task_start();
     hw_nfc_task_start();
     hw_rotary_task_start();
+    hw_charge_task_start();
 
     Serial.println("Start done. run main loop");
 }

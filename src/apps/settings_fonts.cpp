@@ -143,6 +143,22 @@ static void telegram_font_size_cb(lv_event_t *e)
     commit_font_change();
 }
 
+static void ssh_font_face_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.ssh_font_index = lv_dropdown_get_selected(obj);
+    commit_font_change();
+    lv_event_stop_processing(e);
+}
+
+static void ssh_font_size_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    local_param.ssh_font_size = 10 + lv_dropdown_get_selected(obj) * 2;
+    commit_font_change();
+    lv_event_stop_processing(e);
+}
+
 static void system_font_face_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
@@ -216,6 +232,8 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
                      weather_font_face_cb, weather_font_size_cb);
     add_font_section("Telegram", local_param.telegram_font_index, local_param.telegram_font_size,
                      telegram_font_face_cb, telegram_font_size_cb);
+    add_font_section("SSH",      local_param.ssh_font_index,     local_param.ssh_font_size,
+                     ssh_font_face_cb,     ssh_font_size_cb);
     add_font_section("Header",   local_param.header_font_index,  local_param.header_font_size,
                      header_font_face_cb,  header_font_size_cb);
 }

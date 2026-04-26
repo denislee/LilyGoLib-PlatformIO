@@ -118,24 +118,6 @@ static void load_entries()
               });
 }
 
-static std::string format_mtime(uint32_t t)
-{
-    if (t == 0) return std::string("-");
-    time_t tt = (time_t)t;
-    struct tm info;
-#ifdef ARDUINO
-    localtime_r(&tt, &info);
-#else
-    struct tm *p = localtime(&tt);
-    if (!p) return std::string("-");
-    info = *p;
-#endif
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
-             info.tm_year + 1900, info.tm_mon + 1, info.tm_mday);
-    return std::string(buf);
-}
-
 static std::string format_size(uint32_t bytes)
 {
     char buf[8];
@@ -295,7 +277,7 @@ static void refresh_ui()
                 lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
             }
 
-            // Trailing columns: size (files only) then last-modified date.
+            // Trailing column: size (files only).
             if (!ent.is_dir) {
                 lv_obj_t *size_lbl = lv_label_create(btn);
                 lv_label_set_text(size_lbl, format_size(ent.size).c_str());
@@ -303,12 +285,6 @@ static void refresh_ui()
                 lv_obj_set_style_text_font(size_lbl, &lv_font_montserrat_10, 0);
                 lv_obj_set_style_pad_left(size_lbl, 8, 0);
             }
-            lv_obj_t *date_lbl = lv_label_create(btn);
-            std::string date_txt = format_mtime(ent.mtime);
-            lv_label_set_text(date_lbl, date_txt.c_str());
-            lv_obj_set_style_text_color(date_lbl, UI_COLOR_MUTED, 0);
-            lv_obj_set_style_text_font(date_lbl, &lv_font_montserrat_10, 0);
-            lv_obj_set_style_pad_left(date_lbl, 8, 0);
         }
     }
 

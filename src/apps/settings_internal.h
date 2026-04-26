@@ -158,3 +158,10 @@ namespace notes_sec_cfg {
     void set_sub_page(lv_obj_t *page);
     void reset_state();
 }
+
+// Home Apps subpage — per-tile visibility toggles for the home screen
+// grid. Reads/writes through apps::home_apps_is_visible / _set_visible
+// (NVS-backed). No cached LVGL state.
+namespace home_apps_cfg {
+    void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page);
+}

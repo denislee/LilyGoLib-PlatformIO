@@ -35,6 +35,7 @@ std::shared_ptr<core::App> make_media_remote_app();
 std::shared_ptr<core::App> make_weather_app();
 std::shared_ptr<core::App> make_telegram_app();
 std::shared_ptr<core::App> make_notes_sync_app();
+std::shared_ptr<core::App> make_ssh_app();
 
 // Starts the persistent Telegram unread-count poll (see ui_telegram.cpp).
 // Safe to call multiple times. A noop on the emulator build.
