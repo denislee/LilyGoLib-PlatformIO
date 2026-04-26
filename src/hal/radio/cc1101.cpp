@@ -88,34 +88,16 @@ uint16_t radio_get_freq_length()      { return sizeof(freq_list)        / sizeof
 uint16_t radio_get_bandwidth_length() { return sizeof(bandwidth_list)   / sizeof(bandwidth_list[0]); }
 uint16_t radio_get_tx_power_length()  { return sizeof(power_level_list) / sizeof(power_level_list[0]); }
 
-const char *radio_get_freq_list()
-{
-    return "387MHz\n""400MHz\n""410MHz\n""420MHz\n""433MHz\n"
-           "440MHz\n""450MHz\n""460MHz\n""464MHz";
-}
-
 float radio_get_freq_from_index(uint8_t index)
 {
     if (index >= radio_get_freq_length()) return 433.0;
     return freq_list[index];
 }
 
-const char *radio_get_bandwidth_list(bool)
-{
-    return "58KHZ\n""68KHZ\n""81KHZ\n""102KHZ\n""116KHZ\n""135KHZ\n""162KHZ\n"
-           "203KHZ\n""232KHZ\n""270KHZ\n""325KHZ\n""406KHZ\n""464KHZ\n""541KHZ\n"
-           "650KHZ\n""464KHZ\n""812KHZ";
-}
-
 float radio_get_bandwidth_from_index(uint8_t index)
 {
     if (index >= radio_get_bandwidth_length()) return 102.0;
     return bandwidth_list[index];
-}
-
-const char *radio_get_tx_power_list(bool)
-{
-    return "-30dBm\n""-20dBm\n""-15dBm\n""-10dBm\n""0dBm\n""5dBm\n""7dBm\n""10dBm";
 }
 
 float radio_get_tx_power_from_index(uint8_t index)

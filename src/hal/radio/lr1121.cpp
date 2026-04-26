@@ -145,20 +145,6 @@ uint16_t radio_get_tx_power_length()
     return sizeof(power_level_list) / sizeof(power_level_list[0]);
 }
 
-const char *radio_get_freq_list()
-{
-#ifdef RADIO_FIXED_FREQUENCY
-    return RADIO_FIXED_FREQUENCY_STRING
-           "\n2400MHz\n""2410MHz\n""2420MHz\n""2430MHz\n""2440MHz\n""2450MHz\n"
-           "2460MHz\n""2470MHz\n""2480MHz\n""2490MHz\n""2500MHz";
-#else
-    return "315MHz\n""433MHz\n""434MHz\n""470MHz\n""842MHZ\n""850MHZ\n"
-           "868MHz\n""915MHz\n""923MHz\n""945MHz\n"
-           "2400MHz\n""2410MHz\n""2420MHz\n""2430MHz\n""2440MHz\n""2450MHz\n"
-           "2460MHz\n""2470MHz\n""2480MHz\n""2490MHz\n""2500MHz";
-#endif
-}
-
 float radio_get_freq_from_index(uint8_t index)
 {
     if (index >= radio_get_freq_length()) {
@@ -166,25 +152,6 @@ float radio_get_freq_from_index(uint8_t index)
         return RADIO_DEFAULT_FREQUENCY;
     }
     return freq_list[index];
-}
-
-const char *radio_get_bandwidth_list(bool high_freq)
-{
-    _high_freq = high_freq;
-    if (high_freq) {
-        return "62.5KHz\n""125KHz\n""203.125KHz\n""250KHz\n""406.25KHz\n""500KHz\n""812.5KHz";
-    }
-    return "62.5KHz\n""125KHz\n""250KHz\n""500KHz";
-}
-
-const char *radio_get_tx_power_list(bool high_freq)
-{
-    _high_freq = high_freq;
-    if (high_freq) {
-        return "0dBm\n""1dBm\n""2dBm\n""3dBm\n""4dBm\n""5dBm\n""6dBm\n"
-               "7dBm\n""8dBm\n""9dBm\n""10dBm\n""11dBm\n""12dBm\n""13dBm";
-    }
-    return "2dBm\n""5dBm\n""10dBm\n""12dBm\n""17dBm\n""20dBm\n""22dBm";
 }
 
 float radio_get_bandwidth_from_index(uint8_t index)

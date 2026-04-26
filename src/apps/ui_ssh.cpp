@@ -498,7 +498,7 @@ private:
     void rebuild_status_line();
     void append_terminal(const std::string& chunk);
     void disconnect();
-    void process_and_send_input(std::string line);
+    void process_and_send_input(const std::string& line);
     void update_ctrl_btn_visual();
     void update_top_bar();
     static void poll_tick_cb(lv_timer_t* t);
@@ -777,12 +777,15 @@ void SshApp::build_ui() {
     lv_obj_set_style_pad_all(term_, 3, 0);
     lv_obj_set_style_text_line_space(term_, 1, 0);
     lv_obj_set_style_opa(term_, LV_OPA_TRANSP, LV_PART_CURSOR);
-    // Encoder-click toggle: without this, clicking once enters edit mode
-    // but a second click inserts '\n' (textarea default) instead of exiting.
-    // Same workaround as the text editor — strip the inserted char on the
-    // exit transition.
-    lv_obj_add_event_cb(term_, term_event_cb, LV_EVENT_KEY, this);
+    // Preprocess so we run before the textarea class handler — that lets us
+    // (a) toggle edit mode on encoder click without the default '\n' insert,
+    // and (b) repurpose arrow keys in edit mode to scroll the buffer instead
+    // of moving the (hidden) cursor.
+    lv_obj_add_event_cb(term_, term_event_cb,
+                        (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS),
+                        this);
     lv_obj_add_event_cb(term_, focus_changed_cb, LV_EVENT_FOCUSED, this);
+    if (grp) lv_group_add_obj(grp, term_);
 
     // --- Special-key row (Tab / Esc / Ctrl-toggle / arrows) --------------
     build_special_keys_row(parent);
@@ -889,22 +892,40 @@ void SshApp::back_btn_cb(lv_event_t* e) {
 
 void SshApp::term_event_cb(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_KEY) return;
-    uint32_t key = lv_event_get_key(e);
-    if (key != LV_KEY_ENTER) return;
-    lv_obj_t* obj = (lv_obj_t*)lv_event_get_target(e);
-    lv_indev_t* indev = lv_indev_get_act();
-    lv_group_t* g = lv_obj_get_group(obj);
+    lv_obj_t*   obj   = (lv_obj_t*)lv_event_get_target(e);
+    lv_group_t* g     = lv_obj_get_group(obj);
     if (!g) return;
-    if (!indev || lv_indev_get_type(indev) != LV_INDEV_TYPE_ENCODER) return;
+    uint32_t    key   = lv_event_get_key(e);
+    lv_indev_t* indev = lv_indev_get_act();
+    bool is_encoder   = indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER;
+    bool editing      = lv_group_get_editing(g);
 
-    bool editing = lv_group_get_editing(g);
-    lv_group_set_editing(g, !editing);
-    // Strip the '\n' the textarea's default handler inserted on the way in:
-    // it ran first (class handler before user handler), so the char is
-    // already there when we arrive. Only happens when we were editing —
-    // a non-editing ENTER doesn't hit the insert path.
-    if (editing) lv_textarea_delete_char(obj);
-    lv_event_stop_processing(e);
+    // Encoder click toggles edit mode. Stopping the event keeps the textarea
+    // class handler from inserting '\n' on the way in.
+    if (is_encoder && key == LV_KEY_ENTER) {
+        lv_group_set_editing(g, !editing);
+        lv_event_stop_processing(e);
+        return;
+    }
+
+    // While focused and in edit mode, repurpose arrows / wheel rotation to
+    // scroll the terminal buffer. The cursor is hidden (LV_OPA_TRANSP), so
+    // the default cursor-move behavior is invisible and useless to the user.
+    if (editing && lv_group_get_focused(g) == obj) {
+        const int32_t step_px = 30;
+        if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            int32_t cur_y = lv_obj_get_scroll_y(obj);
+            int32_t step  = cur_y < step_px ? cur_y : step_px;
+            if (step > 0) lv_obj_scroll_to_y(obj, cur_y - step, LV_ANIM_ON);
+            lv_event_stop_processing(e);
+        } else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            int32_t bottom = lv_obj_get_scroll_bottom(obj);
+            int32_t cur_y  = lv_obj_get_scroll_y(obj);
+            int32_t step   = bottom < step_px ? bottom : step_px;
+            if (step > 0) lv_obj_scroll_to_y(obj, cur_y + step, LV_ANIM_ON);
+            lv_event_stop_processing(e);
+        }
+    }
 }
 
 void SshApp::input_event_cb(lv_event_t* e) {
@@ -970,7 +991,7 @@ static int ctrl_byte_for(char c) {
     return -1;
 }
 
-void SshApp::process_and_send_input(std::string line) {
+void SshApp::process_and_send_input(const std::string& line) {
     bool connected = backend_
         && backend_->state() == SshBackend::State::Connected;
 

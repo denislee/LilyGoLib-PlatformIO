@@ -359,23 +359,23 @@ bool hw_delete_internal_file(const char *path)
 #ifdef ARDUINO
 /* Recursively walk and remove. Children are snapshotted first because
  * openNextFile() iterators don't survive mutations. */
-static bool delete_path_recursive(fs::FS &fs, const String &path)
+static bool delete_path_recursive(fs::FS &fs, const std::string &path)
 {
-    File f = fs.open(path);
+    File f = fs.open(path.c_str());
     if (!f) return false;
     if (!f.isDirectory()) {
         f.close();
-        return fs.remove(path);
+        return fs.remove(path.c_str());
     }
 
-    std::vector<String> children;
+    std::vector<std::string> children;
     File entry = f.openNextFile();
     while (entry) {
-        String name = entry.name();
-        int slash = name.lastIndexOf('/');
-        if (slash >= 0) name = name.substring(slash + 1);
-        String full = path;
-        if (!full.endsWith("/")) full += "/";
+        const char* name = entry.name();
+        const char* slash = strrchr(name, '/');
+        if (slash) name = slash + 1;
+        std::string full = path;
+        if (!full.empty() && full.back() != '/') full += "/";
         full += name;
         children.push_back(full);
         entry.close();
@@ -386,7 +386,7 @@ static bool delete_path_recursive(fs::FS &fs, const String &path)
     for (const auto &c : children) {
         if (!delete_path_recursive(fs, c)) return false;
     }
-    return fs.rmdir(path);
+    return fs.rmdir(path.c_str());
 }
 #endif
 
@@ -397,7 +397,7 @@ bool hw_delete_path(const char *path, bool use_sd)
     if (!path || !path[0]) return false;
     char buf[256];
     normalize_path(path, buf, sizeof(buf));
-    String str(buf); // delete_path_recursive uses String children list
+    std::string str(buf); // delete_path_recursive uses std::string children list
     if (use_sd) {
         if (!(HW_SD_ONLINE & hw_get_device_online())) return false;
         instance.lockSPI();
@@ -777,16 +777,17 @@ static void list_entries(std::vector<HwDirEntry> &list, fs::FS &fs,
 
     File entry = root.openNextFile();
     while (entry) {
-        String name = entry.name();
+        const char* name = entry.name();
         // Normalize to leaf name — SD returns full path, FFat returns leaf.
-        int slash = name.lastIndexOf('/');
-        if (slash >= 0) name = name.substring(slash + 1);
+        const char* slash = strrchr(name, '/');
+        if (slash) name = slash + 1;
         if (entry.isDirectory()) {
             // Skip entry.getLastWrite() as it triggers a slow f_stat lookup on FAT.
-            dirs.push_back({std::string(name.c_str()), true, 0u, 0u});
+            dirs.push_back({std::string(name), true, 0u, 0u});
         } else {
-            if (!has_filter || name.endsWith(filter_ext)) {
-                files.push_back({std::string(name.c_str()), false, 0u, (uint32_t)entry.size()});
+            std::string name_str(name);
+            if (!has_filter || (name_str.length() >= strlen(filter_ext) && name_str.compare(name_str.length() - strlen(filter_ext), strlen(filter_ext), filter_ext) == 0)) {
+                files.push_back({name_str, false, 0u, (uint32_t)entry.size()});
             }
         }
         entry.close();
@@ -1255,8 +1256,11 @@ bool hw_file_reader_read(uint32_t offset, uint32_t size, std::string &content)
 
     // Same word-boundary slicing as hw_read_file_chunk so the UI pager
     // behaves identically whether it uses the one-shot chunk API or the
-    // persistent reader.
-    if (read_size == size && read_size > 0) {
+    // persistent reader. Skip when the read reaches EOF — the caller is
+    // asking for everything that's left, so trimming the tail would silently
+    // drop the file's final word (visible on the last news article, which
+    // has no trailing separator).
+    if (read_size == size && read_size > 0 && (offset + (uint32_t)read_size) < s_reader_size) {
         int cut_pos = (int)read_size - 1;
         while (cut_pos > 0 && content[cut_pos] != ' ' && content[cut_pos] != '\n' && content[cut_pos] != '\r') {
             cut_pos--;
@@ -1701,10 +1705,10 @@ bool hw_copy_internal_to_sd(int *copied, int *failed, std::string *error, void (
     File entry = root.openNextFile();
     while (entry) {
         if (!entry.isDirectory()) {
-            String name = entry.name();
-            String dst = name.startsWith("/") ? name : ("/" + name);
+            const char* name = entry.name();
+            String dst = (name[0] == '/') ? String(name) : ("/" + String(name));
 
-            if (cb) cb(current_idx, total_files, name.c_str());
+            if (cb) cb(current_idx, total_files, name);
 
             size_t size = entry.size();
             std::string buf;

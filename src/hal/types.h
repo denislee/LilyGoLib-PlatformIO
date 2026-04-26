@@ -285,9 +285,3 @@ typedef struct {
     float right_bands[FREQ_BANDS];
 } FFTData;
 
-enum Si4735Mode {
-    FM,
-    LSB,
-    USB,
-    AM,
-};
