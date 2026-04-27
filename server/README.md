@@ -49,23 +49,39 @@ make linux-amd64     # x86_64 Linux
 The binary is statically linked (`CGO_ENABLED=0`), so it has no glibc/musl
 dependency on the target host.
 
-## Deploy on Arch Linux ARM
+## Install as a systemd service
+
+If you're building on the same Linux box you'll run on, the Makefile does the
+whole setup. From the `server/` directory:
 
 ```sh
-# one-time setup
+make install        # build + create user + install binary + enable + start
+make status         # show systemd status
+make logs           # tail logs (Ctrl-C to stop)
+make upgrade        # rebuild + replace binary + restart (after `git pull`)
+make uninstall      # stop, disable, remove binary + unit
+make restart        # restart the service
+make stop / start   # one-off control
+```
+
+`make install` is idempotent — safe to re-run. Defaults can be overridden:
+
+```sh
+make install PREFIX=/usr/local/lilyhub USER=hub GROUP=hub
+```
+
+For cross-host install (build elsewhere, deploy to ARM box):
+
+```sh
+make linux-arm64
+scp bin/lilyhub-linux-arm64 deploy/lilyhub.service user@host:/tmp/
+ssh user@host
+# on the target:
 sudo useradd -r -s /usr/sbin/nologin lilyhub
 sudo install -d -o lilyhub -g lilyhub /opt/lilyhub
-
-# build + ship
-make linux-arm64
-scp bin/lilyhub-linux-arm64 deploy/lilyhub.service pi@<host>:/tmp/
-
-# on the host:
 sudo install -m 0755 /tmp/lilyhub-linux-arm64 /opt/lilyhub/lilyhub
 sudo install -m 0644 /tmp/lilyhub.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now lilyhub
-sudo systemctl status lilyhub
+sudo systemctl daemon-reload && sudo systemctl enable --now lilyhub
 ```
 
 Verify:
