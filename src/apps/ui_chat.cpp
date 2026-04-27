@@ -49,7 +49,6 @@ static lv_obj_t *s_root        = nullptr;
 static lv_obj_t *s_log_scroll  = nullptr;
 static lv_obj_t *s_log_label   = nullptr;
 static lv_obj_t *s_input_ta    = nullptr;
-static lv_obj_t *s_send_btn    = nullptr;
 static lv_obj_t *s_mic_btn     = nullptr;
 static lv_obj_t *s_status_lbl  = nullptr;
 static lv_timer_t *s_poll_timer = nullptr;
@@ -139,7 +138,14 @@ static void log_append(const char *prefix, const std::string &text)
 
 static void set_status(const char *txt)
 {
-    if (s_status_lbl) lv_label_set_text(s_status_lbl, txt ? txt : "");
+    if (!s_status_lbl) return;
+    if (txt && *txt) {
+        lv_label_set_text(s_status_lbl, txt);
+        lv_obj_remove_flag(s_status_lbl, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text(s_status_lbl, "");
+        lv_obj_add_flag(s_status_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void set_busy(bool busy)
@@ -150,9 +156,50 @@ static void set_busy(bool busy)
         if (busy) lv_obj_add_state(o, LV_STATE_DISABLED);
         else      lv_obj_remove_state(o, LV_STATE_DISABLED);
     };
-    apply(s_send_btn);
     apply(s_mic_btn);
     apply(s_input_ta);
+
+    // While busy, the textarea/mic are disabled, so the encoder/keypad has
+    // nothing useful to focus. Move focus to the status label so the user
+    // can press the scrollwheel (LV_KEY_ENTER) to cancel. When the request
+    // finishes we hand focus back to the textarea so typing keeps working.
+    if (s_status_lbl && s_input_ta) {
+        if (busy) {
+            lv_group_focus_obj(s_status_lbl);
+        } else {
+            lv_group_focus_obj(s_input_ta);
+        }
+    }
+}
+
+// Detach an in-flight send. The HTTP call itself is blocking and lives in
+// the worker task — we can't truly abort it, but we can stop caring about
+// the result: clear our pointer, mark the ctx abandoned, and let the task
+// free itself when it eventually returns.
+static void cancel_inflight()
+{
+    if (!s_ctx) return;
+    bool delete_now;
+    {
+        core::ScopedInstanceLock lock;
+        if (s_ctx->done) {
+            delete_now = true;
+        } else {
+            s_ctx->abandoned = true;
+            delete_now = false;
+        }
+    }
+    if (delete_now) delete s_ctx;
+    s_ctx = nullptr;
+}
+
+static void status_click_cb(lv_event_t *)
+{
+    if (!s_busy) return;
+    cancel_inflight();
+    set_busy(false);
+    log_append("info: ", "cancelled");
+    set_status("");
 }
 
 static std::string current_device_id()
@@ -280,7 +327,7 @@ static void kick_off_send(const std::string &user_text,
     ctx->body += "}";
 
     s_ctx = ctx;
-    set_status("thinking...");
+    set_status("thinking... (tap to cancel)");
     if (xTaskCreate(send_task, "chat_send", 8192, ctx, 4, &s_send_task) != pdPASS) {
         s_ctx = nullptr;
         delete ctx;
@@ -434,6 +481,13 @@ static void enter(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_status_lbl, UI_COLOR_MUTED, 0);
     lv_obj_set_style_text_font(s_status_lbl, get_small_font(), 0);
     lv_label_set_text(s_status_lbl, "");
+    lv_obj_add_flag(s_status_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_status_lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_status_lbl, status_click_cb, LV_EVENT_CLICKED, nullptr);
+    // Add to the input group so the encoder/scrollwheel can focus and
+    // press it — set_busy() shifts focus here while a request is in
+    // flight so the user can cancel without a touchscreen.
+    lv_group_add_obj(lv_group_get_default(), s_status_lbl);
 
     // Input row.
     lv_obj_t *row = lv_obj_create(parent);
@@ -469,8 +523,11 @@ static void enter(lv_obj_t *parent)
         lv_group_add_obj(lv_group_get_default(), b);
         return b;
     };
-    s_send_btn = make_btn(LV_SYMBOL_OK,    send_btn_cb);
     s_mic_btn  = make_btn(LV_SYMBOL_AUDIO, mic_btn_cb);
+
+    // One-line textarea fires LV_EVENT_READY when Enter is pressed (or
+    // when the on-screen keyboard's OK key is tapped). Treat that as send.
+    lv_obj_add_event_cb(s_input_ta, send_btn_cb, LV_EVENT_READY, nullptr);
 
     if (hal::hub_get_url().empty()) {
         log_append("info: ",
@@ -514,7 +571,7 @@ static void exit_cb()
     }
 
     s_root = s_log_scroll = s_log_label = nullptr;
-    s_input_ta = s_send_btn = s_mic_btn = s_status_lbl = nullptr;
+    s_input_ta = s_mic_btn = s_status_lbl = nullptr;
     s_log_text.clear();
     s_pending_audio_path.clear();
     s_busy = false;

@@ -49,18 +49,20 @@ struct HomeItem {
 
 // Order groups apps by what the user is doing:
 //   [create/capture]        Notes, Tasks, Recorder
-//   [communicate]           Telegram
+//   [communicate]           Telegram, Chat
 //   [consume/check]         Weather
 // Settings lives in the top toggle strip as a small icon rather than the grid.
 //
 // Palettes are chosen so adjacent tiles never share a hue: Notes AMBER (warm
 // create), Tasks GREEN (progress), Recorder PURPLE (voice), Telegram
-// LIGHT_BLUE (messaging), Weather CYAN (sky).
+// LIGHT_BLUE (messaging), Chat PINK (LLM Q&A — distinct from messaging blue),
+// Weather CYAN (sky).
 static const HomeItem kItems[] = {
     {"Notes",    LV_SYMBOL_EDIT,      "Editor",   LV_PALETTE_AMBER,       nullptr,              false},
     {"Tasks",    LV_SYMBOL_OK,        "Tasks",    LV_PALETTE_GREEN,       nullptr,              false},
     {"Recorder", LV_SYMBOL_AUDIO,     "Recorder", LV_PALETTE_PURPLE,      nullptr,              false},
     {"Telegram", LV_SYMBOL_ENVELOPE,  "Telegram", LV_PALETTE_LIGHT_BLUE,  tg_get_unread_count,  true },
+    {"Chat",     LV_SYMBOL_BELL,      "Chat",     LV_PALETTE_PINK,        nullptr,              true },
     {"Weather",  LV_SYMBOL_TINT,      "Weather",  LV_PALETTE_CYAN,        nullptr,              false},
     {"SSH",      LV_SYMBOL_KEYBOARD,  "SSH",      LV_PALETTE_TEAL,        nullptr,              true },
 };

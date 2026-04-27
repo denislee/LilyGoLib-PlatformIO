@@ -1,3 +1,7 @@
+# bash for `read -s` (silent input) in the install prompt — POSIX sh has no
+# silent-read primitive without stty gymnastics.
+SHELL := /bin/bash
+
 BIN     := lilyhub
 PKG     := ./cmd/lilyhub
 LDFLAGS := -ldflags="-s -w"
@@ -9,10 +13,13 @@ USER    := lilyhub
 GROUP   := lilyhub
 UNIT    := lilyhub.service
 SYSTEMD := /etc/systemd/system
+ENVDIR  := /etc/lilyhub
+ENVFILE := $(ENVDIR)/env
 
 .PHONY: build run test fmt vet \
         linux-arm64 linux-armv7 linux-amd64 \
         install upgrade uninstall \
+        set-groq-key \
         status logs restart start stop \
         clean
 
@@ -55,8 +62,55 @@ install: build
 	sudo install -m 0644 deploy/$(UNIT) $(SYSTEMD)/$(UNIT)
 	sudo systemctl daemon-reload
 	sudo systemctl enable --now $(UNIT)
+ifneq ($(strip $(GROQ_API_KEY)),)
+	@$(MAKE) --no-print-directory set-groq-key
+else
+	@if sudo test -s $(ENVFILE) && sudo grep -q '^GROQ_API_KEY=' $(ENVFILE); then \
+		echo ">> $(ENVFILE) already has GROQ_API_KEY — leaving as-is."; \
+		echo ">> (rotate with: GROQ_API_KEY=gsk_new make set-groq-key)"; \
+	elif [ -t 0 ] && [ -r /dev/tty ]; then \
+		echo ""; \
+		echo ">> No GROQ_API_KEY set. Enter one to enable /api/chat,"; \
+		echo ">> or just press Enter to skip and configure later."; \
+		echo ">> Get a free key at https://console.groq.com"; \
+		read -rsp ">> GROQ_API_KEY (input hidden): " key </dev/tty; echo ""; \
+		if [ -n "$$key" ]; then \
+			GROQ_API_KEY="$$key" $(MAKE) --no-print-directory set-groq-key; \
+			unset key; \
+		else \
+			echo ">> skipped. /api/chat will return 503 until you run:"; \
+			echo ">>   GROQ_API_KEY=gsk_xxx make set-groq-key"; \
+		fi; \
+	else \
+		echo ">> no $(ENVFILE) and GROQ_API_KEY not provided (non-interactive)."; \
+		echo ">> /api/chat will return 503 until you run:"; \
+		echo ">>   GROQ_API_KEY=gsk_xxx make set-groq-key"; \
+	fi
+endif
 	@echo ">> done. tail logs with: make logs"
 	@$(MAKE) --no-print-directory status
+
+# Write GROQ_API_KEY to /etc/lilyhub/env (0600 root:root) and restart the
+# service if it's running. Pass the key on the make command line —
+#   make set-groq-key GROQ_API_KEY=gsk_xxx
+# — or via the environment to keep it out of `ps` / shell history:
+#   GROQ_API_KEY=gsk_xxx make set-groq-key
+# Idempotent: re-running with a new key rotates it.
+set-groq-key:
+ifeq ($(strip $(GROQ_API_KEY)),)
+	$(error GROQ_API_KEY is not set. Usage: make set-groq-key GROQ_API_KEY=gsk_xxx)
+endif
+	@echo ">> writing $(ENVFILE) (0600 root:root)"
+	@sudo install -d -m 0755 -o root -g root $(ENVDIR)
+	@printf 'GROQ_API_KEY=%s\n' '$(GROQ_API_KEY)' | sudo tee $(ENVFILE) >/dev/null
+	@sudo chmod 0600 $(ENVFILE)
+	@sudo chown root:root $(ENVFILE)
+	@if systemctl is-active --quiet $(UNIT); then \
+		echo ">> restarting $(UNIT)"; \
+		sudo systemctl restart $(UNIT); \
+	else \
+		echo ">> $(UNIT) not running; key staged at $(ENVFILE)"; \
+	fi
 
 upgrade: build
 	sudo install -m 0755 bin/$(BIN) $(PREFIX)/$(BIN)
@@ -69,6 +123,9 @@ uninstall:
 	sudo systemctl daemon-reload
 	sudo rm -rf $(PREFIX)
 	@echo ">> service removed. user '$(USER)' kept (remove with: sudo userdel $(USER))"
+	@if [ -f $(ENVFILE) ]; then \
+		echo ">> $(ENVFILE) kept (remove with: sudo rm -rf $(ENVDIR))"; \
+	fi
 
 status:
 	-systemctl status $(UNIT) --no-pager

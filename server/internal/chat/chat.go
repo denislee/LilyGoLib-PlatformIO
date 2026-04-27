@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -72,11 +73,28 @@ type Handler struct {
 }
 
 func New() *Handler {
+	key := os.Getenv("GROQ_API_KEY")
+	if key == "" {
+		log.Printf("chat: GROQ_API_KEY not set — /api/chat will return 503")
+	} else {
+		log.Printf("chat: handler ready (model=%s stt=%s key=%s…)",
+			chatModel, sttModel, redactKey(key))
+	}
 	return &Handler{
 		client:   &http.Client{Timeout: clientTimeout},
-		apiKey:   os.Getenv("GROQ_API_KEY"),
+		apiKey:   key,
 		sessions: make(map[string]*session),
 	}
+}
+
+// redactKey returns a safe-to-log fingerprint of the API key — first 6
+// chars (Groq prefixes are like "gsk_…") plus the length. Never log the
+// full key, even at debug level.
+func redactKey(k string) string {
+	if len(k) <= 6 {
+		return fmt.Sprintf("len=%d", len(k))
+	}
+	return fmt.Sprintf("%s...len=%d", k[:6], len(k))
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
@@ -84,7 +102,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 }
 
 func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	if r.Method != http.MethodPost {
+		log.Printf("chat: %s rejected (method=%s)", r.RemoteAddr, r.Method)
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
@@ -92,23 +112,30 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
+		log.Printf("chat: %s bad json: %v", r.RemoteAddr, err)
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	if req.DeviceID == "" {
+		log.Printf("chat: %s missing device_id", r.RemoteAddr)
 		http.Error(w, "device_id required", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("chat: req device=%s text_len=%d audio_b64_len=%d reset=%v",
+		req.DeviceID, len(req.Text), len(req.AudioB64), req.Reset)
 
 	if req.Reset {
 		h.mu.Lock()
 		delete(h.sessions, req.DeviceID)
 		h.mu.Unlock()
+		log.Printf("chat: device=%s session reset", req.DeviceID)
 		writeJSON(w, &Response{Reply: ""})
 		return
 	}
 
 	if h.apiKey == "" {
+		log.Printf("chat: device=%s rejected — GROQ_API_KEY not set", req.DeviceID)
 		http.Error(w, "GROQ_API_KEY not set on hub", http.StatusServiceUnavailable)
 		return
 	}
@@ -123,30 +150,51 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	if req.AudioB64 != "" {
 		audio, err := base64.StdEncoding.DecodeString(req.AudioB64)
 		if err != nil {
+			log.Printf("chat: device=%s bad audio_b64: %v", req.DeviceID, err)
 			http.Error(w, "bad audio_b64", http.StatusBadRequest)
 			return
 		}
+		log.Printf("chat: device=%s stt start (audio_bytes=%d)",
+			req.DeviceID, len(audio))
+		sttStart := time.Now()
 		t, err := h.transcribe(r.Context(), audio)
 		if err != nil {
+			log.Printf("chat: device=%s stt FAIL after %s: %v",
+				req.DeviceID, time.Since(sttStart).Round(time.Millisecond), err)
 			http.Error(w, "stt: "+err.Error(), http.StatusBadGateway)
 			return
 		}
+		log.Printf("chat: device=%s stt ok in %s (%d chars): %q",
+			req.DeviceID, time.Since(sttStart).Round(time.Millisecond),
+			len(t), truncate(t, 80))
 		resp.Transcript = t
 		prompt = strings.TrimSpace(t)
 	}
 
 	if prompt == "" {
+		log.Printf("chat: device=%s rejected — empty prompt after trim/STT",
+			req.DeviceID)
 		http.Error(w, "text or audio_b64 required", http.StatusBadRequest)
 		return
 	}
 
+	log.Printf("chat: device=%s llm start (prompt_chars=%d): %q",
+		req.DeviceID, len(prompt), truncate(prompt, 80))
+	llmStart := time.Now()
 	reply, err := h.complete(r.Context(), req.DeviceID, prompt)
 	if err != nil {
+		log.Printf("chat: device=%s llm FAIL after %s: %v",
+			req.DeviceID, time.Since(llmStart).Round(time.Millisecond), err)
 		http.Error(w, "llm: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	log.Printf("chat: device=%s llm ok in %s (%d chars): %q",
+		req.DeviceID, time.Since(llmStart).Round(time.Millisecond),
+		len(reply), truncate(reply, 80))
 	resp.Reply = reply
 	writeJSON(w, resp)
+	log.Printf("chat: device=%s done total=%s",
+		req.DeviceID, time.Since(start).Round(time.Millisecond))
 }
 
 // transcribe sends the WAV bytes to Groq's Whisper endpoint as multipart
@@ -277,18 +325,31 @@ func (h *Handler) complete(ctx context.Context, deviceID, prompt string) (string
 // — the error string includes a short prefix of the upstream body to
 // make Groq's auth / rate-limit messages legible in the device log.
 func (h *Handler) do(req *http.Request) ([]byte, error) {
+	start := time.Now()
 	resp, err := h.client.Do(req)
 	if err != nil {
+		log.Printf("chat: upstream %s %s transport error after %s: %v",
+			req.Method, req.URL.Path,
+			time.Since(start).Round(time.Millisecond), err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if err != nil {
+		log.Printf("chat: upstream %s %s read error: %v",
+			req.Method, req.URL.Path, err)
 		return nil, err
 	}
 	if resp.StatusCode/100 != 2 {
+		log.Printf("chat: upstream %s %s -> %d in %s, body: %s",
+			req.Method, req.URL.Path, resp.StatusCode,
+			time.Since(start).Round(time.Millisecond),
+			truncate(string(body), 400))
 		return body, fmt.Errorf("upstream %d: %s", resp.StatusCode, truncate(string(body), 200))
 	}
+	log.Printf("chat: upstream %s %s -> %d in %s (%d bytes)",
+		req.Method, req.URL.Path, resp.StatusCode,
+		time.Since(start).Round(time.Millisecond), len(body))
 	return body, nil
 }
 

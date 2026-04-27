@@ -11,9 +11,18 @@ RestartSec=3
 User=lilyhub
 Group=lilyhub
 Environment=LILYHUB_ADDR=:8080
-# Optional. Free key at https://console.groq.com — required by /api/chat.
-# Uncomment and set to enable the Chat app on the device.
-#Environment=GROQ_API_KEY=gsk_xxx
+
+# Secrets (GROQ_API_KEY for /api/chat, etc.) live in /etc/lilyhub/env so they
+# stay out of this unit file and out of git. The leading `-` makes the file
+# optional — the service starts fine without it; only /api/chat returns 503.
+# Recommended perms: chmod 0600, chown root:root. systemd reads it as PID 1
+# before dropping privs to the lilyhub user, so root-only is correct.
+#
+# Setup (one-liner):
+#   echo 'GROQ_API_KEY=gsk_xxx' | sudo tee /etc/lilyhub/env >/dev/null \
+#     && sudo chmod 0600 /etc/lilyhub/env \
+#     && sudo systemctl restart lilyhub
+EnvironmentFile=-/etc/lilyhub/env
 
 # Hardening — the binary only needs to bind a TCP port and make outbound HTTP.
 NoNewPrivileges=yes

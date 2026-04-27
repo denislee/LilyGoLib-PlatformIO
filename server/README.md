@@ -37,7 +37,37 @@ server/
 first; the transcript becomes the user turn. Conversation history is kept
 in-process keyed by `device_id` (last 20 messages, idle sessions reaped at
 1 h). Set `reset:true` to clear it. Requires `GROQ_API_KEY` in the
-environment — without it the endpoint returns 503.
+environment — without it the endpoint returns 503. Free key at
+[console.groq.com](https://console.groq.com); set it via `/etc/lilyhub/env`
+(see "Configure secrets" below).
+
+## Configure secrets
+
+The unit reads `/etc/lilyhub/env` (optional — the service still starts
+without it, only `/api/chat` is gated on `GROQ_API_KEY`). The Makefile
+manages this file for you:
+
+```sh
+# Bundled with install:
+GROQ_API_KEY=gsk_xxx make install
+
+# After install, or to rotate later:
+GROQ_API_KEY=gsk_new make set-groq-key
+```
+
+Either form writes `/etc/lilyhub/env` as `0600 root:root` and restarts
+`lilyhub.service` if it's running. Pass the key via the environment
+(as above) instead of `make ... GROQ_API_KEY=…` to keep it out of `ps`
+and shell history.
+
+The file is read by systemd as PID 1 *before* it drops privileges to the
+`lilyhub` user, so root-only is correct — the daemon never reads it
+directly. To revoke: `sudo rm /etc/lilyhub/env && sudo systemctl restart
+lilyhub` — the chat endpoint then cleanly degrades to 503 and the device
+shows a clear error.
+
+`make install`, `make upgrade`, and `make uninstall` never delete this
+file unless you explicitly `rm -rf /etc/lilyhub`.
 
 Each weather response is byte-identical to the upstream (we don't reshape
 JSON), so the device parsers stay unchanged. The forecast endpoint forwards
