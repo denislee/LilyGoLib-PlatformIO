@@ -11,6 +11,7 @@ namespace weather_cfg {
 
 static lv_obj_t *g_sub_page = nullptr;
 static lv_obj_t *g_city_label = nullptr;
+static lv_obj_t *g_hub_label = nullptr;
 static lv_obj_t *g_status_label = nullptr;
 static std::vector<weather_city_match> g_search_results;
 
@@ -20,6 +21,7 @@ void reset_state()
 {
     g_sub_page = nullptr;
     g_city_label = nullptr;
+    g_hub_label = nullptr;
     g_status_label = nullptr;
     g_search_results.clear();
 }
@@ -30,6 +32,14 @@ static void refresh_label()
     std::string city = weather_get_user_city();
     lv_label_set_text_fmt(g_city_label, "City: %s",
                           city.empty() ? "(auto from IP)" : city.c_str());
+}
+
+static void refresh_hub_label()
+{
+    if (!g_hub_label) return;
+    std::string hub = weather_get_hub_url();
+    lv_label_set_text_fmt(g_hub_label, "Hub: %s",
+                          hub.empty() ? "(off — direct internet)" : hub.c_str());
 }
 
 static void set_status(const char *text, lv_color_t color)
@@ -109,6 +119,41 @@ static void btn_clear_city_cb(lv_event_t *e)
     set_status("Using auto (IP)", UI_COLOR_MUTED);
 }
 
+// Submit handler for the hub URL prompt. Empty input clears the setting (back
+// to direct-internet only). We don't validate the URL — a typoed value will
+// just fail the hub call and the device will fall back to the public API.
+static void hub_entered_cb(const char *text, void *ud)
+{
+    (void)ud;
+    if (!text) { set_status("Cancelled", UI_COLOR_MUTED); return; }
+    std::string s(text);
+    size_t a = s.find_first_not_of(" \t\r\n");
+    size_t b = s.find_last_not_of(" \t\r\n");
+    std::string v = (a == std::string::npos) ? std::string() : s.substr(a, b - a + 1);
+    weather_set_hub_url(v.c_str());
+    refresh_hub_label();
+    set_status(v.empty() ? "Hub off — direct internet"
+                         : "Hub saved — used first, falls back",
+               lv_palette_main(LV_PALETTE_GREEN));
+}
+
+static void btn_set_hub_cb(lv_event_t *e)
+{
+    (void)e;
+    std::string current = weather_get_hub_url();
+    ui_text_prompt("Local hub URL",
+                   "e.g. http://192.168.1.10:8080 (empty = off)",
+                   current.c_str(), hub_entered_cb, nullptr);
+}
+
+static void btn_clear_hub_cb(lv_event_t *e)
+{
+    (void)e;
+    weather_set_hub_url("");
+    refresh_hub_label();
+    set_status("Hub off — direct internet", UI_COLOR_MUTED);
+}
+
 void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
 {
     (void)menu;
@@ -126,6 +171,22 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_obj_t *b2 = create_button(sub_page, LV_SYMBOL_REFRESH,
                                  "Use auto (IP)", btn_clear_city_cb);
     register_subpage_group_obj(sub_page, b2);
+
+    // Local-hub section: every weather fetch tries the hub first when set.
+    lv_obj_t *hub_status = lv_menu_cont_create(sub_page);
+    g_hub_label = lv_label_create(hub_status);
+    lv_obj_set_style_text_color(g_hub_label, UI_COLOR_MUTED, 0);
+    lv_label_set_long_mode(g_hub_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_hub_label, LV_PCT(100));
+    refresh_hub_label();
+
+    lv_obj_t *b3 = create_button(sub_page, LV_SYMBOL_KEYBOARD,
+                                 "Set local hub URL", btn_set_hub_cb);
+    register_subpage_group_obj(sub_page, b3);
+
+    lv_obj_t *b4 = create_button(sub_page, LV_SYMBOL_CLOSE,
+                                 "Disable hub", btn_clear_hub_cb);
+    register_subpage_group_obj(sub_page, b4);
 
     // Status line for search feedback ("Searching...", errors, "Saved").
     g_status_label = lv_label_create(sub_page);

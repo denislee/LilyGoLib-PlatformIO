@@ -28,7 +28,7 @@ user_setting_params_t user_setting;
 //     Adding a new field to the *end* keeps the size check effective and is
 //     safe without a version bump — missing bytes keep their default values.
 static constexpr uint32_t SETTINGS_MAGIC   = 0x50414752u; // "PAGR"
-static constexpr uint16_t SETTINGS_VERSION = 8;
+static constexpr uint16_t SETTINGS_VERSION = 9;
 
 struct SettingsHeader {
     uint32_t magic;
@@ -298,8 +298,6 @@ void hw_load_setting()
     user_setting.editor_font_index = 0;
     user_setting.journal_font_size = 14;
     user_setting.journal_font_index = 4; // Inter
-    user_setting.md_font_size = 16;
-    user_setting.md_font_index = 4;      // Inter
     user_setting.header_font_size = 14;
     user_setting.header_font_index = 0;  // Montserrat
     user_setting.home_font_size = 16;

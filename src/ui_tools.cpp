@@ -301,8 +301,7 @@ void ui_result_show(const char *title, const char *subtitle,
 
     // create_msgbox renders the msg_txt via lv_msgbox_add_text(). Pass an
     // empty string here and rebuild the body ourselves so rows can line up.
-    const char *msgbox_title = (title && strcmp(title, "News sync") == 0) ? "" : title;
-    s_result_msgbox = create_msgbox(lv_scr_act(), msgbox_title, "", btns,
+    s_result_msgbox = create_msgbox(lv_scr_act(), title, "", btns,
                                     _result_close_cb, NULL);
     if (!s_result_msgbox) return;
 
@@ -398,18 +397,6 @@ void ui_result_show(const char *title, const char *subtitle,
     int32_t max_h = (screen_h * 85) / 100;
     if (natural_h > max_h) {
         lv_obj_set_height(s_result_msgbox, max_h);
-    }
-
-    if (strcmp(title, "News sync") == 0) {
-        lv_obj_t *footer = lv_msgbox_get_footer(s_result_msgbox);
-        if (footer && lv_obj_get_child_count(footer) > 0) {
-            lv_obj_t *btn = lv_obj_get_child(footer, 0);
-            lv_obj_set_style_pad_hor(btn, 8, 0);
-            lv_obj_set_style_pad_ver(btn, 2, 0);
-            lv_obj_set_style_min_width(btn, 40, 0);
-            lv_obj_set_height(btn, 24);
-            lv_obj_set_style_text_font(btn, get_small_font(), 0);
-        }
     }
 #endif
 }
@@ -1079,13 +1066,6 @@ const lv_font_t *get_journal_font()
     user_setting_params_t settings;
     hw_get_user_setting(settings);
     return pick_font(settings.journal_font_index, settings.journal_font_size);
-}
-
-const lv_font_t *get_md_font()
-{
-    user_setting_params_t settings;
-    hw_get_user_setting(settings);
-    return pick_font(settings.md_font_index, settings.md_font_size);
 }
 
 const lv_font_t *get_header_font()

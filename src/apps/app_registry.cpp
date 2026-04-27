@@ -13,7 +13,6 @@ void register_all() {
     am.registerApp(make_sys_app());
     am.registerApp(make_file_browser_app());
     am.registerApp(make_journal_app());
-    am.registerApp(make_news_app());
     am.registerApp(make_audio_notes_app());
     am.registerApp(make_audio_recordings_app());
     am.registerApp(make_media_remote_app());

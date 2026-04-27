@@ -1,0 +1,31 @@
+[Unit]
+Description=LilyHub local app server for LilyGo devices
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/lilyhub/lilyhub
+Restart=on-failure
+RestartSec=3
+User=lilyhub
+Group=lilyhub
+Environment=LILYHUB_ADDR=:8080
+
+# Hardening — the binary only needs to bind a TCP port and make outbound HTTP.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -210,8 +210,6 @@ typedef struct {
     uint8_t editor_font_index;
     uint8_t journal_font_size;
     uint8_t journal_font_index;
-    uint8_t md_font_size;
-    uint8_t md_font_index;
     uint8_t charge_limit_en;
     uint8_t wifi_enable;
     uint8_t bt_enable;

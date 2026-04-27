@@ -31,6 +31,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 
 #ifdef ARDUINO
 #include <Preferences.h>
@@ -508,6 +509,7 @@ private:
     static void back_btn_cb(lv_event_t* e);
     static void term_event_cb(lv_event_t* e);
     static void input_event_cb(lv_event_t* e);
+    static void input_history_cb(lv_event_t* e);
     static void special_key_cb(lv_event_t* e);
 
     // Lookup: each special-key button stores one of these as user_data.
@@ -536,6 +538,19 @@ private:
     SshBackend::State last_state_ = SshBackend::State::Idle;
     bool       ctrl_armed_ = false;
     KeyAction  key_actions_[7] = {};
+
+    // Command history. Newest entry is at the back. `history_idx_` points at
+    // the entry currently shown in the input bar (-1 = "nothing recalled,
+    // input bar holds the user's live draft"). `history_draft_` snapshots
+    // that live draft when the user first scrolls into history, so scrolling
+    // back past the newest entry restores what they were typing.
+    std::vector<std::string> history_;
+    int                      history_idx_   = -1;
+    std::string              history_draft_;
+    static constexpr size_t  kHistoryMax    = 64;
+
+    void history_push(const std::string& line);
+    bool history_navigate(int dir);  // -1 older, +1 newer
 };
 
 // Credential prompts run as a chain of static callbacks. We accumulate
@@ -656,6 +671,20 @@ void SshApp::onStart(lv_obj_t* parent) {
     }
 #endif
     rebuild_status_line();
+
+    // Auto-connect to the last host when everything we need is on hand:
+    // WiFi up, saved host+user, and the encrypted password slot decrypts.
+    // Anything missing → stay idle, no prompts on app entry.
+    if (hw_get_wifi_connected() && !cfg_.host.empty() && !cfg_.user.empty()) {
+        std::string saved_pw = pw_load();
+        if (!saved_pw.empty()) {
+            SshConfig cfg = cfg_;
+            cfg.password = saved_pw;
+            connect_with(cfg);
+            hal::secret_scrub(saved_pw);
+            hal::secret_scrub(cfg.password);
+        }
+    }
 }
 
 void SshApp::onStop() {
@@ -802,6 +831,12 @@ void SshApp::build_ui() {
     lv_obj_set_style_border_opa(input_, LV_OPA_60, 0);
     lv_obj_set_style_pad_all(input_, 4, 0);
     lv_obj_add_event_cb(input_, input_event_cb, LV_EVENT_ALL, this);
+    // Preprocess KEY so we beat the textarea class handler — that lets the
+    // encoder rotation walk command history instead of moving the cursor
+    // when the input is in edit mode.
+    lv_obj_add_event_cb(input_, input_history_cb,
+                        (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS),
+                        this);
     lv_obj_add_event_cb(input_, focus_changed_cb, LV_EVENT_FOCUSED, this);
     if (grp) lv_group_add_obj(grp, input_);
 
@@ -1026,6 +1061,68 @@ void SshApp::process_and_send_input(const std::string& line) {
 
     append_terminal(line + "\n");
     backend_->send_bytes(line + "\n");
+    history_push(line);
+}
+
+void SshApp::history_push(const std::string& line) {
+    if (line.empty()) return;
+    // Drop consecutive duplicate (bash-style: HISTCONTROL=ignoredups).
+    if (!history_.empty() && history_.back() == line) {
+        // still reset cursor below
+    } else {
+        history_.push_back(line);
+        if (history_.size() > kHistoryMax) {
+            history_.erase(history_.begin(),
+                           history_.begin() + (history_.size() - kHistoryMax));
+        }
+    }
+    history_idx_ = -1;
+    history_draft_.clear();
+}
+
+bool SshApp::history_navigate(int dir) {
+    if (!input_ || history_.empty()) return false;
+    int n = (int)history_.size();
+    int next;
+    if (history_idx_ == -1) {
+        if (dir < 0) {
+            // Stash the live draft so scrolling back past newest restores it.
+            const char* cur = lv_textarea_get_text(input_);
+            history_draft_ = cur ? cur : "";
+            next = n - 1;
+        } else {
+            return false;  // already at the live draft, can't go newer
+        }
+    } else {
+        next = history_idx_ + (dir < 0 ? -1 : 1);
+        if (next < 0) next = 0;             // clamp at oldest
+        if (next >= n) next = -1;           // past newest -> live draft
+    }
+    history_idx_ = next;
+    const std::string& shown = (next == -1) ? history_draft_ : history_[next];
+    lv_textarea_set_text(input_, shown.c_str());
+    // Park cursor at the end so further typing appends.
+    lv_textarea_set_cursor_pos(input_, LV_TEXTAREA_CURSOR_LAST);
+    return true;
+}
+
+void SshApp::input_history_cb(lv_event_t* e) {
+    SshApp* self = (SshApp*)lv_event_get_user_data(e);
+    if (!self || !self->input_) return;
+    lv_obj_t*   obj = (lv_obj_t*)lv_event_get_target(e);
+    lv_group_t* g   = lv_obj_get_group(obj);
+    if (!g || !lv_group_get_editing(g)) return;
+    lv_indev_t* indev = lv_indev_get_act();
+    if (!indev || lv_indev_get_type(indev) != LV_INDEV_TYPE_ENCODER) return;
+
+    uint32_t key = lv_event_get_key(e);
+    int dir = 0;
+    if (key == LV_KEY_LEFT || key == LV_KEY_UP)        dir = -1;
+    else if (key == LV_KEY_RIGHT || key == LV_KEY_DOWN) dir = +1;
+    else return;
+
+    self->history_navigate(dir);
+    lv_event_stop_processing(e);
 }
 
 void SshApp::update_top_bar() {

@@ -24,9 +24,6 @@
  * Bytes go to the repo as raw ciphertext when notes crypto is enabled;
  * hw_read_internal_bytes_raw() / hw_read_sd_bytes_raw() bypass the
  * decrypt-on-read path so the repo gets the opaque Salted__ blob.
- *
- * The news-index download (denislee.github.io/hn) lives on the News app
- * itself — this sync only touches notes.
  */
 #include "../ui_define.h"
 #include "../hal/storage.h"

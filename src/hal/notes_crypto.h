@@ -25,8 +25,8 @@ bool notes_crypto_is_unlocked();
 bool notes_crypto_should_encrypt();
 
 /* Does this path fall under the encryption policy? Top-level *.txt files
- * (except `tasks.txt`) and the journal index. Anything under `/news/` or in
- * a subdirectory stays plaintext. */
+ * (except `tasks.txt`) and the journal index. Anything in a subdirectory
+ * stays plaintext. */
 bool notes_crypto_path_is_protected(const char *path);
 
 /* Verify `pw` against the stored canary. On success, caches the passphrase

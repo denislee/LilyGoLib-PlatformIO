@@ -88,7 +88,7 @@ void ui_popup_destroy(lv_obj_t *popup);
  *
  * Typical usage:
  *   ui_loading_t ld;
- *   ui_loading_open(&ld, "Syncing news", "Connecting...");
+ *   ui_loading_open(&ld, "Syncing", "Connecting...");
  *   ui_loading_set_progress(&ld, i, total, fname);
  *   ...
  *   ui_loading_close(&ld);
@@ -121,7 +121,7 @@ void ui_loading_close(ui_loading_t *l);
  *       {"Failed",  "2"},
  *       {"Skipped", "5"},
  *   };
- *   ui_result_show("News sync", "Done.", rows, 3); */
+ *   ui_result_show("Sync", "Done.", rows, 3); */
 typedef struct {
     const char *label;
     const char *value;
@@ -182,7 +182,6 @@ void ui_nfc_test_open();
 const lv_font_t *get_editor_font();
 const lv_font_t *get_small_font();
 const lv_font_t *get_journal_font();
-const lv_font_t *get_md_font();
 const lv_font_t *get_header_font();
 const lv_font_t *get_home_font();
 const lv_font_t *get_system_font();

@@ -72,15 +72,6 @@ bool hw_ping_internet(const char *host = "1.1.1.1",
                       uint32_t *elapsed_ms = nullptr,
                       std::string *error = nullptr);
 
-// GET the URL and stream the body to `abs_path` (absolute path on SD or FFat).
-// On success returns true and `bytes_written` (optional) gets the byte count.
-// `progress_cb` is invoked periodically with (downloaded, total_or_0). Return
-// false from the callback to abort — the partial file is then removed.
-bool hw_http_download_to_file(const char *url, const char *abs_path,
-                              size_t *bytes_written = nullptr,
-                              bool (*progress_cb)(size_t, size_t) = nullptr,
-                              std::string *error = nullptr);
-
 // --- BLE ---
 bool hw_get_bt_enable();
 void hw_set_bt_enable(bool en);

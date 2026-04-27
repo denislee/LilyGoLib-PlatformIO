@@ -65,22 +65,6 @@ static void journal_font_size_cb(lv_event_t *e)
     lv_event_stop_processing(e);
 }
 
-static void md_font_face_cb(lv_event_t *e)
-{
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    local_param.md_font_index = lv_dropdown_get_selected(obj);
-    commit_font_change();
-    lv_event_stop_processing(e);
-}
-
-static void md_font_size_cb(lv_event_t *e)
-{
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    local_param.md_font_size = 10 + lv_dropdown_get_selected(obj) * 2;
-    commit_font_change();
-    lv_event_stop_processing(e);
-}
-
 static void header_font_face_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
@@ -226,8 +210,6 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
                      editor_font_face_cb,  editor_font_size_cb);
     add_font_section("Journal",  local_param.journal_font_index, local_param.journal_font_size,
                      journal_font_face_cb, journal_font_size_cb);
-    add_font_section("News",     local_param.md_font_index,      local_param.md_font_size,
-                     md_font_face_cb,      md_font_size_cb);
     add_font_section("Weather",  local_param.weather_font_index, local_param.weather_font_size,
                      weather_font_face_cb, weather_font_size_cb);
     add_font_section("Telegram", local_param.telegram_font_index, local_param.telegram_font_size,

@@ -54,24 +54,6 @@ void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
 // Cheap non-allocating count of files (not directories) in the internal FFat
 // root. Intended for the status-bar indicator — does not recurse.
 uint32_t hw_count_internal_files();
-void hw_get_sd_news_files(std::vector<std::string> &list);
-void hw_get_news_headers(const char *path, std::vector<std::pair<std::string, size_t>> &headers, bool (*progress_cb)(size_t, size_t) = nullptr);
-
-// Header index with on-disk caching. On first call for a given file, scans
-// the content and writes a sidecar at `<path>.idx`. Subsequent calls load
-// the sidecar directly when it matches the current file size. The sidecar
-// is also removed by `hw_delete_file` when the user deletes the txt.
-void hw_get_news_headers_cached(const char *path,
-                                std::vector<std::pair<std::string, size_t>> &headers,
-                                bool (*progress_cb)(size_t, size_t) = nullptr);
-
-// Single-slot persistent file reader — keeps a File open across calls so the
-// pager doesn't pay open/close per page. Only one reader is active at a time;
-// opening a new path implicitly closes the previous.
-bool hw_file_reader_open(const char *path);
-bool hw_file_reader_read(uint32_t offset, uint32_t size, std::string &content);
-uint32_t hw_file_reader_size();
-void hw_file_reader_close();
 
 // Storage preference: when true, user-facing apps (editor, tasks) route
 // their reads/writes to the SD card. When false (default), they use internal

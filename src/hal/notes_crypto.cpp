@@ -398,9 +398,6 @@ bool notes_crypto_path_is_protected(const char *path)
     const char *name = lstrip_slash(path);
 
     if (strcmp(name, "journal_idx.bin") == 0) return true;
-    /* /news/* stays plaintext by policy (populated by the host sync script
-     * which has no access to the passphrase on-device). */
-    if (strncmp(name, "news/", 5) == 0) return false;
     /* Only top-level files — subdirectory contents are outside the journal
      * scope. */
     if (strchr(name, '/') != nullptr) return false;
