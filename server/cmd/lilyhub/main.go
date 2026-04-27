@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/lilygo/lilyhub/internal/cache"
+	"github.com/lilygo/lilyhub/internal/chat"
 	"github.com/lilygo/lilyhub/internal/httpx"
+	"github.com/lilygo/lilyhub/internal/notessync"
 	"github.com/lilygo/lilyhub/internal/weather"
 )
 
@@ -39,6 +41,8 @@ func main() {
 	})
 
 	weather.New(c).Register(mux)
+	notessync.New().Register(mux)
+	chat.New().Register(mux)
 
 	srv := &http.Server{
 		Addr:              *addr,

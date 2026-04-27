@@ -29,6 +29,15 @@ server/
 | GET    | `/api/weather/geo/ip`             | 30 min    | `http://ip-api.com/json/?fields=...` |
 | GET    | `/api/weather/geo/search?name=…&count=…` | 24 h | `https://geocoding-api.open-meteo.com/v1/search` |
 | GET    | `/api/weather/forecast?latitude=…&longitude=…&…` | 10 min | `https://api.open-meteo.com/v1/forecast` |
+| POST   | `/api/notes/sync`                 | —         | `https://api.github.com` |
+| POST   | `/api/chat`                       | —         | `https://api.groq.com/openai/v1` |
+
+`POST /api/chat` accepts `{device_id, text?, audio_b64?, reset?}` and returns
+`{transcript?, reply}`. When `audio_b64` is set the hub runs Whisper STT
+first; the transcript becomes the user turn. Conversation history is kept
+in-process keyed by `device_id` (last 20 messages, idle sessions reaped at
+1 h). Set `reset:true` to clear it. Requires `GROQ_API_KEY` in the
+environment — without it the endpoint returns 503.
 
 Each weather response is byte-identical to the upstream (we don't reshape
 JSON), so the device parsers stay unchanged. The forecast endpoint forwards
@@ -93,10 +102,12 @@ curl -s 'http://<host>:8080/api/weather/forecast?latitude=-23.55&longitude=-46.6
 
 ## Configure the device
 
-Open **Settings → Weather → Local hub URL** on the device and enter the hub's
-address, e.g. `http://192.168.1.10:8080` (no trailing slash). Empty disables
-hub usage. The device tries the hub first; on any failure (timeout, 5xx, DNS,
-connection refused) it transparently falls back to the public internet.
+Open **Settings → Local Hub** on the device, toggle "Use local hub" on, and
+set the URL (e.g. `http://192.168.1.10:8080`, no trailing slash). The setting
+is shared across every feature that consults the hub (weather, notes sync,
+…). On any hub failure (timeout, 5xx, DNS, connection refused) the device
+transparently falls back to the public internet — or, for notes sync, to the
+direct GitHub path.
 
 ## Adding a new app
 

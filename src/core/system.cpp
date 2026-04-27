@@ -8,6 +8,7 @@
 #include "input_focus.h"
 #include "notify.h"
 #include "../ui_define.h"
+#include "../hal/hub.h"
 
 #include "../apps/menu_app.h"
 
@@ -143,6 +144,16 @@ void System::setupGlobalUI() {
     lv_label_set_text(_statWifiLabel, LV_SYMBOL_WIFI);
     lv_obj_add_flag(_statWifiLabel, LV_OBJ_FLAG_HIDDEN);
 
+    // Local hub indicator. Hidden when the user hasn't enabled the hub at
+    // all; muted when enabled but unreachable; accent when the LAN service
+    // answered our last TCP probe. The probe runs from the status timer
+    // below at a much slower cadence than the 1Hz refresh.
+    _statHubLabel = lv_label_create(_statRightCont);
+    lv_obj_set_style_text_color(_statHubLabel, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_text_font(_statHubLabel, header_font, 0);
+    lv_label_set_text(_statHubLabel, LV_SYMBOL_HOME);
+    lv_obj_add_flag(_statHubLabel, LV_OBJ_FLAG_HIDDEN);
+
     _statBattLabel = lv_label_create(_statRightCont);
     lv_obj_set_style_text_color(_statBattLabel, lv_color_white(), 0);
     lv_obj_set_style_text_font(_statBattLabel, header_font, 0);
@@ -197,6 +208,9 @@ void System::setupGlobalUI() {
             }
             if (self._statWifiLabel) {
                 lv_obj_set_style_text_font(self._statWifiLabel, cur_font, 0);
+            }
+            if (self._statHubLabel) {
+                lv_obj_set_style_text_font(self._statHubLabel, cur_font, 0);
             }
             if (self._statFileCountLabel) {
                 lv_obj_set_style_text_font(self._statFileCountLabel, cur_font, 0);
@@ -267,6 +281,29 @@ void System::setupGlobalUI() {
                     hw_get_wifi_connected() ? UI_COLOR_ACCENT : UI_COLOR_MUTED, 0);
             } else {
                 lv_obj_add_flag(self._statWifiLabel, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+
+        // Hub indicator. The TCP probe is a real network call (a connect()
+        // with a 1.5s timeout), so we throttle it to once every 10 ticks
+        // (~10s) and reuse the cached result for in-between frames. The
+        // probe is only attempted when the hub is enabled AND WiFi is up;
+        // hidden otherwise.
+        if (self._statHubLabel) {
+            if (hal::hub_is_enabled()) {
+                static uint8_t hub_tick = 0;
+                static bool hub_reachable = false;
+                static bool hub_ever_probed = false;
+                if (!hub_ever_probed || ++hub_tick >= 10) {
+                    hub_reachable = hal::hub_is_reachable();
+                    hub_ever_probed = true;
+                    hub_tick = 0;
+                }
+                lv_obj_clear_flag(self._statHubLabel, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_style_text_color(self._statHubLabel,
+                    hub_reachable ? UI_COLOR_ACCENT : UI_COLOR_MUTED, 0);
+            } else {
+                lv_obj_add_flag(self._statHubLabel, LV_OBJ_FLAG_HIDDEN);
             }
         }
 

@@ -31,6 +31,7 @@
 #include "../hal/wireless.h"
 #include "../hal/notes_crypto.h"
 #include "../hal/secrets.h"
+#include "../hal/hub.h"
 #include "../core/app.h"
 #include "../core/app_manager.h"
 #include "../core/system.h"
@@ -350,11 +351,121 @@ static bool put_remote_file(const Config &c,
     return true;
 }
 
-#endif  // ARDUINO
+// Hub-delegated sync: the device builds a manifest of every local note (name
+// + base64-of-raw-bytes) and POSTs it to the configured lilyhub. The hub
+// performs the GitHub list+PUT round-trips on a real CPU with HTTP keepalive
+// and bounded parallelism, returning a JSON summary the device parses back
+// into the same log lines as the direct path. On any transport failure or
+// non-2xx response we return false; the caller falls back to direct.
+//
+// Token is sent in the request body to the hub. It's an in-LAN call so plain
+// HTTP is acceptable for this iteration; a future hub-side stored token can
+// remove the cleartext-on-LAN exposure.
+struct LocalNote {
+    std::string name;
+    bool internal;
+};
+
+static bool try_hub_sync(const Config &cfg,
+                         const std::vector<LocalNote> &local,
+                         std::string *err)
+{
+    std::string hub = hal::hub_get_url();
+    if (hub.empty()) {
+        if (err) *err = "hub disabled";
+        return false;
+    }
+
+    // Build the JSON manifest. We base64-encode raw on-disk bytes so encrypted
+    // notes (Salted__ blobs) pass through verbatim — the hub never sees and
+    // never needs the user's notes passphrase. Body size is dominated by the
+    // base64 output (~133% of the source); the ESP32 heap is fine with the
+    // ~30 small text notes typical of this app, but a much larger corpus
+    // would warrant chunking.
+    std::string body;
+    body.reserve(256 + 1024 * local.size());
+    body += "{\"repo\":\"";   body += json_escape(cfg.repo);   body += "\",";
+    body += "\"branch\":\""; body += json_escape(cfg.branch); body += "\",";
+    body += "\"token\":\"";  body += json_escape(cfg.token);  body += "\",";
+    body += "\"files\":[";
+    bool first = true;
+    int read_skipped = 0;
+    for (const auto &n : local) {
+        std::vector<uint8_t> bytes;
+        std::string abs = "/" + n.name;
+        bool ok = n.internal ? hw_read_internal_bytes_raw(abs.c_str(), bytes)
+                             : hw_read_sd_bytes_raw(abs.c_str(), bytes);
+        if (!ok) { read_skipped++; continue; }
+        std::string b64;
+        if (!b64_encode(bytes.data(), bytes.size(), b64)) { read_skipped++; continue; }
+        if (!first) body.push_back(',');
+        first = false;
+        body += "{\"name\":\"";        body += json_escape(n.name); body += "\",";
+        body += "\"content_b64\":\""; body += b64;                  body += "\"}";
+    }
+    body += "]}";
+
+    std::string url = hub + "/api/notes/sync";
+    std::string resp;
+    int code = 0;
+    std::string terr;
+    bool ok = hw_http_request(url.c_str(), "POST",
+                              body.c_str(), body.size(),
+                              "application/json",
+                              nullptr, resp, &code, &terr);
+    scrub_string(body);
+    if (!ok || code / 100 != 2) {
+        if (err) {
+            if (!terr.empty()) *err = terr;
+            else if (code != 0) {
+                char buf[24];
+                snprintf(buf, sizeof(buf), "HTTP %d", code);
+                *err = buf;
+                if (!resp.empty()) *err += ": " + resp.substr(0, 120);
+            } else {
+                *err = "no response";
+            }
+        }
+        return false;
+    }
+
+    // Parse the hub's summary. Shape: {"uploaded":N,"already":M,
+    // "errors":[{"name":"...","error":"..."}, ...]}
+    int uploaded = 0, already = 0;
+    std::vector<std::pair<std::string,std::string>> errors;
+    cJSON *j = cJSON_Parse(resp.c_str());
+    if (!j) {
+        if (err) *err = "bad hub json";
+        return false;
+    }
+    cJSON *u = cJSON_GetObjectItemCaseSensitive(j, "uploaded");
+    cJSON *a = cJSON_GetObjectItemCaseSensitive(j, "already");
+    cJSON *e = cJSON_GetObjectItemCaseSensitive(j, "errors");
+    if (cJSON_IsNumber(u)) uploaded = u->valueint;
+    if (cJSON_IsNumber(a)) already = a->valueint;
+    if (cJSON_IsArray(e)) {
+        int n = cJSON_GetArraySize(e);
+        for (int i = 0; i < n; i++) {
+            cJSON *it = cJSON_GetArrayItem(e, i);
+            cJSON *nm = cJSON_GetObjectItemCaseSensitive(it, "name");
+            cJSON *er = cJSON_GetObjectItemCaseSensitive(it, "error");
+            errors.emplace_back(
+                cJSON_IsString(nm) ? nm->valuestring : "?",
+                cJSON_IsString(er) ? er->valuestring : "?");
+        }
+    }
+    cJSON_Delete(j);
+
+    for (const auto &p : errors) {
+        log_appendf("  up %s FAIL: %s", p.first.c_str(), p.second.c_str());
+    }
+    log_appendf("Notes: +%d =%d (fail %d, skip %d)",
+                uploaded, already, (int)errors.size(), read_skipped);
+    return true;
+}
 
 // --- sync driver ----------------------------------------------------------
 
-#ifdef ARDUINO
 static void run_sync()
 {
     std::string err;
@@ -374,11 +485,6 @@ static void run_sync()
     //    both sides → FFat wins (the SD copy is dropped from the candidate
     //    list and never read). The `internal` flag steers the raw read in
     //    step 4 to the right backing store.
-    struct LocalNote {
-        std::string name;
-        bool internal;
-    };
-
     auto strip_slash = [](std::string &p) {
         if (!p.empty() && p[0] == '/') p.erase(0, 1);
     };
@@ -414,18 +520,31 @@ static void run_sync()
                     (unsigned)local.size(), ffat_count);
     }
 
-    // 2. Fetch current remote state — names only; we never overwrite, so
-    //    there's no need for the blob SHAs.
+    // 2. If the hub is enabled, try delegating the entire push to it. On any
+    //    failure (URL unreachable, non-2xx, malformed response) we log the
+    //    reason and fall through to the direct GitHub path — same code that
+    //    was the only path before this feature. The token gets scrubbed
+    //    either way at the end.
+    if (hal::hub_is_enabled()) {
+        log_append("[hub] delegating push to lilyhub...");
+        std::string herr;
+        if (try_hub_sync(cfg, local, &herr)) {
+            scrub_string(cfg.token);
+            return;
+        }
+        log_appendf("[hub] failed: %s — falling back to direct", herr.c_str());
+    }
+
+    // 3. Direct path: list remote, PUT each missing local file.
+    log_append("[direct] talking to GitHub...");
     std::vector<std::string> remote;
     if (!list_remote_notes(cfg, remote, &err)) {
         log_appendf("ERR: list: %s", err.c_str());
+        scrub_string(cfg.token);
         return;
     }
     log_appendf("Remote notes: %u", (unsigned)remote.size());
 
-    // 3. Additive push: upload each local file whose name is NOT already on
-    //    the remote. Files already on the remote are skipped untouched —
-    //    edits won't propagate by themselves, by design.
     int uploaded = 0, already = 0, skipped = 0, up_failed = 0;
     for (const auto &n : local) {
         bool on_remote = false;

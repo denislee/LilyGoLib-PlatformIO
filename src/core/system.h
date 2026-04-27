@@ -49,6 +49,7 @@ private:
     lv_obj_t* _statUSBLabel = nullptr;
     lv_obj_t* _statBTLabel = nullptr;
     lv_obj_t* _statWifiLabel = nullptr;
+    lv_obj_t* _statHubLabel = nullptr;
     lv_obj_t* _statFileCountLabel = nullptr;
     lv_obj_t* _statRightCont = nullptr;
     lv_obj_t* _statBackBtn = nullptr;

@@ -82,14 +82,16 @@ bool        weather_search_cities(const char *query,
                                   std::vector<weather_city_match> &out,
                                   std::string &err);
 
-// Local hub URL — when set, the device tries this server first for every
-// weather fetch and falls back to the public internet on failure. Empty
-// disables hub usage entirely.
-std::string weather_get_hub_url();
-void        weather_set_hub_url(const char *url);
-
 // --- Per-sub-config entry points ---
 namespace weather_cfg {
+    void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page);
+    void set_sub_page(lv_obj_t *page);
+    void reset_state();
+}
+
+// Local Hub subpage — master toggle + URL for the lilyhub server. Backed by
+// hal::hub_*. Cross-cutting: weather and notes-sync both consult this.
+namespace hub_cfg {
     void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page);
     void set_sub_page(lv_obj_t *page);
     void reset_state();

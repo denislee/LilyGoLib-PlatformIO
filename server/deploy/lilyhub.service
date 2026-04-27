@@ -11,6 +11,9 @@ RestartSec=3
 User=lilyhub
 Group=lilyhub
 Environment=LILYHUB_ADDR=:8080
+# Optional. Free key at https://console.groq.com — required by /api/chat.
+# Uncomment and set to enable the Chat app on the device.
+#Environment=GROQ_API_KEY=gsk_xxx
 
 # Hardening — the binary only needs to bind a TCP port and make outbound HTTP.
 NoNewPrivileges=yes

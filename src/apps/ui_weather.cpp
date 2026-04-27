@@ -30,6 +30,7 @@
 #include "../ui_define.h"
 #include "../hal/wireless.h"
 #include "../hal/system.h"
+#include "../hal/hub.h"
 #include "../core/app_manager.h"
 #include "app_registry.h"
 #include <memory>
@@ -63,11 +64,12 @@ enum IconKind {
 static const char *GEO_URL =
     "http://ip-api.com/json/?fields=status,lat,lon,city,regionName,country";
 
-// When `hub_url` is set in NVS, every weather fetch tries the local hub first
-// and only falls back to the public upstream if the hub call fails. The hub
-// (see /server in this repo) returns byte-identical JSON to the upstreams it
-// proxies, so the parsers below are unchanged. Hub paths are kept here so the
-// contract lives next to the URLs they replace.
+// When the local hub is enabled (Settings » Local Hub, backed by hal::hub_*),
+// every weather fetch tries the hub first and only falls back to the public
+// upstream if the hub call fails. The hub (see /server in this repo) returns
+// byte-identical JSON to the upstreams it proxies, so the parsers below are
+// unchanged. Hub paths are kept here so the contract lives next to the URLs
+// they replace.
 #define HUB_PATH_GEO_IP        "/api/weather/geo/ip"
 #define HUB_PATH_GEO_SEARCH    "/api/weather/geo/search"
 #define HUB_PATH_FORECAST      "/api/weather/forecast"
@@ -533,32 +535,17 @@ static void save_cached_geo(const std::string &key, const GeoData &in)
     p.end();
 }
 
-// Read the configured hub URL from NVS, trimmed of trailing slashes/whitespace.
-// Empty string means "no hub configured — go direct."
-static std::string load_hub_url()
-{
-    Preferences p;
-    if (!p.begin(WEATHER_PREFS_NS, true)) return "";
-    String h = p.getString("hub_url", "");
-    p.end();
-    std::string s = h.c_str();
-    while (!s.empty() && (s.back() == '/' || s.back() == ' ' || s.back() == '\r' ||
-                          s.back() == '\n' || s.back() == '\t')) {
-        s.pop_back();
-    }
-    return s;
-}
-
-// Try the hub first (if configured), then fall back to `direct_url`. The hub's
-// JSON is identical to upstream, so the same parser handles both responses.
-// `err` is populated only with the *direct* call's error, since the hub being
-// down is expected and not interesting to surface.
+// Try the hub first (if enabled+configured), then fall back to `direct_url`.
+// The hub's JSON is identical to upstream, so the same parser handles both
+// responses. `err` is populated only with the *direct* call's error, since
+// the hub being down is expected and not interesting to surface. Hub config
+// (toggle + URL) is owned by hal/hub.{h,cpp}.
 static bool fetch_with_hub_fallback(const std::string &hub_path,
                                     const char *direct_url,
                                     std::string &body,
                                     std::string &err)
 {
-    std::string hub = load_hub_url();
+    std::string hub = hal::hub_get_url();
     if (!hub.empty()) {
         std::string url = hub + hub_path;
         std::string e;
@@ -1078,39 +1065,6 @@ std::string weather_get_user_city()
     return std::string(c.c_str());
 #else
     return std::string(WEATHER_DEFAULT_CITY);
-#endif
-}
-
-// Hub URL — base URL of a local lilyhub server (see /server in this repo).
-// Empty disables hub usage; the device behaves exactly as before. We persist
-// the raw user-entered string and trim trailing slashes at read time, so
-// "http://10.0.0.5:8080" and "http://10.0.0.5:8080/" both work.
-std::string weather_get_hub_url()
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(WEATHER_PREFS_NS, true)) return "";
-    String h = p.getString("hub_url", "");
-    p.end();
-    return std::string(h.c_str());
-#else
-    return "";
-#endif
-}
-
-void weather_set_hub_url(const char *url)
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(WEATHER_PREFS_NS, false)) return;
-    if (url && *url) {
-        p.putString("hub_url", url);
-    } else {
-        p.remove("hub_url");
-    }
-    p.end();
-#else
-    (void)url;
 #endif
 }
 

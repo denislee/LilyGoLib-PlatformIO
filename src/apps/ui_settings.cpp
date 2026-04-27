@@ -475,6 +475,17 @@ static lv_obj_t *create_subpage_weather(lv_obj_t *menu, lv_obj_t *main_page)
     return cont;
 }
 
+static lv_obj_t *create_subpage_hub(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_UPLOAD, "Local Hub");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)&hub_cfg::build_subpage);
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    hub_cfg::set_sub_page(sub_page);
+    return cont;
+}
+
 static lv_obj_t *create_subpage_telegram(lv_obj_t *menu, lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
@@ -609,6 +620,7 @@ void ui_sys_enter(lv_obj_t *parent)
     // Home screen
     cont = create_subpage_home_apps(menu, main_page);      add_grid_item(cont);
     // Online services
+    cont = create_subpage_hub(menu, main_page);            add_grid_item(cont);
     cont = create_subpage_weather(menu, main_page);        add_grid_item(cont);
     cont = create_subpage_telegram(menu, main_page);       add_grid_item(cont);
     // Notes
@@ -686,6 +698,7 @@ void ui_sys_exit(lv_obj_t *parent)
     datetime_cfg::reset_state();
     connectivity_cfg::reset_state();
     notes_sec_cfg::reset_state();
+    hub_cfg::reset_state();
     weather_cfg::reset_state();
     telegram_cfg::reset_state();
     notes_sync_cfg::reset_state();
