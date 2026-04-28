@@ -65,9 +65,10 @@ type SyncError struct {
 
 type Handler struct {
 	client *http.Client
-	// Bound on parallel GitHub PUTs. GitHub's secondary rate limit kicks in at
-	// "more than a few" concurrent writes against the same repo; 4 is the
-	// sweet spot we observed where total wall time stops improving.
+	// Bound on parallel GitHub PUTs. Must stay at 1: the Contents API computes
+	// the parent ref at request time, so two PUTs to the same branch race and
+	// the loser comes back as 409 "is at X but expected Y". Serial is fast
+	// enough at the note counts this app deals with.
 	maxParallel int
 	// Local on-disk note store. Lets the device offload bulk note storage to
 	// the hub when its internal flash fills up. Files are saved as opaque
@@ -94,7 +95,7 @@ func New() *Handler {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		maxParallel: 4,
+		maxParallel: 1,
 		notesDir:    dir,
 	}
 }
