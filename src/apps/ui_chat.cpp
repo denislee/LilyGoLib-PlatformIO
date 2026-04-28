@@ -696,6 +696,14 @@ static void log_key_cb(lv_event_t *e)
     lv_event_stop_processing(e);
 }
 
+// Encoder click on the focused log container exits scroll mode by handing
+// focus back to the input. Without this the user gets stuck — UP/DOWN keep
+// scrolling and the indev never advances to the next group object.
+static void log_click_cb(lv_event_t *)
+{
+    if (s_input_ta) lv_group_focus_obj(s_input_ta);
+}
+
 static void enter(lv_obj_t *parent)
 {
     s_root = parent;
@@ -741,6 +749,7 @@ static void enter(lv_obj_t *parent)
     lv_obj_add_flag(s_log_scroll, LV_OBJ_FLAG_CLICK_FOCUSABLE);
     lv_group_add_obj(lv_group_get_default(), s_log_scroll);
     lv_obj_add_event_cb(s_log_scroll, log_key_cb, LV_EVENT_KEY, nullptr);
+    lv_obj_add_event_cb(s_log_scroll, log_click_cb, LV_EVENT_CLICKED, nullptr);
 
     // Status line — "thinking...", "recording...", error hints.
     s_status_lbl = lv_label_create(parent);

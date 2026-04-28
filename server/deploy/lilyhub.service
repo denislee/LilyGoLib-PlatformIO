@@ -12,6 +12,15 @@ User=lilyhub
 Group=lilyhub
 Environment=LILYHUB_ADDR=:8080
 
+# Writable state for uploaded notes. systemd creates /var/lib/lilyhub on
+# start, chowns it to the service user, and implicitly adds it to
+# ReadWritePaths — required because ProtectHome=yes masks $HOME (the
+# default notes dir) and ProtectSystem=strict makes everything else
+# read-only, so /api/notes/upload would otherwise 500 on mkdir/write.
+StateDirectory=lilyhub
+StateDirectoryMode=0750
+Environment=LILYHUB_NOTES_DIR=/var/lib/lilyhub/notes
+
 # Secrets (GROQ_API_KEY for /api/chat, etc.) live in /etc/lilyhub/env so they
 # stay out of this unit file and out of git. The leading `-` makes the file
 # optional — the service starts fine without it; only /api/chat returns 503.
