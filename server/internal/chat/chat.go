@@ -67,24 +67,53 @@ type session struct {
 }
 
 type Handler struct {
-	client   *http.Client
-	apiKey   string
-	mu       sync.Mutex
-	sessions map[string]*session
+	client    *http.Client
+	apiKey    string
+	sttLang   string
+	sttPrompt string
+	mu        sync.Mutex
+	sessions  map[string]*session
 }
+
+// Defaults bias the transcription toward Brazilian Portuguese. Whisper's
+// `language` field only takes ISO-639-1 (no country variant), so to push
+// the model toward pt-BR vocabulary/spelling we send a short biasing
+// prompt in the same regional style — Whisper uses it as a vocabulary
+// hint, not as text that gets prepended to the output.
+const (
+	defaultSTTLang   = "pt"
+	defaultSTTPrompt = "Olá, tudo bem? Estou usando um celular, " +
+		"ônibus, trem, geladeira, abacaxi, açaí, cafezinho, computador."
+)
 
 func New() *Handler {
 	key := os.Getenv("GROQ_API_KEY")
+	// STT_LANG: ISO-639-1 hint. Default "pt" (Portuguese, any region).
+	//   Set STT_LANG_AUTO=1 to disable and let Whisper auto-detect.
+	// STT_PROMPT: free-form vocabulary/style hint used to bias regional
+	//   variants (e.g. pt-BR vs pt-PT). Set STT_PROMPT="" to send no
+	//   prompt at all.
+	sttLang := os.Getenv("STT_LANG")
+	if sttLang == "" && os.Getenv("STT_LANG_AUTO") == "" {
+		sttLang = defaultSTTLang
+	}
+	sttPrompt, hasPrompt := os.LookupEnv("STT_PROMPT")
+	if !hasPrompt {
+		sttPrompt = defaultSTTPrompt
+	}
 	if key == "" {
 		log.Printf("chat: GROQ_API_KEY not set — /api/chat will return 503")
 	} else {
-		log.Printf("chat: handler ready (model=%s stt=%s key=%s…)",
-			chatModel, sttModel, redactKey(key))
+		log.Printf("chat: handler ready (model=%s stt=%s stt_lang=%q "+
+			"stt_prompt_len=%d key=%s)",
+			chatModel, sttModel, sttLang, len(sttPrompt), redactKey(key))
 	}
 	return &Handler{
-		client:   &http.Client{Timeout: clientTimeout},
-		apiKey:   key,
-		sessions: make(map[string]*session),
+		client:    &http.Client{Timeout: clientTimeout},
+		apiKey:    key,
+		sttLang:   sttLang,
+		sttPrompt: sttPrompt,
+		sessions:  make(map[string]*session),
 	}
 }
 
@@ -210,6 +239,16 @@ func (h *Handler) transcribe(ctx context.Context, audio []byte) (string, error) 
 	}
 	if err := mw.WriteField("response_format", "json"); err != nil {
 		return "", err
+	}
+	if h.sttLang != "" {
+		if err := mw.WriteField("language", h.sttLang); err != nil {
+			return "", err
+		}
+	}
+	if h.sttPrompt != "" {
+		if err := mw.WriteField("prompt", h.sttPrompt); err != nil {
+			return "", err
+		}
 	}
 	fw, err := mw.CreateFormFile("file", "audio.wav")
 	if err != nil {

@@ -24,6 +24,7 @@
 #include "../core/scoped_lock.h"
 #include "app_registry.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -32,8 +33,12 @@
 #ifdef ARDUINO
 #include <Arduino.h>
 #include <SD.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
 #include <LilyGoLib.h>
 #include <mbedtls/base64.h>
+#include <cctype>
+#include <cstdlib>
 extern "C" {
 #include "cJSON.h"
 }
@@ -60,16 +65,20 @@ static bool        s_busy      = false;
 
 // --- async send context ---------------------------------------------------
 //
-// The send task runs off the LVGL thread because hw_http_request is
-// blocking. The UI hands ownership of the context to the task; the task
-// fills in the result and flips `done` under the instance lock; the LVGL
-// poll timer picks it up next tick.
+// The send task runs off the LVGL thread because chat_post is blocking.
+// We coordinate with atomics rather than the global instance lock — the
+// LVGL task already holds that lock around lv_timer_handler(), and the
+// instance mutex is non-recursive, so a poll-timer callback that tried
+// to retake it would deadlock the entire UI.
 //
-// `abandoned` solves the exit race: if the user backs out while a request
-// is in flight, the UI marks the context abandoned (still under the lock)
-// and the task deletes the context itself when done. Conversely, if the
-// task has already finished before exit, the UI sees `done==true` and
-// deletes it. The lock disambiguates the two paths.
+// `done` flips when the worker has filled in result fields. After that,
+// non-atomic fields (reply/transcript/error/ok) are stable and safe to
+// read from the UI thread (release/acquire pairing on `done`).
+//
+// `abandoned` is set by exit_cb when the user navigates away while a
+// request is in flight. Whichever party (worker on done, exit_cb on
+// abandon-after-done) wins the `claimed` CAS owns deletion; the other
+// leaves the buffer alone.
 struct SendCtx {
     std::string url;
     std::string body;
@@ -77,9 +86,10 @@ struct SendCtx {
     std::string reply;
     std::string error;
     uint32_t    start_ms = 0;
-    bool ok        = false;
-    bool done      = false;
-    bool abandoned = false;
+    bool        ok       = false;
+    std::atomic<bool> done{false};
+    std::atomic<bool> abandoned{false};
+    std::atomic<bool> claimed{false};
 };
 static SendCtx *s_ctx = nullptr;
 
@@ -189,28 +199,38 @@ static void set_busy(bool busy)
 
 // Detach an in-flight send. The HTTP call itself is blocking and lives in
 // the worker task — we can't truly abort it, but we can stop caring about
-// the result: clear our pointer, mark the ctx abandoned, and let the task
-// free itself when it eventually returns.
+// the result. Whoever wins the `claimed` CAS frees the buffer.
 static void cancel_inflight()
 {
     if (!s_ctx) return;
-    bool delete_now;
-    {
-        core::ScopedInstanceLock lock;
-        if (s_ctx->done) {
-            delete_now = true;
-        } else {
-            s_ctx->abandoned = true;
-            delete_now = false;
-        }
-    }
-    if (delete_now) delete s_ctx;
+    SendCtx *c = s_ctx;
     s_ctx = nullptr;
+    c->abandoned.store(true);
+    // If the worker already finished, take responsibility for delete here.
+    // Otherwise the worker will see abandoned=true on its way out and
+    // delete via the same CAS.
+    if (c->done.load() && !c->claimed.exchange(true)) {
+        delete c;
+    }
 }
 
 static void status_click_cb(lv_event_t *)
 {
     if (!s_busy) return;
+#ifdef ARDUINO
+    // Filter the synthesized click from the same Enter press that just
+    // submitted the message. The keypad indev sees LV_KEY_ENTER on
+    // press → textarea fires LV_EVENT_READY → we move focus to the
+    // status label → on release, the indev fires LV_EVENT_CLICKED on
+    // the now-focused status label, which would instantly cancel the
+    // request the user just sent. A short post-start grace window
+    // absorbs the spurious release-click without delaying real cancels.
+    if (s_ctx && s_ctx->start_ms != 0 &&
+        (millis() - s_ctx->start_ms) < 400) {
+        Serial.println("[chat] ignoring synthesized click within grace window");
+        return;
+    }
+#endif
     cancel_inflight();
     set_busy(false);
     log_append("info: ", "cancelled");
@@ -226,6 +246,155 @@ static std::string current_device_id()
 }
 
 #ifdef ARDUINO
+// Self-contained POST over raw WiFiClient. We avoid hw_http_request /
+// Arduino HTTPClient because their getString() has been observed to
+// hang indefinitely on this device, even when the server clearly sent
+// a Content-Length + Connection: close response. With a raw client we
+// have full control over timeouts and we log every step, which makes
+// stalls visible on the serial monitor instead of looking like a UI bug.
+//
+// Returns true with status_code/resp filled on a successful HTTP exchange
+// (2xx or otherwise — 4xx/5xx still come back true with the body), false
+// only when the transport itself failed.
+static bool chat_post(const std::string &url,
+                      const std::string &body,
+                      std::string &resp,
+                      int &status_code,
+                      std::string &error)
+{
+    status_code = 0;
+
+    // Tiny URL parser — we only support http://host[:port]/path. The hub
+    // is on the LAN; if anyone ever points the device at https we'll
+    // route through a TLS path then.
+    if (url.compare(0, 7, "http://") != 0) {
+        error = "only http:// supported (got: " + url.substr(0, 16) + ")";
+        return false;
+    }
+    std::string rest = url.substr(7);
+    size_t slash = rest.find('/');
+    std::string hostport = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+    std::string path     = (slash == std::string::npos) ? "/"  : rest.substr(slash);
+    size_t colon = hostport.find(':');
+    std::string host = (colon == std::string::npos) ? hostport : hostport.substr(0, colon);
+    int port = 80;
+    if (colon != std::string::npos) {
+        port = atoi(hostport.substr(colon + 1).c_str());
+    }
+    Serial.printf("[chat] connect %s:%d path=%s\n",
+                  host.c_str(), port, path.c_str());
+
+    WiFiClient client;
+    if (!client.connect(host.c_str(), (uint16_t)port, 5000)) {
+        error = "connect failed";
+        return false;
+    }
+    Serial.println("[chat] connected");
+
+    // Send headers + body in one go. Connection: close is critical so
+    // the server signals EOF by closing — we then read until !connected.
+    char header[320];
+    int hlen = snprintf(header, sizeof(header),
+        "POST %s HTTP/1.1\r\n"
+        "Host: %s:%d\r\n"
+        "User-Agent: LilyGoLib-chat/1.0\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %u\r\n"
+        "Connection: close\r\n"
+        "Accept: application/json\r\n"
+        "\r\n",
+        path.c_str(), host.c_str(), port, (unsigned)body.size());
+    client.write((const uint8_t *)header, (size_t)hlen);
+    if (!body.empty()) {
+        client.write((const uint8_t *)body.data(), body.size());
+    }
+    Serial.printf("[chat] sent headers=%d body=%u\n", hlen, (unsigned)body.size());
+
+    // Drain the response. 15s overall budget; per-iteration we sleep
+    // briefly while waiting so the FreeRTOS scheduler can run others.
+    std::string raw;
+    raw.reserve(1024);
+    const uint32_t deadline = millis() + 15000;
+    bool eof = false;
+    while (millis() < deadline) {
+        while (client.available()) {
+            int c = client.read();
+            if (c < 0) break;
+            raw.push_back((char)c);
+        }
+        if (!client.connected() && !client.available()) {
+            eof = true;
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    client.stop();
+    Serial.printf("[chat] read %u bytes, eof=%d, elapsed_ok=%d\n",
+                  (unsigned)raw.size(), (int)eof,
+                  (int)(millis() < deadline));
+
+    if (raw.empty()) {
+        error = eof ? "server closed without response" : "read timeout";
+        return false;
+    }
+
+    // Parse status line: "HTTP/1.1 200 OK\r\n"
+    size_t eol = raw.find("\r\n");
+    if (eol == std::string::npos) {
+        error = "no status line";
+        return false;
+    }
+    {
+        std::string sl = raw.substr(0, eol);
+        size_t sp1 = sl.find(' ');
+        if (sp1 == std::string::npos) { error = "bad status line"; return false; }
+        size_t sp2 = sl.find(' ', sp1 + 1);
+        std::string code_str = (sp2 == std::string::npos)
+            ? sl.substr(sp1 + 1)
+            : sl.substr(sp1 + 1, sp2 - sp1 - 1);
+        status_code = atoi(code_str.c_str());
+    }
+
+    // Find header/body boundary.
+    size_t hb = raw.find("\r\n\r\n");
+    if (hb == std::string::npos) {
+        error = "no header terminator";
+        return false;
+    }
+    std::string headers = raw.substr(0, hb);
+    std::string raw_body = raw.substr(hb + 4);
+
+    // Cheap case-insensitive search for "transfer-encoding: chunked".
+    bool chunked = false;
+    {
+        std::string lower = headers;
+        for (auto &c : lower) c = (char)tolower((unsigned char)c);
+        chunked = lower.find("transfer-encoding: chunked") != std::string::npos;
+    }
+
+    if (!chunked) {
+        resp = std::move(raw_body);
+    } else {
+        // Decode chunked body. Each chunk: "<hex_len>\r\n<bytes>\r\n",
+        // terminated by a "0\r\n" chunk.
+        size_t pos = 0;
+        while (pos < raw_body.size()) {
+            size_t crlf = raw_body.find("\r\n", pos);
+            if (crlf == std::string::npos) break;
+            std::string lenstr = raw_body.substr(pos, crlf - pos);
+            unsigned long n = strtoul(lenstr.c_str(), nullptr, 16);
+            pos = crlf + 2;
+            if (n == 0) break;
+            if (pos + n > raw_body.size()) break;
+            resp.append(raw_body, pos, (size_t)n);
+            pos += n + 2;
+        }
+    }
+    Serial.printf("[chat] parsed status=%d body=%u chunked=%d\n",
+                  status_code, (unsigned)resp.size(), (int)chunked);
+    return true;
+}
+
 static void send_task(void *arg)
 {
     SendCtx *ctx = (SendCtx *)arg;
@@ -236,10 +405,7 @@ static void send_task(void *arg)
     std::string resp;
     int code = 0;
     std::string terr;
-    bool http_ok = hw_http_request(ctx->url.c_str(), "POST",
-                                   ctx->body.c_str(), ctx->body.size(),
-                                   "application/json",
-                                   nullptr, resp, &code, &terr);
+    bool http_ok = chat_post(ctx->url, ctx->body, resp, code, terr);
     // Drop the request body promptly — base64 of a voice memo can be
     // hundreds of KB and we no longer need it.
     ctx->body.clear();
@@ -284,13 +450,13 @@ static void send_task(void *arg)
         }
     }
 
-    bool free_self;
-    {
-        core::ScopedInstanceLock lock;
-        ctx->done = true;
-        free_self = ctx->abandoned;
+    // Publish all result fields before flipping `done`. Release/acquire
+    // pairs with poll_timer_cb's load(done) so the UI sees a consistent
+    // ctx (reply/transcript/ok all populated) once it observes done=true.
+    ctx->done.store(true, std::memory_order_release);
+    if (ctx->abandoned.load() && !ctx->claimed.exchange(true)) {
+        delete ctx;
     }
-    if (free_self) delete ctx;
     s_send_task = nullptr;
     vTaskDelete(NULL);
 }
@@ -299,11 +465,13 @@ static void send_task(void *arg)
 static void poll_timer_cb(lv_timer_t *)
 {
     if (!s_ctx) return;
-    bool done;
-    {
-        core::ScopedInstanceLock lock;
-        done = s_ctx->done;
-    }
+    // Acquire pairs with the worker's release-store of `done` — once we
+    // see done=true, every other field of *s_ctx is safe to read here.
+    // We do NOT take ScopedInstanceLock: this callback runs inside
+    // lv_timer_handler() which already holds the (non-recursive)
+    // instance mutex from lvgl_task_fn, and re-taking it here deadlocks
+    // the entire UI task.
+    bool done = s_ctx->done.load(std::memory_order_acquire);
 #ifdef ARDUINO
     if (!done) {
         if (s_ctx->start_ms != 0) {
@@ -400,7 +568,12 @@ static void kick_off_send(const std::string &user_text,
     ctx->start_ms = millis();
 #endif
     set_status("thinking... (tap to cancel)");
-    if (xTaskCreate(send_task, "chat_send", 8192, ctx, 4, &s_send_task) != pdPASS) {
+    // Pin to core 0 — LVGL runs on core 1, so the HTTP read loop and
+    // the UI redraws never compete for the same scheduler slot. Priority
+    // 1 keeps it well below the LVGL task (priority 8); even on a single
+    // core that would be fine, but cross-core is safer.
+    if (xTaskCreatePinnedToCore(send_task, "chat_send", 8192, ctx, 1,
+                                &s_send_task, 0) != pdPASS) {
         s_ctx = nullptr;
         delete ctx;
         log_append("err: ", "task spawn failed");
@@ -624,22 +797,16 @@ static void exit_cb()
 #endif
     s_recording = false;
 
-    // Hand off any in-flight context to the task. If the task already
-    // finished (done=true) we own the deletion; otherwise the task will
-    // see abandoned=true under the same lock and free the buffer itself.
+    // Same handoff dance as cancel_inflight: mark abandoned, then claim
+    // the deletion if the worker has already finished. Otherwise the
+    // worker will claim and free on its way out.
     if (s_ctx) {
-        bool delete_now;
-        {
-            core::ScopedInstanceLock lock;
-            if (s_ctx->done) {
-                delete_now = true;
-            } else {
-                s_ctx->abandoned = true;
-                delete_now = false;
-            }
-        }
-        if (delete_now) delete s_ctx;
+        SendCtx *c = s_ctx;
         s_ctx = nullptr;
+        c->abandoned.store(true);
+        if (c->done.load() && !c->claimed.exchange(true)) {
+            delete c;
+        }
     }
 
     s_root = s_log_scroll = s_log_label = nullptr;
