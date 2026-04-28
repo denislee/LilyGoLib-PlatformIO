@@ -73,6 +73,7 @@ type Handler struct {
 	sttPrompt string
 	mu        sync.Mutex
 	sessions  map[string]*session
+	lastReap  time.Time
 }
 
 // Defaults bias the transcription toward Brazilian Portuguese. Whisper's
@@ -294,7 +295,11 @@ func (h *Handler) transcribe(ctx context.Context, audio []byte) (string, error) 
 // bounded across long conversations.
 func (h *Handler) complete(ctx context.Context, deviceID, prompt string) (string, error) {
 	h.mu.Lock()
-	h.reapLocked()
+	now := time.Now()
+	if now.Sub(h.lastReap) > time.Minute {
+		h.reapLocked(now)
+		h.lastReap = now
+	}
 	s, ok := h.sessions[deviceID]
 	if !ok {
 		s = &session{}
@@ -394,9 +399,9 @@ func (h *Handler) do(req *http.Request) ([]byte, error) {
 }
 
 // reapLocked drops sessions that have been idle for sessionIdleLimit.
-// Called inline on each request so we don't need a goroutine.
-func (h *Handler) reapLocked() {
-	cutoff := time.Now().Add(-sessionIdleLimit)
+// Called periodically so we don't need a goroutine.
+func (h *Handler) reapLocked(now time.Time) {
+	cutoff := now.Add(-sessionIdleLimit)
 	for k, s := range h.sessions {
 		if s.updated.Before(cutoff) {
 			delete(h.sessions, k)

@@ -285,19 +285,36 @@ void System::setupGlobalUI() {
         }
 
         // Hub indicator. The TCP probe is a real network call (a connect()
-        // with a 1.5s timeout), so we throttle it to once every 10 ticks
-        // (~10s) and reuse the cached result for in-between frames. The
-        // probe is only attempted when the hub is enabled AND WiFi is up;
-        // hidden otherwise.
+        // with a 1.5s timeout). We offload it to a background FreeRTOS task
+        // so it doesn't stutter the LVGL timer thread.
         if (self._statHubLabel) {
             if (hal::hub_is_enabled()) {
-                static uint8_t hub_tick = 0;
                 static bool hub_reachable = false;
-                static bool hub_ever_probed = false;
-                if (!hub_ever_probed || ++hub_tick >= 10) {
-                    hub_reachable = hal::hub_is_reachable();
-                    hub_ever_probed = true;
+                static bool hub_probe_running = false;
+                static uint8_t hub_tick = 0;
+                
+                if (!hub_probe_running && ++hub_tick >= 10) {
                     hub_tick = 0;
+                    hub_probe_running = true;
+#ifdef ARDUINO
+                    xTaskCreate([](void *arg) {
+                        bool res = hal::hub_is_reachable();
+                        bool *reachable_ptr = (bool*)((void**)arg)[0];
+                        bool *running_ptr = (bool*)((void**)arg)[1];
+                        *reachable_ptr = res;
+                        *running_ptr = false;
+                        free(arg);
+                        vTaskDelete(NULL);
+                    }, "hub_probe", 3072, [&](){
+                        void **args = (void**)malloc(2 * sizeof(void*));
+                        args[0] = (void*)&hub_reachable;
+                        args[1] = (void*)&hub_probe_running;
+                        return args;
+                    }(), 1, NULL);
+#else
+                    hub_reachable = hal::hub_is_reachable();
+                    hub_probe_running = false;
+#endif
                 }
                 lv_obj_clear_flag(self._statHubLabel, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_set_style_text_color(self._statHubLabel,

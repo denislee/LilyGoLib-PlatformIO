@@ -43,6 +43,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <set>
 
 #ifdef ARDUINO
 #include <Preferences.h>
@@ -504,13 +505,19 @@ static void run_sync()
     if (sd_online) {
         std::vector<std::string> sd_files;
         hw_get_sd_txt_files(sd_files);
+        
+        std::set<std::string> local_names;
+        for (const auto &n : local) local_names.insert(n.name);
+        
         for (auto &p : sd_files) {
             strip_slash(p);
             if (p.empty()) continue;
-            bool dup = false;
-            for (const auto &n : local) if (n.name == p) { dup = true; break; }
-            if (dup) { sd_skipped_dup++; continue; }
+            if (local_names.find(p) != local_names.end()) {
+                sd_skipped_dup++;
+                continue;
+            }
             local.push_back({p, false});
+            local_names.insert(p);
         }
         log_appendf("Local notes: %u (FFat %u, SD %u, dup %u)",
                     (unsigned)local.size(), ffat_count,
@@ -545,11 +552,11 @@ static void run_sync()
     }
     log_appendf("Remote notes: %u", (unsigned)remote.size());
 
+    std::set<std::string> remote_set(remote.begin(), remote.end());
+
     int uploaded = 0, already = 0, skipped = 0, up_failed = 0;
     for (const auto &n : local) {
-        bool on_remote = false;
-        for (const auto &r : remote) if (r == n.name) { on_remote = true; break; }
-        if (on_remote) {
+        if (remote_set.find(n.name) != remote_set.end()) {
             log_appendf("  skip %s (on remote)", n.name.c_str());
             already++;
             continue;

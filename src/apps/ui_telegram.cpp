@@ -22,6 +22,7 @@
 #include "../hal/system.h"
 #include "../hal/notes_crypto.h"
 #include "../hal/secrets.h"
+#include "../hal/hub.h"
 #include "../core/app.h"
 #include "../core/app_manager.h"
 #include "../core/notify.h"
@@ -388,12 +389,51 @@ static bool require_internet(std::string *err)
     return false;
 }
 
+static bool tg_http_request(const std::string &url, const char *method,
+                            const char *body, size_t body_len,
+                            const char *content_type, const char *auth_header,
+                            std::string &out_body, int *out_code, std::string *err)
+{
+#ifdef ARDUINO
+    if (hal::hub_is_enabled() && hal::hub_is_reachable()) {
+        std::string proxy_url = hal::hub_get_url() + "/api/telegram/proxy";
+        
+        cJSON *req = cJSON_CreateObject();
+        cJSON_AddStringToObject(req, "url", url.c_str());
+        cJSON_AddStringToObject(req, "method", method);
+        if (auth_header && strlen(auth_header) > 7) {
+            cJSON_AddStringToObject(req, "token", auth_header + 7);
+        }
+        if (body && body_len > 0) {
+            std::string bs(body, body_len);
+            cJSON_AddStringToObject(req, "body", bs.c_str());
+        }
+        char *req_str = cJSON_PrintUnformatted(req);
+        std::string req_body;
+        if (req_str) {
+            req_body = req_str;
+            free(req_str);
+        }
+        cJSON_Delete(req);
+        
+        if (!req_body.empty()) {
+            return hw_http_request(proxy_url.c_str(), "POST",
+                                   req_body.c_str(), req_body.size(),
+                                   "application/json", nullptr,
+                                   out_body, out_code, err);
+        }
+    }
+#endif
+    return hw_http_request(url.c_str(), method, body, body_len,
+                           content_type, auth_header, out_body, out_code, err);
+}
+
 static bool tg_get(const char *path, std::string &out, std::string *err = nullptr)
 {
     if (!require_internet(err)) return false;
     std::string url = make_url(path);
     int code = 0;
-    return hw_http_request(url.c_str(), "GET", nullptr, 0, nullptr,
+    return tg_http_request(url, "GET", nullptr, 0, nullptr,
                            s_auth_header.c_str(), out, &code, err);
 }
 
@@ -403,7 +443,7 @@ static bool tg_post_json(const char *path, const std::string &body,
     if (!require_internet(err)) return false;
     std::string url = make_url(path);
     int code = 0;
-    return hw_http_request(url.c_str(), "POST",
+    return tg_http_request(url, "POST",
                            body.c_str(), body.size(),
                            "application/json",
                            s_auth_header.c_str(), out, &code, err);
@@ -1417,7 +1457,7 @@ bool tg_cfg_fetch_all_chats(std::vector<std::pair<long long, std::string>> &out,
     std::string full = url + limitpart;
     std::string body;
     int code = 0;
-    bool http_ok = hw_http_request(full.c_str(), "GET", nullptr, 0, nullptr,
+    bool http_ok = tg_http_request(full, "GET", nullptr, 0, nullptr,
                                    auth.c_str(), body, &code, err);
     scrub_string(auth);
     if (!http_ok) return false;

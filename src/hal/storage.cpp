@@ -1014,6 +1014,14 @@ static void prune_internal_storage()
 {
 #ifdef ARDUINO
     if (!user_setting.prune_internal) return;
+    
+    // Optimization: FFat directory scan is O(N) and slow. 
+    // Only perform the scan every 10 saves. The eviction threshold is 50,
+    // so overshooting by 10 is perfectly safe.
+    static int s_save_calls = 0;
+    if (++s_save_calls < 10) return;
+    s_save_calls = 0;
+
     hw_prune_internal_storage(nullptr);
 #endif
 }

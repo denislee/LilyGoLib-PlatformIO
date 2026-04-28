@@ -40,11 +40,24 @@ func (c *Cache) Set(key string, value []byte, ttl time.Duration) {
 
 func (c *Cache) Sweep() {
 	now := time.Now()
-	c.mu.Lock()
+	var expired []string
+
+	c.mu.RLock()
 	for k, e := range c.items {
 		if now.After(e.expiresAt) {
-			delete(c.items, k)
+			expired = append(expired, k)
 		}
 	}
-	c.mu.Unlock()
+	c.mu.RUnlock()
+
+	if len(expired) > 0 {
+		c.mu.Lock()
+		for _, k := range expired {
+			// Double check in case it was updated while lock was released
+			if e, ok := c.items[k]; ok && now.After(e.expiresAt) {
+				delete(c.items, k)
+			}
+		}
+		c.mu.Unlock()
+	}
 }
