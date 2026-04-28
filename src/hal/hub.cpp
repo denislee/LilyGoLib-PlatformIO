@@ -8,6 +8,7 @@
 #ifdef ARDUINO
 #include <Arduino.h>
 #include <Preferences.h>
+#include <mbedtls/base64.h>
 #endif
 
 namespace hal {
@@ -132,6 +133,107 @@ void hub_set_url(const char *url)
     p.end();
 #else
     (void)url;
+#endif
+}
+
+#ifdef ARDUINO
+namespace {
+bool b64_encode_str(const uint8_t *data, size_t len, std::string &out)
+{
+    size_t olen = 0;
+    mbedtls_base64_encode(nullptr, 0, &olen, data, len);
+    out.resize(olen);
+    size_t written = 0;
+    int rc = mbedtls_base64_encode((unsigned char *)&out[0], out.size(),
+                                   &written, data, len);
+    if (rc != 0) { out.clear(); return false; }
+    out.resize(written);
+    return true;
+}
+
+std::string json_escape_str(const std::string &in)
+{
+    std::string out;
+    out.reserve(in.size() + 8);
+    for (char c : in) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if ((unsigned char)c < 0x20) {
+                    char b[8];
+                    snprintf(b, sizeof(b), "\\u%04x", (unsigned char)c);
+                    out += b;
+                } else {
+                    out.push_back(c);
+                }
+        }
+    }
+    return out;
+}
+} // namespace
+#endif
+
+bool hub_upload_note(const char *name, const uint8_t *bytes, size_t len,
+                     std::string *error)
+{
+#ifdef ARDUINO
+    if (!name || !*name) {
+        if (error) *error = "empty name";
+        return false;
+    }
+    std::string base = hub_get_url();
+    if (base.empty()) {
+        if (error) *error = "hub disabled";
+        return false;
+    }
+    if (!hw_get_wifi_connected()) {
+        if (error) *error = "wifi not connected";
+        return false;
+    }
+
+    std::string b64;
+    if (!b64_encode_str(bytes, len, b64)) {
+        if (error) *error = "base64 failed";
+        return false;
+    }
+
+    std::string body;
+    body.reserve(64 + b64.size());
+    body += "{\"name\":\"";        body += json_escape_str(name); body += "\",";
+    body += "\"content_b64\":\""; body += b64;                   body += "\"}";
+
+    std::string url = base + "/api/notes/upload";
+    std::string resp;
+    int code = 0;
+    std::string terr;
+    bool ok = hw_http_request(url.c_str(), "POST",
+                              body.c_str(), body.size(),
+                              "application/json",
+                              nullptr, resp, &code, &terr);
+    if (!ok || code / 100 != 2) {
+        if (error) {
+            if (!terr.empty()) {
+                *error = terr;
+            } else if (code != 0) {
+                char buf[24];
+                snprintf(buf, sizeof(buf), "HTTP %d", code);
+                *error = buf;
+                if (!resp.empty()) *error += ": " + resp.substr(0, 120);
+            } else {
+                *error = "no response";
+            }
+        }
+        return false;
+    }
+    return true;
+#else
+    (void)name; (void)bytes; (void)len;
+    if (error) *error = "not supported";
+    return false;
 #endif
 }
 

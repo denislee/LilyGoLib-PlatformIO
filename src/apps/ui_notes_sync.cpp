@@ -1,19 +1,18 @@
 /**
  * @file      ui_notes_sync.cpp
- * @brief     GitHub notes sync — additive push of on-device notes to a
- *            GitHub repo via the REST Contents API.
+ * @brief     Hub-mediated GitHub notes sync — internal-only source.
  *
- * The firmware can't run git, so we drive the push through the GitHub
- * REST Contents API over HTTPS:
- *   - GET /repos/{owner}/{repo}/contents/notes?ref=<branch> to learn
- *     which filenames are already present on the remote.
- *   - PUT /repos/{owner}/{repo}/contents/notes/{file} for every local
- *     note whose name is NOT already on the remote.
+ * The flow is now strictly:
+ *   1. Mirror every internal-FFat note to the lilyhub via
+ *      POST /api/notes/upload, so the hub has the canonical copy.
+ *   2. POST /api/notes/sync with the same manifest; the hub does the
+ *      additive GitHub push (list + PUT) on a real CPU.
  *
- * Sources, in priority order: internal FFat first, SD card second.
- * When the same filename exists on both, FFat wins and the SD copy is
- * ignored — a just-edited internal note is what gets pushed even if a
- * stale SD copy with the same name still sits on the card.
+ * The SD card is no longer consulted on sync. The user copies
+ * SD-resident notes to the hub explicitly via the Storage settings
+ * action when needed; the prune-on-overflow path also mirrors to the
+ * hub. This makes the hub authoritative for sync and removes the
+ * "FFat-wins-over-SD" merge that used to live here.
  *
  * The push is strictly additive: files already on the remote are
  * skipped (never updated, never deleted). On-device edits to a name
@@ -22,8 +21,8 @@
  * delete or rename it on the remote first.
  *
  * Bytes go to the repo as raw ciphertext when notes crypto is enabled;
- * hw_read_internal_bytes_raw() / hw_read_sd_bytes_raw() bypass the
- * decrypt-on-read path so the repo gets the opaque Salted__ blob.
+ * hw_read_internal_bytes_raw() bypasses the decrypt-on-read path so
+ * the repo gets the opaque Salted__ blob.
  */
 #include "../ui_define.h"
 #include "../hal/storage.h"
@@ -43,7 +42,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <set>
 
 #ifdef ARDUINO
 #include <Preferences.h>
@@ -119,38 +117,11 @@ static void purge_legacy_plaintext_token() {
     hal::secret_purge_legacy(NSYNC_PREFS_NS, "token");
 }
 
-// Forward decl — the definition sits further down next to run_sync, but
-// the HTTP helpers above need to scrub their Authorization header buffers
-// the moment hw_http_request returns.
+// Forward decl — the definition sits further down next to run_sync. The hub
+// helpers in this file scrub their request body the moment hw_http_request
+// returns, since it carries the GitHub PAT.
 #ifdef ARDUINO
 static void scrub_string(std::string &s);
-
-// Pull the "message" field out of GitHub's error JSON ({"message":"Bad
-// credentials","documentation_url":...}) so the log surfaces the real reason
-// instead of a bare "HTTP 401". Falls back to a truncated body when the
-// response isn't JSON, and finally to the hw_http_request error string.
-static std::string gh_error(int code, const std::string &body,
-                            const std::string &fallback)
-{
-    std::string msg;
-    if (!body.empty()) {
-        cJSON *j = cJSON_Parse(body.c_str());
-        if (j) {
-            cJSON *m = cJSON_GetObjectItemCaseSensitive(j, "message");
-            if (m && cJSON_IsString(m) && m->valuestring) {
-                msg = m->valuestring;
-            }
-            cJSON_Delete(j);
-        }
-        if (msg.empty()) {
-            msg = body.substr(0, 120);
-        }
-    }
-    if (msg.empty()) msg = fallback;
-    char buf[24];
-    snprintf(buf, sizeof(buf), "HTTP %d: ", code);
-    return std::string(buf) + msg;
-}
 #endif
 
 // --- base64 (mbedtls) -----------------------------------------------------
@@ -264,93 +235,9 @@ static bool load_config(Config &c, std::string *err)
     return true;
 }
 
-// --- GitHub API ------------------------------------------------------------
+// --- Hub API ---------------------------------------------------------------
 
 #ifdef ARDUINO
-
-// Listing a folder that doesn't exist yet returns 404 with an empty body;
-// callers shouldn't treat that as fatal — it just means the remote has no
-// notes yet, so every local note is a candidate to push.
-
-static bool list_remote_notes(const Config &c,
-                              std::vector<std::string> &out,
-                              std::string *err)
-{
-    out.clear();
-    std::string url = std::string("https://api.github.com/repos/") + c.repo +
-                      "/contents/notes?ref=" + c.branch;
-    std::string auth = "Bearer " + c.token;
-    std::string body;
-    int code = 0;
-    std::string terr;
-    bool ok = hw_http_request(url.c_str(), "GET", nullptr, 0, nullptr,
-                              auth.c_str(), body, &code, &terr);
-    scrub_string(auth);
-    if (!ok) {
-        if (code == 404) return true;  // folder doesn't exist yet
-        if (err) *err = gh_error(code, body, terr.empty() ? "list failed" : terr);
-        return false;
-    }
-    cJSON *arr = cJSON_Parse(body.c_str());
-    if (!arr) {
-        if (err) *err = "Parse error";
-        return false;
-    }
-    if (cJSON_IsArray(arr)) {
-        int n = cJSON_GetArraySize(arr);
-        out.reserve((size_t)n);
-        for (int i = 0; i < n; i++) {
-            cJSON *it = cJSON_GetArrayItem(arr, i);
-            cJSON *jn = cJSON_GetObjectItemCaseSensitive(it, "name");
-            cJSON *jt = cJSON_GetObjectItemCaseSensitive(it, "type");
-            if (!jn || !cJSON_IsString(jn)) continue;
-            if (jt && cJSON_IsString(jt) && strcmp(jt->valuestring, "file") != 0) continue;
-            out.emplace_back(jn->valuestring);
-        }
-    }
-    cJSON_Delete(arr);
-    return true;
-}
-
-// Create notes/{name} on the remote with the given raw bytes. Additive-only:
-// callers must have already confirmed the name does not exist remotely, so
-// we never carry a prev-sha and a 422 here means somebody else raced us.
-static bool put_remote_file(const Config &c,
-                            const std::string &name,
-                            const std::vector<uint8_t> &bytes,
-                            std::string *err)
-{
-    std::string b64;
-    if (!b64_encode(bytes.data(), bytes.size(), b64)) {
-        if (err) *err = "base64 failed";
-        return false;
-    }
-    std::string path = "notes/" + name;
-    std::string msg = "sync: add " + name;
-
-    std::string body;
-    body.reserve(64 + b64.size());
-    body += "{\"message\":\"";  body += json_escape(msg); body += "\",";
-    body += "\"content\":\"";   body += b64;              body += "\",";
-    body += "\"branch\":\"";    body += json_escape(c.branch); body += "\"}";
-
-    std::string url = std::string("https://api.github.com/repos/") + c.repo +
-                      "/contents/" + path;
-    std::string auth = "Bearer " + c.token;
-    std::string resp;
-    int code = 0;
-    std::string terr;
-    bool ok = hw_http_request(url.c_str(), "PUT",
-                              body.c_str(), body.size(),
-                              "application/json",
-                              auth.c_str(), resp, &code, &terr);
-    scrub_string(auth);
-    if (!ok) {
-        if (err) *err = gh_error(code, resp, terr.empty() ? "PUT failed" : terr);
-        return false;
-    }
-    return true;
-}
 
 // Hub-delegated sync: the device builds a manifest of every local note (name
 // + base64-of-raw-bytes) and POSTs it to the configured lilyhub. The hub
@@ -480,12 +367,18 @@ static void run_sync()
         return;
     }
 
+    if (!hal::hub_is_enabled()) {
+        log_append("ERR: Local Hub is not enabled.");
+        log_append("     Set the URL in Settings " "\xC2\xBB" " Local Hub.");
+        scrub_string(cfg.token);
+        return;
+    }
+
     log_appendf("Repo: %s  Branch: %s", cfg.repo.c_str(), cfg.branch.c_str());
 
-    // 1. Build the local candidate list: FFat first, SD second. Same name on
-    //    both sides → FFat wins (the SD copy is dropped from the candidate
-    //    list and never read). The `internal` flag steers the raw read in
-    //    step 4 to the right backing store.
+    // 1. Build the local candidate list from internal FFat only. The SD card
+    //    is intentionally not consulted here — Settings » Storage » "Copy
+    //    Notes -> Hub" is the explicit path for SD-resident notes.
     auto strip_slash = [](std::string &p) {
         if (!p.empty() && p[0] == '/') p.erase(0, 1);
     };
@@ -498,91 +391,36 @@ static void run_sync()
         strip_slash(p);
         if (!p.empty()) local.push_back({p, true});
     }
-    unsigned ffat_count = (unsigned)local.size();
+    log_appendf("Local notes: %u (internal only)", (unsigned)local.size());
 
-    unsigned sd_skipped_dup = 0;
-    bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
-    if (sd_online) {
-        std::vector<std::string> sd_files;
-        hw_get_sd_txt_files(sd_files);
-        
-        std::set<std::string> local_names;
-        for (const auto &n : local) local_names.insert(n.name);
-        
-        for (auto &p : sd_files) {
-            strip_slash(p);
-            if (p.empty()) continue;
-            if (local_names.find(p) != local_names.end()) {
-                sd_skipped_dup++;
-                continue;
-            }
-            local.push_back({p, false});
-            local_names.insert(p);
-        }
-        log_appendf("Local notes: %u (FFat %u, SD %u, dup %u)",
-                    (unsigned)local.size(), ffat_count,
-                    (unsigned)local.size() - ffat_count, sd_skipped_dup);
-    } else {
-        log_appendf("Local notes: %u (FFat %u, SD offline)",
-                    (unsigned)local.size(), ffat_count);
-    }
-
-    // 2. If the hub is enabled, try delegating the entire push to it. On any
-    //    failure (URL unreachable, non-2xx, malformed response) we log the
-    //    reason and fall through to the direct GitHub path — same code that
-    //    was the only path before this feature. The token gets scrubbed
-    //    either way at the end.
-    if (hal::hub_is_enabled()) {
-        log_append("[hub] delegating push to lilyhub...");
-        std::string herr;
-        if (try_hub_sync(cfg, local, &herr)) {
-            scrub_string(cfg.token);
-            return;
-        }
-        log_appendf("[hub] failed: %s — falling back to direct", herr.c_str());
-    }
-
-    // 3. Direct path: list remote, PUT each missing local file.
-    log_append("[direct] talking to GitHub...");
-    std::vector<std::string> remote;
-    if (!list_remote_notes(cfg, remote, &err)) {
-        log_appendf("ERR: list: %s", err.c_str());
-        scrub_string(cfg.token);
-        return;
-    }
-    log_appendf("Remote notes: %u", (unsigned)remote.size());
-
-    std::set<std::string> remote_set(remote.begin(), remote.end());
-
-    int uploaded = 0, already = 0, skipped = 0, up_failed = 0;
+    // 2. Mirror every internal note to the hub before the GitHub push so the
+    //    hub keeps a copy regardless of how the GitHub side resolves. Read
+    //    raw bytes so encrypted Salted__ blobs ride through verbatim.
+    int hub_up_ok = 0, hub_up_fail = 0;
     for (const auto &n : local) {
-        if (remote_set.find(n.name) != remote_set.end()) {
-            log_appendf("  skip %s (on remote)", n.name.c_str());
-            already++;
-            continue;
-        }
         std::vector<uint8_t> bytes;
         std::string abs = "/" + n.name;
-        bool ok = n.internal ? hw_read_internal_bytes_raw(abs.c_str(), bytes)
-                             : hw_read_sd_bytes_raw(abs.c_str(), bytes);
-        if (!ok) {
+        if (!hw_read_internal_bytes_raw(abs.c_str(), bytes)) {
             log_appendf("  read %s: skip", n.name.c_str());
-            skipped++;
             continue;
         }
-        std::string perr;
-        if (put_remote_file(cfg, n.name, bytes, &perr)) {
-            log_appendf("  up %s (%c, %u B)", n.name.c_str(),
-                        n.internal ? 'I' : 'S', (unsigned)bytes.size());
-            uploaded++;
+        std::string uerr;
+        if (hal::hub_upload_note(n.name.c_str(), bytes.data(), bytes.size(), &uerr)) {
+            hub_up_ok++;
         } else {
-            log_appendf("  up %s FAIL: %s", n.name.c_str(), perr.c_str());
-            up_failed++;
+            hub_up_fail++;
+            log_appendf("  hub %s FAIL: %s", n.name.c_str(), uerr.c_str());
         }
     }
+    log_appendf("Hub upload: ok=%d fail=%d", hub_up_ok, hub_up_fail);
 
-    log_appendf("Notes: +%d =%d (fail %d, skip %d)",
-                uploaded, already, up_failed, skipped);
+    // 3. Have the hub run the additive GitHub push. We still hand it the
+    //    file manifest in-band so a single round-trip covers the whole sync.
+    log_append("[hub] delegating push to lilyhub...");
+    std::string herr;
+    if (!try_hub_sync(cfg, local, &herr)) {
+        log_appendf("[hub] failed: %s", herr.c_str());
+    }
 
     scrub_string(cfg.token);
 }

@@ -28,7 +28,7 @@ user_setting_params_t user_setting;
 //     Adding a new field to the *end* keeps the size check effective and is
 //     safe without a version bump — missing bytes keep their default values.
 static constexpr uint32_t SETTINGS_MAGIC   = 0x50414752u; // "PAGR"
-static constexpr uint16_t SETTINGS_VERSION = 9;
+static constexpr uint16_t SETTINGS_VERSION = 10;
 
 struct SettingsHeader {
     uint32_t magic;
@@ -310,6 +310,8 @@ void hw_load_setting()
     user_setting.telegram_font_index = 4; // Inter — needed for Portuguese, Spanish, French accents
     user_setting.ssh_font_size = 10;
     user_setting.ssh_font_index = 0;     // Montserrat — packs more content per line; user can switch to a mono face
+    user_setting.chat_font_size = 14;
+    user_setting.chat_font_index = 0;    // Montserrat
     user_setting.charge_limit_en = false;
     user_setting.wifi_enable = 0;
     user_setting.bt_enable = 0;

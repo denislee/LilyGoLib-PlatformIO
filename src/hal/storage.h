@@ -116,3 +116,14 @@ bool hw_delete_preferred_file(const char *path);
 // Optional callback: (current_count, total_count_if_known, current_filename)
 bool hw_copy_internal_to_sd(int *copied, int *failed, std::string *error = nullptr,
                              void (*cb)(int, int, const char *) = nullptr);
+
+// One-shot mirror: uploads every .txt note from internal FFat *and* the SD
+// card root to the hub via /api/notes/upload. Same name on both sides → the
+// internal copy wins (a just-edited internal note is what gets uploaded even
+// if a stale SD copy exists). `copied` / `failed` receive the counts. Returns
+// false when the hub is disabled, WiFi is down, or no notes were uploaded
+// successfully — in that case `*error` (if non-null) carries a diagnostic.
+// Optional callback: (current_count, total_count, current_filename)
+bool hw_copy_all_notes_to_hub(int *copied, int *failed,
+                              std::string *error = nullptr,
+                              void (*cb)(int, int, const char *) = nullptr);

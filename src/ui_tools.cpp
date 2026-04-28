@@ -1118,6 +1118,13 @@ const lv_font_t *get_ssh_font()
     return pick_font(settings.ssh_font_index, settings.ssh_font_size);
 }
 
+const lv_font_t *get_chat_font()
+{
+    user_setting_params_t settings;
+    hw_get_user_setting(settings);
+    return pick_font(settings.chat_font_index, settings.chat_font_size);
+}
+
 const lv_font_t *get_telegram_list_font()
 {
     user_setting_params_t settings;

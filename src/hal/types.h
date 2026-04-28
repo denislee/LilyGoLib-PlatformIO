@@ -236,6 +236,8 @@ typedef struct {
     uint8_t telegram_font_index;
     uint8_t ssh_font_size;
     uint8_t ssh_font_index;
+    uint8_t chat_font_size;
+    uint8_t chat_font_index;
 } user_setting_params_t;
 
 typedef struct {

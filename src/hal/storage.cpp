@@ -6,6 +6,7 @@
 #include "system.h"
 #include "internal.h"
 #include "notes_crypto.h"
+#include "hub.h"
 
 #include <cstring>
 
@@ -972,6 +973,12 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
 
     size_t total_to_move = std::min<size_t>(kEvictBatch, infos.size());
 
+    // Best-effort mirror to the hub on top of the SD copy. Either landing
+    // is enough to safely drop the FFat copy, so SD and hub are evaluated
+    // independently. Hub failure (offline, hub disabled, network blip)
+    // does not block eviction — the SD copy still preserves the note.
+    bool hub_on = hal::hub_is_enabled();
+
     for (size_t i = 0; i < total_to_move; ++i) {
         String path = infos[i].name.c_str();
         if (!path.startsWith("/")) path = "/" + path;
@@ -997,8 +1004,21 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
             instance.unlockSPI();
         }
 
-        if (copied) {
-            printf("Eviction move: %s\n", path.c_str());
+        bool hub_ok = false;
+        if (hub_on) {
+            // Strip leading slash so the hub stores under just the name.
+            const char *leaf = path.c_str();
+            while (*leaf == '/') leaf++;
+            std::string herr;
+            hub_ok = hal::hub_upload_note(leaf, buf.data(), sz, &herr);
+            if (!hub_ok) {
+                printf("Eviction hub upload failed (%s): %s\n", leaf, herr.c_str());
+            }
+        }
+
+        if (copied || hub_ok) {
+            printf("Eviction move: %s (sd=%d hub=%d)\n",
+                   path.c_str(), (int)copied, (int)hub_ok);
             FFat.remove(path);
         } else {
             printf("Eviction copy failed, keeping: %s\n", path.c_str());
@@ -1264,6 +1284,95 @@ bool hw_delete_preferred_file(const char *path)
 #else
     (void)path;
     return true;
+#endif
+}
+
+bool hw_copy_all_notes_to_hub(int *copied, int *failed, std::string *error,
+                              void (*cb)(int, int, const char *))
+{
+    if (copied) *copied = 0;
+    if (failed) *failed = 0;
+#ifdef ARDUINO
+    if (!hal::hub_is_enabled()) {
+        if (error) *error = "Hub is not enabled.";
+        return false;
+    }
+
+    // Walk internal first, then SD; same-name conflicts resolve in favour of
+    // internal (which is the user's most-recently-edited copy by convention
+    // — see notes-sync rationale). Read raw bytes so encrypted Salted__
+    // blobs ride through verbatim.
+    std::vector<std::string> internal_names;
+    hw_get_internal_txt_files(internal_names);
+
+    std::vector<std::string> sd_names;
+    if (HW_SD_ONLINE & hw_get_device_online()) {
+        hw_get_sd_txt_files(sd_names);
+    }
+
+    auto strip_slash = [](std::string &p) {
+        if (!p.empty() && p[0] == '/') p.erase(0, 1);
+    };
+
+    struct UpItem { std::string name; bool internal; };
+    std::vector<UpItem> items;
+    items.reserve(internal_names.size() + sd_names.size());
+
+    std::vector<std::string> seen;
+    seen.reserve(internal_names.size());
+    for (auto &n : internal_names) {
+        strip_slash(n);
+        if (n.empty()) continue;
+        items.push_back({n, true});
+        seen.push_back(n);
+    }
+    for (auto &n : sd_names) {
+        strip_slash(n);
+        if (n.empty()) continue;
+        bool dup = false;
+        for (const auto &s : seen) {
+            if (s == n) { dup = true; break; }
+        }
+        if (dup) continue;
+        items.push_back({n, false});
+    }
+
+    int total = (int)items.size();
+    int ok = 0, fail = 0;
+    std::string last_err;
+    for (int i = 0; i < total; ++i) {
+        const auto &it = items[i];
+        if (cb) cb(i, total, it.name.c_str());
+
+        std::vector<uint8_t> bytes;
+        std::string abs = "/" + it.name;
+        bool read_ok = it.internal
+            ? hw_read_internal_bytes_raw(abs.c_str(), bytes)
+            : hw_read_sd_bytes_raw(abs.c_str(), bytes);
+        if (!read_ok) {
+            fail++;
+            continue;
+        }
+        std::string uerr;
+        if (hal::hub_upload_note(it.name.c_str(), bytes.data(), bytes.size(), &uerr)) {
+            ok++;
+        } else {
+            fail++;
+            last_err = uerr;
+        }
+    }
+    if (cb) cb(total, total, "Done");
+
+    if (copied) *copied = ok;
+    if (failed) *failed = fail;
+    if (ok == 0 && total > 0) {
+        if (error) *error = last_err.empty() ? "No notes uploaded." : last_err;
+        return false;
+    }
+    return true;
+#else
+    (void)error; (void)cb;
+    return false;
 #endif
 }
 

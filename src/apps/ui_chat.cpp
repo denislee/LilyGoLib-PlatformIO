@@ -681,6 +681,21 @@ static void mic_btn_cb(lv_event_t *)
 
 static void back_btn_cb(lv_event_t *) { menu_show(); }
 
+// While the log is focused via the encoder, UP/DOWN should scroll the log
+// itself rather than move focus to the next/prev widget. Without this the
+// user can focus the log but can't scroll it without a touch.
+static void log_key_cb(lv_event_t *e)
+{
+    if (!s_log_scroll) return;
+    uint32_t key = lv_event_get_key(e);
+    int32_t step = 0;
+    if (key == LV_KEY_UP || key == LV_KEY_LEFT) step = -24;
+    else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) step = 24;
+    else return;
+    lv_obj_scroll_by(s_log_scroll, 0, -step, LV_ANIM_OFF);
+    lv_event_stop_processing(e);
+}
+
 static void enter(lv_obj_t *parent)
 {
     s_root = parent;
@@ -716,8 +731,16 @@ static void enter(lv_obj_t *parent)
     lv_label_set_long_mode(s_log_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_log_label, lv_pct(100));
     lv_obj_set_style_text_color(s_log_label, UI_COLOR_FG, 0);
-    lv_obj_set_style_text_font(s_log_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_log_label, get_chat_font(), 0);
     lv_label_set_text(s_log_label, "");
+
+    // The log is added to the focus group so the encoder/scrollwheel can
+    // drive it. LVGL's default behavior on a focused scrollable container
+    // is to scroll on encoder rotation, which is what the user expects.
+    // Touch users can already drag-scroll the same container regardless.
+    lv_obj_add_flag(s_log_scroll, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_group_add_obj(lv_group_get_default(), s_log_scroll);
+    lv_obj_add_event_cb(s_log_scroll, log_key_cb, LV_EVENT_KEY, nullptr);
 
     // Status line — "thinking...", "recording...", error hints.
     s_status_lbl = lv_label_create(parent);

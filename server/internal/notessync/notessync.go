@@ -24,6 +24,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -66,19 +69,40 @@ type Handler struct {
 	// "more than a few" concurrent writes against the same repo; 4 is the
 	// sweet spot we observed where total wall time stops improving.
 	maxParallel int
+	// Local on-disk note store. Lets the device offload bulk note storage to
+	// the hub when its internal flash fills up. Files are saved as opaque
+	// bytes (whatever the device sent — encrypted Salted__ blobs pass through
+	// untouched). Path defaults to $LILYHUB_NOTES_DIR or, failing that,
+	// $HOME/.lilyhub/notes.
+	notesDir string
+	// Serializes upload writes — the device may fan out multiple uploads in
+	// parallel, but the same name landing twice would race fsync of the temp
+	// file vs. rename. Cheap given typical traffic.
+	storeMu sync.Mutex
 }
 
 func New() *Handler {
+	dir := os.Getenv("LILYHUB_NOTES_DIR")
+	if dir == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			dir = filepath.Join(home, ".lilyhub", "notes")
+		} else {
+			dir = filepath.Join(os.TempDir(), "lilyhub-notes")
+		}
+	}
 	return &Handler{
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 		maxParallel: 4,
+		notesDir:    dir,
 	}
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/notes/sync", h.sync)
+	mux.HandleFunc("/api/notes/upload", h.upload)
+	mux.HandleFunc("/api/notes/list", h.list)
 }
 
 func (h *Handler) sync(w http.ResponseWriter, r *http.Request) {
@@ -269,4 +293,121 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// UploadRequest is the body of POST /api/notes/upload. The hub stores the
+// raw decoded bytes under notesDir/<name>. Idempotent: a second upload with
+// the same name and same bytes is a no-op; different bytes overwrite. The
+// device uses this to mirror its internal-flash note store to the hub when
+// flash gets tight, and as the source of truth for the new sync flow that
+// no longer reads from the SD card.
+type UploadRequest struct {
+	Name       string `json:"name"`
+	ContentB64 string `json:"content_b64"`
+}
+
+type UploadResponse struct {
+	Stored bool   `json:"stored"`
+	Bytes  int    `json:"bytes"`
+	Path   string `json:"path,omitempty"`
+}
+
+// safeName guards against directory traversal and oddball names landing in
+// the notes dir. Notes filenames are app-generated (YYYYMMDD_HHMMSS.txt or
+// similar), so the rules can be strict — anything containing a slash, NUL,
+// or starting with a dot is rejected.
+func safeName(name string) (string, bool) {
+	if name == "" {
+		return "", false
+	}
+	if strings.ContainsAny(name, "/\\\x00") {
+		return "", false
+	}
+	if name == "." || name == ".." || strings.HasPrefix(name, ".") {
+		return "", false
+	}
+	if len(name) > 200 {
+		return "", false
+	}
+	return name, true
+}
+
+func (h *Handler) ensureNotesDir() error {
+	return os.MkdirAll(h.notesDir, 0o755)
+}
+
+func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var req UploadRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, 8<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	name, ok := safeName(req.Name)
+	if !ok {
+		http.Error(w, "invalid name", http.StatusBadRequest)
+		return
+	}
+	bs, err := base64.StdEncoding.DecodeString(req.ContentB64)
+	if err != nil {
+		http.Error(w, "bad base64: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	h.storeMu.Lock()
+	defer h.storeMu.Unlock()
+
+	if err := h.ensureNotesDir(); err != nil {
+		http.Error(w, "mkdir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	dst := filepath.Join(h.notesDir, name)
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, bs, 0o644); err != nil {
+		http.Error(w, "write: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		http.Error(w, "rename: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(UploadResponse{Stored: true, Bytes: len(bs), Path: name})
+}
+
+type ListResponse struct {
+	Notes []string `json:"notes"`
+}
+
+func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	entries, err := os.ReadDir(h.notesDir)
+	if err != nil && !os.IsNotExist(err) {
+		http.Error(w, "readdir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := ListResponse{Notes: []string{}}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		nm := e.Name()
+		if strings.HasSuffix(nm, ".tmp") {
+			continue
+		}
+		out.Notes = append(out.Notes, nm)
+	}
+	sort.Strings(out.Notes)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }

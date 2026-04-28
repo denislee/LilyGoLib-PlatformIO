@@ -18,6 +18,8 @@
  */
 #include "../ui_define.h"
 #include "../hal/notes_crypto.h"
+#include "../hal/hub.h"
+#include "../hal/storage.h"
 #include "settings_internal.h"
 
 #include <string>
@@ -83,6 +85,37 @@ void storage_prune_now_cb(lv_event_t *) {
     hw_prune_internal_storage(storage_progress_cb);
     hide_storage_loader();
     ui_msg_pop_up("Storage", "Internal storage pruned to\nkeep only the 50 newest files.");
+}
+
+void storage_copy_to_hub_cb(lv_event_t *) {
+    if (!hal::hub_is_enabled()) {
+        ui_msg_pop_up("Hub",
+                      "Local Hub is disabled.\n"
+                      "Enable it in Settings " "\xC2\xBB" " Local Hub first.");
+        return;
+    }
+
+    show_storage_loader("Upload Notes to Hub");
+
+    int copied = 0, failed = 0;
+    std::string err;
+    bool ok = hw_copy_all_notes_to_hub(&copied, &failed, &err, storage_progress_cb);
+
+    hide_storage_loader();
+
+    char msg[160];
+    if (ok) {
+        snprintf(msg, sizeof(msg),
+                 "Uploaded %d note(s) to hub.%s",
+                 copied, failed > 0 ? "\nSome failed." : "");
+    } else if (!err.empty()) {
+        snprintf(msg, sizeof(msg), "Upload failed: %s\nUploaded: %d, failed: %d.",
+                 err.c_str(), copied, failed);
+    } else {
+        snprintf(msg, sizeof(msg), "Upload failed.\nUploaded: %d, failed: %d.",
+                 copied, failed);
+    }
+    ui_msg_pop_up("Hub", msg);
 }
 
 void storage_copy_to_sd_cb(lv_event_t *) {
@@ -162,6 +195,30 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_obj_add_event_cb(copy_btn, toggle_child_focus_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(copy_btn, toggle_child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
     register_subpage_group_obj(sub_page, copy_btn);
+
+    // Action: copy all internal+SD notes to the hub. Mirrors the on-device
+    // store so the hub becomes the source of truth for the new sync flow.
+    lv_obj_t *hub_row = create_text(sub_page, NULL, "Copy Notes -> Hub", LV_MENU_ITEM_BUILDER_VARIANT_2);
+
+    lv_obj_t *hub_btn = lv_btn_create(hub_row);
+    lv_obj_set_width(hub_btn, 60);
+    lv_obj_set_style_outline_width(hub_btn, 0, 0);
+    lv_obj_set_style_outline_width(hub_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_outline_width(hub_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(hub_btn, 0, 0);
+    lv_obj_set_style_border_width(hub_btn, 0, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(hub_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(hub_btn, 0, 0);
+    lv_obj_set_style_shadow_width(hub_btn, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(hub_btn, 0, LV_STATE_FOCUS_KEY);
+
+    lv_obj_t *hub_label = lv_label_create(hub_btn);
+    lv_label_set_text(hub_label, LV_SYMBOL_UPLOAD);
+    lv_obj_center(hub_label);
+    lv_obj_add_event_cb(hub_btn, storage_copy_to_hub_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(hub_btn, toggle_child_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(hub_btn, toggle_child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+    register_subpage_group_obj(sub_page, hub_btn);
 
     // Action: Manual prune.
     lv_obj_t *prune_row = create_text(sub_page, NULL, "Prune Now (Keep 50)", LV_MENU_ITEM_BUILDER_VARIANT_2);
