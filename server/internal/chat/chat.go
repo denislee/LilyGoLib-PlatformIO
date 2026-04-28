@@ -23,6 +23,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -364,9 +365,25 @@ func (h *Handler) reapLocked() {
 	}
 }
 
+// writeJSON marshals up-front so we can set Content-Length explicitly,
+// and forces Connection: close. The Arduino HTTPClient on ESP32 has been
+// observed to hang in getString() when relying solely on chunked-EOF or
+// implicit content-length signaling — giving it both a length and a
+// close-after-response makes the read deterministic.
 func writeJSON(w http.ResponseWriter, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("chat: writeJSON marshal error: %v", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	body = append(body, '\n')
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.Header().Set("Connection", "close")
+	if _, err := w.Write(body); err != nil {
+		log.Printf("chat: writeJSON write error: %v", err)
+	}
 }
 
 func clip(s string, n int) string {

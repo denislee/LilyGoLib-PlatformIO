@@ -76,11 +76,19 @@ struct SendCtx {
     std::string transcript;
     std::string reply;
     std::string error;
+    uint32_t    start_ms = 0;
     bool ok        = false;
     bool done      = false;
     bool abandoned = false;
 };
 static SendCtx *s_ctx = nullptr;
+
+// Watchdog: if the worker task hasn't flipped done within this window, the
+// HTTP call is almost certainly stuck (Arduino HTTPClient.getString() has
+// been seen hanging on certain server response shapes). We surface it as
+// a visible error and abandon the task so the UI doesn't sit on
+// "thinking..." forever.
+static const uint32_t SEND_WATCHDOG_MS = 20000;
 
 #ifdef ARDUINO
 static TaskHandle_t s_send_task = nullptr;
@@ -151,6 +159,17 @@ static void set_status(const char *txt)
 static void set_busy(bool busy)
 {
     s_busy = busy;
+
+    // Crucial ordering: we must un-hide the status label BEFORE asking
+    // the group to focus it. lv_group_focus_obj() is a no-op on hidden
+    // objects, so if we left the label hidden the focus would stay on
+    // the textarea — which we're about to disable — and both keyboard
+    // and encoder would have no live target to deliver events to.
+    if (busy && s_status_lbl) {
+        lv_label_set_text(s_status_lbl, "thinking... (tap to cancel)");
+        lv_obj_remove_flag(s_status_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+
     auto apply = [&](lv_obj_t *o) {
         if (!o) return;
         if (busy) lv_obj_add_state(o, LV_STATE_DISABLED);
@@ -159,10 +178,6 @@ static void set_busy(bool busy)
     apply(s_mic_btn);
     apply(s_input_ta);
 
-    // While busy, the textarea/mic are disabled, so the encoder/keypad has
-    // nothing useful to focus. Move focus to the status label so the user
-    // can press the scrollwheel (LV_KEY_ENTER) to cancel. When the request
-    // finishes we hand focus back to the textarea so typing keeps working.
     if (s_status_lbl && s_input_ta) {
         if (busy) {
             lv_group_focus_obj(s_status_lbl);
@@ -215,6 +230,9 @@ static void send_task(void *arg)
 {
     SendCtx *ctx = (SendCtx *)arg;
 
+    Serial.printf("[chat] POST %s body=%u bytes\n",
+                  ctx->url.c_str(), (unsigned)ctx->body.size());
+
     std::string resp;
     int code = 0;
     std::string terr;
@@ -226,6 +244,13 @@ static void send_task(void *arg)
     // hundreds of KB and we no longer need it.
     ctx->body.clear();
     ctx->body.shrink_to_fit();
+
+    Serial.printf("[chat] http_ok=%d code=%d resp=%u bytes terr='%s'\n",
+                  (int)http_ok, code, (unsigned)resp.size(), terr.c_str());
+    if (!resp.empty()) {
+        Serial.printf("[chat] resp[0..160]: %s\n",
+                      resp.substr(0, 160).c_str());
+    }
 
     if (!http_ok || code / 100 != 2) {
         if (!terr.empty()) {
@@ -239,14 +264,23 @@ static void send_task(void *arg)
     } else {
         cJSON *j = cJSON_Parse(resp.c_str());
         if (!j) {
-            ctx->error = "bad json from hub";
+            ctx->error = "bad json from hub: ";
+            ctx->error += resp.substr(0, 120);
         } else {
             cJSON *t = cJSON_GetObjectItemCaseSensitive(j, "transcript");
             cJSON *r = cJSON_GetObjectItemCaseSensitive(j, "reply");
             if (t && cJSON_IsString(t) && t->valuestring) ctx->transcript = t->valuestring;
             if (r && cJSON_IsString(r) && r->valuestring) ctx->reply      = r->valuestring;
             cJSON_Delete(j);
-            ctx->ok = true;
+            // Surface the silent-success case: 2xx + parseable JSON but
+            // neither field populated. Without this, the UI just sits on
+            // "thinking..." and never logs anything.
+            if (ctx->reply.empty() && ctx->transcript.empty()) {
+                ctx->error = "hub returned no reply: ";
+                ctx->error += resp.substr(0, 120);
+            } else {
+                ctx->ok = true;
+            }
         }
     }
 
@@ -270,10 +304,45 @@ static void poll_timer_cb(lv_timer_t *)
         core::ScopedInstanceLock lock;
         done = s_ctx->done;
     }
+#ifdef ARDUINO
+    if (!done) {
+        if (s_ctx->start_ms != 0) {
+            uint32_t elapsed = millis() - s_ctx->start_ms;
+            // Watchdog — surface stuck HTTP calls instead of leaving the
+            // UI on "thinking..." indefinitely. The worker task keeps
+            // running but its result will be discarded.
+            if (elapsed > SEND_WATCHDOG_MS) {
+                Serial.println("[chat] watchdog: send_task stuck >20s, abandoning");
+                cancel_inflight();
+                set_busy(false);
+                log_append("err: ", "request timeout (no response in 20s)");
+                set_status("");
+                return;
+            }
+            // Live progress — gives the user feedback that the UI is
+            // alive and counts up to the watchdog. Updated every poll
+            // tick (~200ms) but the seconds value only changes once a
+            // second so it's not noisy.
+            char buf[48];
+            snprintf(buf, sizeof(buf),
+                     "thinking %us... (tap to cancel)",
+                     (unsigned)(elapsed / 1000));
+            set_status(buf);
+        }
+        return;
+    }
+#else
     if (!done) return;
+#endif
 
     SendCtx *ctx = s_ctx;
     s_ctx = nullptr;
+
+#ifdef ARDUINO
+    Serial.printf("[chat] poll: ok=%d reply=%u transcript=%u err='%s'\n",
+                  (int)ctx->ok, (unsigned)ctx->reply.size(),
+                  (unsigned)ctx->transcript.size(), ctx->error.c_str());
+#endif
 
     if (ctx->ok) {
         if (!ctx->transcript.empty()) {
@@ -327,6 +396,9 @@ static void kick_off_send(const std::string &user_text,
     ctx->body += "}";
 
     s_ctx = ctx;
+#ifdef ARDUINO
+    ctx->start_ms = millis();
+#endif
     set_status("thinking... (tap to cancel)");
     if (xTaskCreate(send_task, "chat_send", 8192, ctx, 4, &s_send_task) != pdPASS) {
         s_ctx = nullptr;
