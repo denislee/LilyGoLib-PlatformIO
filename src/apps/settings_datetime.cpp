@@ -338,7 +338,7 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_obj_t *tz_btn = lv_btn_create(tz_btn_row);
     lv_obj_set_flex_grow(tz_btn, 1);
     lv_obj_t *tz_btn_label = lv_label_create(tz_btn);
-    lv_label_set_text(tz_btn_label, LV_SYMBOL_GPS "  Pick");
+    lv_label_set_text(tz_btn_label, LV_SYMBOL_LIST "  Pick");
     lv_obj_center(tz_btn_label);
     lv_obj_add_event_cb(tz_btn, set_tz_cb, LV_EVENT_CLICKED, nullptr);
     register_subpage_group_obj(sub_page, tz_btn);

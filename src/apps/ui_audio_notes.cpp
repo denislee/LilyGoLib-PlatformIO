@@ -342,9 +342,28 @@ static lv_obj_t *rec_size_lbl = NULL;
 static lv_obj_t *rec_dot = NULL;
 static lv_obj_t *rec_bar = NULL;
 
+// Stop the active recording and discard the file if it's too short to be
+// useful (< 2 s). Capture the elapsed time before hw_rec_stop() — once
+// stopped, hw_rec_elapsed_ms() returns 0. Always clears pending_rec_path
+// so a stale path can't be deleted on a later teardown.
+static constexpr uint32_t kMinRecMs = 2000;
+static void finalize_recording()
+{
+    if (!hw_rec_running()) {
+        pending_rec_path.clear();
+        return;
+    }
+    uint32_t elapsed = hw_rec_elapsed_ms();
+    hw_rec_stop();
+    if (elapsed < kMinRecMs && !pending_rec_path.empty()) {
+        hw_delete_file(pending_rec_path.c_str());
+    }
+    pending_rec_path.clear();
+}
+
 static void exit_to_menu()
 {
-    if (hw_rec_running()) hw_rec_stop();
+    finalize_recording();
     hw_set_play_stop();
     ui_notes_exit(NULL);
     menu_show();
@@ -352,9 +371,7 @@ static void exit_to_menu()
 
 static void stop_rec_and_return(lv_event_t *e)
 {
-    if (hw_rec_running()) {
-        hw_rec_stop();
-    }
+    finalize_recording();
     if (s_quick_record) {
         exit_to_menu();
         return;
@@ -838,7 +855,7 @@ static void ui_notes_exit(lv_obj_t *parent)
     ui_hide_back_button();
     disable_keyboard();
     kill_tick_timer();
-    if (hw_rec_running()) hw_rec_stop();
+    finalize_recording();
     hw_set_play_stop();
     if (menu) {
         lv_obj_clean(menu);

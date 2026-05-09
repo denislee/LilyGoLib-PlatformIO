@@ -32,10 +32,16 @@
 #include "../hal/system.h"
 #include "../hal/hub.h"
 #include "../core/app_manager.h"
+#include "../core/scoped_lock.h"
 #include "app_registry.h"
 #include <memory>
 #include <string>
 #include <vector>
+
+#ifdef ARDUINO
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
 
 #ifdef ARDUINO
 #include <Preferences.h>
@@ -92,6 +98,25 @@ static lv_obj_t *root = nullptr;
 static lv_obj_t *hourly_col = nullptr;
 static lv_obj_t *daily_col = nullptr;
 static lv_obj_t *status_label = nullptr;
+
+// --- async fetch state ----------------------------------------------------
+//
+// HTTP runs on a FreeRTOS task so the LVGL thread keeps servicing input
+// (keyboard / encoder / back button) during a fetch. The task only writes
+// to these shared globals; a UI-thread timer drains the result and updates
+// widgets. Sharing is serialized by the global instance mutex (LVGL holds
+// it during `lv_timer_handler()`; the bg task takes it briefly to write).
+struct ForecastCache;
+#ifdef ARDUINO
+static TaskHandle_t    s_w_bg = nullptr;
+static lv_timer_t     *s_w_timer = nullptr;
+static volatile bool   s_w_done = false;
+static ForecastCache  *s_w_result = nullptr;  // heap-owned by UI thread
+static std::string     s_w_status_msg;
+static lv_color_t      s_w_status_color;
+static std::string     s_w_key;
+static std::string     s_w_user_city;
+#endif
 
 static void back_btn_cb(lv_event_t *e)
 {
@@ -835,6 +860,91 @@ static bool fetch_weather(double lat, double lon, ForecastCache &out,
 
 #endif // ARDUINO
 
+#ifdef ARDUINO
+// Background HTTP worker: geocode → forecast → save cache. Touches only the
+// shared `s_w_*` state under the instance mutex; never the LVGL widget tree.
+// Result is delivered as a heap-owned ForecastCache that the UI thread takes
+// ownership of (and frees) via the drain timer.
+static void weather_bg_task(void *arg)
+{
+    (void)arg;
+    std::string key, user_city;
+    {
+        core::ScopedInstanceLock lock;
+        key = s_w_key;
+        user_city = s_w_user_city;
+    }
+
+    auto finish = [](ForecastCache *result, const std::string &status,
+                     lv_color_t color) {
+        core::ScopedInstanceLock lock;
+        if (s_w_result) { delete s_w_result; s_w_result = nullptr; }
+        s_w_result = result;
+        s_w_status_msg = status;
+        s_w_status_color = color;
+        s_w_done = true;
+        s_w_bg = nullptr;
+    };
+
+    std::string err;
+    GeoData g;
+    if (!load_cached_geo(key, g)) {
+        bool ok = user_city.empty() ? fetch_geo_ip(g, err)
+                                    : fetch_geo_city(user_city, g, err);
+        if (!ok && user_city == WEATHER_DEFAULT_CITY) {
+            // Offline first-run: fall back to the bundled coordinates so
+            // the forecast call can still proceed.
+            g.location    = WEATHER_DEFAULT_CITY;
+            g.lat         = WEATHER_DEFAULT_LAT;
+            g.lon         = WEATHER_DEFAULT_LON;
+            g.have_coords = true;
+            ok            = true;
+        }
+        if (!ok) {
+            std::string msg = "geo fail: " +
+                              (err.empty() ? std::string("err") : err);
+            finish(nullptr, msg, lv_palette_main(LV_PALETTE_RED));
+            vTaskDelete(NULL);
+            return;
+        }
+        save_cached_geo(key, g);
+    }
+
+    ForecastCache *fresh = new ForecastCache();
+    if (!fetch_weather(g.lat, g.lon, *fresh, err)) {
+        delete fresh;
+        finish(nullptr, "forecast: " + err, lv_palette_main(LV_PALETTE_RED));
+        vTaskDelete(NULL);
+        return;
+    }
+    save_forecast_cache(key, *fresh);
+    finish(fresh, std::string(), UI_COLOR_MUTED);
+    vTaskDelete(NULL);
+}
+
+// LVGL timer: runs inside `lv_timer_handler()` and so already holds the
+// instance mutex. When the bg task signals done, render the result (if any)
+// and tear the timer down. Ownership of `s_w_result` transfers to this
+// function.
+static void weather_drain_tick(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_w_done) return;
+    s_w_done = false;
+    ForecastCache *result = s_w_result;
+    s_w_result = nullptr;
+    if (result) {
+        render_cache(*result);
+        delete result;
+    }
+    set_status(s_w_status_msg.c_str(), s_w_status_color);
+    if (s_w_timer) {
+        lv_timer_del(s_w_timer);
+        s_w_timer = nullptr;
+    }
+}
+#endif
+
 static void do_fetch()
 {
 #ifdef ARDUINO
@@ -884,7 +994,7 @@ static void do_fetch()
 
     // Have WiFi but the cache is missing or stale. Paint the stale cache
     // under an "Updating..." banner so the user sees something instantly
-    // while the blocking HTTP call runs.
+    // while the bg fetch runs.
     if (have_cache) {
         render_cache(cache);
         set_status("Updating...", UI_COLOR_ACCENT);
@@ -892,41 +1002,32 @@ static void do_fetch()
         clear_all();
         set_status("Fetching...", UI_COLOR_ACCENT);
     }
-    lv_refr_now(NULL);
 
-    std::string err;
-    GeoData g;
-    if (!load_cached_geo(key, g)) {
-        bool ok = user_city.empty() ? fetch_geo_ip(g, err)
-                                    : fetch_geo_city(user_city, g, err);
-        if (!ok && user_city == WEATHER_DEFAULT_CITY) {
-            // Offline first-run: fall back to the bundled coordinates so
-            // the forecast call can still proceed.
-            g.location    = WEATHER_DEFAULT_CITY;
-            g.lat         = WEATHER_DEFAULT_LAT;
-            g.lon         = WEATHER_DEFAULT_LON;
-            g.have_coords = true;
-            ok            = true;
+    if (s_w_bg != nullptr) {
+        // A previous fetch is still in flight (e.g. user re-tapped the panel
+        // or re-entered the app). Re-attach to it so the result still lands.
+        if (!s_w_timer) {
+            s_w_timer = lv_timer_create(weather_drain_tick, 100, nullptr);
         }
-        if (!ok) {
-            // Geo failed; leave the stale cache visible under a red banner.
-            std::string msg = "geo fail: " +
-                              (err.empty() ? std::string("err") : err);
-            set_status(msg.c_str(), lv_palette_main(LV_PALETTE_RED));
-            return;
-        }
-        save_cached_geo(key, g);
-    }
-
-    ForecastCache fresh;
-    if (!fetch_weather(g.lat, g.lon, fresh, err)) {
-        std::string msg = "forecast: " + err;
-        set_status(msg.c_str(), lv_palette_main(LV_PALETTE_RED));
         return;
     }
-    render_cache(fresh);
-    save_forecast_cache(key, fresh);
-    set_status("", UI_COLOR_MUTED);
+
+    s_w_key = key;
+    s_w_user_city = user_city;
+    s_w_done = false;
+    if (s_w_result) { delete s_w_result; s_w_result = nullptr; }
+
+    // 8 KB stack: Open-Meteo runs over HTTPS, and mbedtls TLS handshake
+    // plus cert chain easily eats 6 KB on its own.
+    if (xTaskCreate(weather_bg_task, "wx_bg", 8192, nullptr, 2,
+                    &s_w_bg) != pdPASS) {
+        s_w_bg = nullptr;
+        set_status("task spawn fail", lv_palette_main(LV_PALETTE_RED));
+        return;
+    }
+    if (!s_w_timer) {
+        s_w_timer = lv_timer_create(weather_drain_tick, 100, nullptr);
+    }
 #else
     clear_all();
     set_status("Not supported on emulator.", UI_COLOR_MUTED);
@@ -1032,6 +1133,21 @@ static void ui_weather_exit(lv_obj_t *parent)
     hourly_col = nullptr;
     daily_col = nullptr;
     status_label = nullptr;
+
+#ifdef ARDUINO
+    // Stop draining the bg task, if any. The task is left to finish on its
+    // own — it only writes to heap-backed shared state, never the UI tree,
+    // so it is safe to outlive the app instance. Drop any pending result
+    // so a re-entry doesn't render stale data into a fresh panel.
+    if (s_w_timer) {
+        lv_timer_del(s_w_timer);
+        s_w_timer = nullptr;
+    }
+    if (s_w_done) {
+        s_w_done = false;
+        if (s_w_result) { delete s_w_result; s_w_result = nullptr; }
+    }
+#endif
 }
 
 class WeatherApp : public core::App {

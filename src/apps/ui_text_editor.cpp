@@ -30,8 +30,16 @@ static int sync_pill_wifi_last_state = -1;
 static string current_file_path = "";
 static bool content_dirty = false;
 
+// Word count is recomputed lazily through this debounce timer instead of
+// inline on every LV_EVENT_VALUE_CHANGED. Counting words walks the entire
+// textarea buffer and refreshes a label — cheap once, but on every keystroke
+// it stacks up behind LVGL's own redraw of the textarea and produces visible
+// typing stutter as a note grows past a few hundred chars.
+static lv_timer_t *word_count_debounce_timer = NULL;
+
 void ui_text_editor_exit(lv_obj_t *parent);
 static void update_word_count();
+static void schedule_word_count_update();
 
 static bool save_content(bool show_error_popup)
 {
@@ -92,7 +100,29 @@ static void update_word_count()
         }
     }
     
-    lv_label_set_text_fmt(word_count_label, "%zu words | %zu chars%s", words, chars, content_dirty ? " *" : "");
+    lv_label_set_text_fmt(word_count_label, "%zu words | %zu chars", words, chars);
+}
+
+static void word_count_debounce_cb(lv_timer_t *t)
+{
+    (void)t;
+    word_count_debounce_timer = NULL;  // one-shot consumed itself below
+    update_word_count();
+}
+
+// Coalesce bursts of keystrokes into a single word-count refresh. The first
+// keystroke arms a 250 ms one-shot; subsequent keystrokes just push the
+// deadline forward, so the label updates ~250 ms after the user stops typing
+// instead of on every char.
+static void schedule_word_count_update()
+{
+    if (!word_count_label) return;
+    if (word_count_debounce_timer) {
+        lv_timer_reset(word_count_debounce_timer);
+        return;
+    }
+    word_count_debounce_timer = lv_timer_create(word_count_debounce_cb, 250, NULL);
+    lv_timer_set_repeat_count(word_count_debounce_timer, 1);
 }
 
 static void do_exit()
@@ -123,7 +153,7 @@ static void text_area_event_cb(lv_event_t *e)
 
     if (code == LV_EVENT_VALUE_CHANGED) {
         content_dirty = true;
-        update_word_count();
+        schedule_word_count_update();
     } else if (code == LV_EVENT_CLICKED) {
         lv_indev_t *indev = lv_indev_get_act();
         if (indev && lv_indev_get_type(indev) != LV_INDEV_TYPE_ENCODER) {
@@ -434,10 +464,12 @@ static void editor_build_ui(lv_obj_t *parent)
 
     lv_menu_set_page(menu, main_page);
 
+    // Focus the textarea so encoder/keyboard nav lands there first, but
+    // don't enter editing mode — the user presses ENTER (encoder click) to
+    // start typing.
     lv_group_t *g = lv_obj_get_group(text_area);
     if (g) {
         lv_group_focus_obj(text_area);
-        lv_group_set_editing(g, editor_auto_edit);
         editor_auto_edit = false;
     }
     update_word_count();
@@ -472,10 +504,10 @@ void ui_text_editor_new_document()
     lv_group_t *g = lv_obj_get_group(text_area);
     if (g) {
         lv_group_focus_obj(text_area);
-        lv_group_set_editing(g, editor_auto_edit);
+        lv_group_set_editing(g, true);
         editor_auto_edit = false;
     }
-    
+
     update_word_count();
 }
 
@@ -500,6 +532,11 @@ void ui_text_editor_exit(lv_obj_t *parent)
         sync_pill_wifi_timer = NULL;
     }
     sync_pill_wifi_last_state = -1;
+
+    if (word_count_debounce_timer) {
+        lv_timer_del(word_count_debounce_timer);
+        word_count_debounce_timer = NULL;
+    }
 
     if (float_bar) {
         lv_obj_del(float_bar);

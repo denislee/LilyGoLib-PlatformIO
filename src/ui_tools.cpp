@@ -440,27 +440,15 @@ lv_obj_t *create_msgbox(lv_obj_t *parent, const char *title_txt,
     lv_obj_set_style_shadow_opa(msgbox, LV_OPA_40, 0);
     lv_obj_set_style_shadow_color(msgbox, lv_color_black(), 0);
 
-    // Title (was previously dropped — v9's lv_msgbox_create doesn't take
-    // title_txt; has to be added via add_title). Accent-colored, large,
-    // sits in the header.
-    if (title_txt && title_txt[0]) {
-        lv_obj_t *tlbl = lv_msgbox_add_title(msgbox, title_txt);
-        lv_obj_set_style_text_color(tlbl, UI_COLOR_ACCENT, 0);
-        lv_obj_set_style_text_font(tlbl, lv_theme_get_font_large(tlbl), 0);
-        lv_obj_set_flex_grow(tlbl, 1);
-        lv_obj_set_style_text_align(tlbl, LV_TEXT_ALIGN_CENTER, 0);
-    }
+    (void)title_txt;
 
-    // Strip the default theme chrome on header/content/footer — we want a
-    // single unified panel, not three visually-separated boxes.
+    // Hide the header entirely — popups no longer carry a title bar.
     lv_obj_t *hdr = lv_msgbox_get_header(msgbox);
     if (hdr) {
-        lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_side(hdr, LV_BORDER_SIDE_BOTTOM, 0);
-        lv_obj_set_style_border_color(hdr, UI_COLOR_ACCENT, 0);
-        lv_obj_set_style_border_width(hdr, 1, 0);
-        lv_obj_set_style_pad_hor(hdr, 14, 0);
-        lv_obj_set_style_pad_ver(hdr, 10, 0);
+        lv_obj_add_flag(hdr, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_height(hdr, 0);
+        lv_obj_set_style_pad_all(hdr, 0, 0);
+        lv_obj_set_style_border_width(hdr, 0, 0);
     }
 
     lv_msgbox_add_text(msgbox, msg_txt);
@@ -490,8 +478,9 @@ lv_obj_t *create_msgbox(lv_obj_t *parent, const char *title_txt,
         lv_style_set_text_color(&msgbox_btn_base_style, UI_COLOR_FG);
         lv_style_set_radius(&msgbox_btn_base_style, UI_RADIUS);
         lv_style_set_pad_hor(&msgbox_btn_base_style, 18);
-        lv_style_set_pad_ver(&msgbox_btn_base_style, 8);
+        lv_style_set_pad_ver(&msgbox_btn_base_style, 2);
         lv_style_set_min_width(&msgbox_btn_base_style, 72);
+        lv_style_set_height(&msgbox_btn_base_style, 28);
         lv_style_set_shadow_width(&msgbox_btn_base_style, 0);
 
         lv_style_init(&msgbox_btn_focus_style);
@@ -509,7 +498,8 @@ lv_obj_t *create_msgbox(lv_obj_t *parent, const char *title_txt,
         lv_obj_set_style_bg_opa(footer, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(footer, 0, 0);
         lv_obj_set_style_pad_hor(footer, 14, 0);
-        lv_obj_set_style_pad_ver(footer, 10, 0);
+        lv_obj_set_style_pad_top(footer, 4, 0);
+        lv_obj_set_style_pad_bottom(footer, 14, 0);
         lv_obj_set_style_pad_column(footer, 10, 0);
         lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);

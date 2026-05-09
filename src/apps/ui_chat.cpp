@@ -589,6 +589,13 @@ static void kick_off_send(const std::string &user_text,
 static void send_btn_cb(lv_event_t *)
 {
     if (s_busy || !s_input_ta) return;
+
+    // Leave edit mode so the user can navigate away, especially if input is empty
+    lv_group_t *g = lv_obj_get_group(s_input_ta);
+    if (g) {
+        lv_group_set_editing(g, false);
+    }
+
     const char *raw = lv_textarea_get_text(s_input_ta);
     std::string txt = raw ? raw : "";
     size_t a = txt.find_first_not_of(" \t\r\n");
@@ -779,14 +786,6 @@ static void enter(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_input_ta = lv_textarea_create(row);
-    lv_textarea_set_placeholder_text(s_input_ta, "Ask anything...");
-    lv_textarea_set_one_line(s_input_ta, true);
-    lv_textarea_set_max_length(s_input_ta, 500);
-    lv_obj_set_flex_grow(s_input_ta, 1);
-    lv_obj_set_style_radius(s_input_ta, UI_RADIUS, 0);
-    lv_group_add_obj(lv_group_get_default(), s_input_ta);
-
     auto make_btn = [&](const char *icon, lv_event_cb_t cb) -> lv_obj_t * {
         lv_obj_t *b = lv_btn_create(row);
         lv_obj_set_height(b, 40);
@@ -802,9 +801,19 @@ static void enter(lv_obj_t *parent)
     };
     s_mic_btn  = make_btn(LV_SYMBOL_AUDIO, mic_btn_cb);
 
+    s_input_ta = lv_textarea_create(row);
+    lv_textarea_set_placeholder_text(s_input_ta, "Ask anything...");
+    lv_textarea_set_one_line(s_input_ta, true);
+    lv_textarea_set_max_length(s_input_ta, 500);
+    lv_obj_set_flex_grow(s_input_ta, 1);
+    lv_obj_set_style_radius(s_input_ta, UI_RADIUS, 0);
+    lv_group_add_obj(lv_group_get_default(), s_input_ta);
+
     // One-line textarea fires LV_EVENT_READY when Enter is pressed (or
     // when the on-screen keyboard's OK key is tapped). Treat that as send.
     lv_obj_add_event_cb(s_input_ta, send_btn_cb, LV_EVENT_READY, nullptr);
+
+    lv_group_focus_obj(s_input_ta);
 
     if (hal::hub_get_url().empty()) {
         log_append("info: ",

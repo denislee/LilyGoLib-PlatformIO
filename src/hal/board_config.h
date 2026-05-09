@@ -15,6 +15,14 @@
 #ifndef RADIOLIB_EXCLUDE_NRF24
 #define USING_EXTERN_NRF2401
 #endif
+
+// The Pager carries a BHI260AP (also used as the GPIO expander). Without
+// this define every #ifdef USING_BHI260_SENSOR block in src/hal/sensors.cpp
+// and src/hal/system.cpp compiles away — which is why the IMU debug page
+// reports all zeros.
+#ifndef USING_BHI260_SENSOR
+#define USING_BHI260_SENSOR
+#endif
 /* USING_ST25R3916 is injected as a -D build flag in platformio.ini so it
  * reaches every translation unit (incl. hal/nfc_reader.cpp which doesn't
  * pull in this header). */

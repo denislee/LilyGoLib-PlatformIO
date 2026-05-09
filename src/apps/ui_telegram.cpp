@@ -29,6 +29,7 @@
 #include "../core/system.h"
 #include "../core/input_focus.h"
 #include "app_registry.h"
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -186,12 +187,11 @@ static std::vector<Message> s_msgs;
 // Favorite chat IDs. The chat list in the Telegram app filters to this set;
 // the full list is only visible from Settings → Telegram → Favorites.
 static std::set<long long> s_favorites;
+// Cached titles parallel to s_favorites. Lets the app skip the chat list
+// and jump straight into the sole favorite without first fetching /v1/chats
+// to learn the title.
+static std::map<long long, std::string> s_favorite_titles;
 static bool s_favorites_loaded = false;
-
-// Set by onStart / on_unlocked so the next entry into the chat list auto-
-// jumps into the single favorite when there's exactly one. Cleared after
-// one attempt so pressing Back from the chat view lands on the list.
-static bool s_auto_enter_single_pending = false;
 
 // Unread-count state shared with the home-menu badge. Updated by the in-app
 // poll when the Telegram view is open, and by the background poll otherwise
@@ -217,25 +217,45 @@ static void show_not_configured();
 
 // --- helpers --------------------------------------------------------------
 
-// Favorites are persisted as a comma-separated list of numeric chat IDs
-// (matches the bridge's long-long id space). Parsed and re-serialized
-// whenever the user toggles a star in settings.
+// Favorites: ids in `favs` (comma-separated) and titles in `fav_titles`
+// (`<id>\x1F<title>\x1E` records — separators that telegram chat titles
+// won't contain). Title pref is best-effort; missing entries leave the
+// chat-name pill blank but don't otherwise break anything.
 static void load_favorites()
 {
     s_favorites.clear();
+    s_favorite_titles.clear();
     s_favorites_loaded = true;
     std::string raw = load_pref("favs");
-    if (raw.empty()) return;
-    size_t i = 0;
-    while (i < raw.size()) {
-        size_t j = raw.find(',', i);
-        std::string tok = raw.substr(i, j == std::string::npos ? std::string::npos : j - i);
-        if (!tok.empty()) {
-            long long v = strtoll(tok.c_str(), nullptr, 10);
-            if (v != 0) s_favorites.insert(v);
+    if (!raw.empty()) {
+        size_t i = 0;
+        while (i < raw.size()) {
+            size_t j = raw.find(',', i);
+            std::string tok = raw.substr(i, j == std::string::npos ? std::string::npos : j - i);
+            if (!tok.empty()) {
+                long long v = strtoll(tok.c_str(), nullptr, 10);
+                if (v != 0) s_favorites.insert(v);
+            }
+            if (j == std::string::npos) break;
+            i = j + 1;
         }
-        if (j == std::string::npos) break;
-        i = j + 1;
+    }
+    std::string traw = load_pref("fav_titles");
+    if (!traw.empty()) {
+        size_t i = 0;
+        while (i < traw.size()) {
+            size_t end = traw.find('\x1E', i);
+            std::string rec = traw.substr(i, end == std::string::npos ? std::string::npos : end - i);
+            size_t sep = rec.find('\x1F');
+            if (sep != std::string::npos) {
+                long long id = strtoll(rec.substr(0, sep).c_str(), nullptr, 10);
+                if (id != 0 && s_favorites.count(id)) {
+                    s_favorite_titles[id] = rec.substr(sep + 1);
+                }
+            }
+            if (end == std::string::npos) break;
+            i = end + 1;
+        }
     }
 }
 
@@ -250,6 +270,19 @@ static void save_favorites()
         joined += b;
     }
     save_pref("favs", joined.c_str());
+
+    std::string blob;
+    for (long long id : s_favorites) {
+        auto it = s_favorite_titles.find(id);
+        if (it == s_favorite_titles.end() || it->second.empty()) continue;
+        char b[24];
+        snprintf(b, sizeof(b), "%lld", id);
+        blob += b;
+        blob.push_back('\x1F');
+        blob += it->second;
+        blob.push_back('\x1E');
+    }
+    save_pref("fav_titles", blob.c_str());
 }
 
 static void reload_config()
@@ -952,9 +985,6 @@ static lv_obj_t *make_header(const char *title)
 
 static void show_chat_list()
 {
-    const bool try_auto_enter = s_auto_enter_single_pending;
-    s_auto_enter_single_pending = false;
-
     s_view = V_LIST;
     s_current_chat_id = 0;
     stop_timer();
@@ -999,30 +1029,14 @@ static void show_chat_list()
         set_status("No internet", UI_COLOR_MUTED);
         return;
     }
-    bool ok = false;
     if (s_bg_task != nullptr) {
         set_status("Waiting for sync...", UI_COLOR_ACCENT);
         start_timer(1000);
     } else {
-        ok = fetch_chats();
+        fetch_chats();
         start_timer(TG_LIST_POLL_MS);
     }
-
-    // If the user has pinned exactly one favorite, jump straight into that
-    // chat on app entry. Only fires when the fetch returned the chat in the
-    // first TG_CHAT_LIMIT results — otherwise we leave the user on the list
-    // so they can see the (empty) state rather than a blank chat header.
-    if (ok && try_auto_enter && s_favorites.size() == 1) {
-        long long fav_id = *s_favorites.begin();
-        for (const auto &c : s_chats) {
-            if (c.id == fav_id) {
-                show_chat(fav_id, c.title.c_str());
-                return;
-            }
-        }
-    }
 #else
-    (void)try_auto_enter;
     set_status("Not supported on emulator.", UI_COLOR_MUTED);
 #endif
 }
@@ -1160,6 +1174,63 @@ static void show_not_configured()
 
 // --- App ------------------------------------------------------------------
 
+#ifdef ARDUINO
+// One-shot title lookup for the single-favorite shortcut path: hits
+// /v1/chats and returns the title for the given id, or "" on any failure.
+// Used to backfill titles for favorites added by builds that didn't cache
+// them, so the chat-screen pill reads the actual person name instead of
+// a placeholder.
+static std::string fetch_chat_title(long long id)
+{
+    std::string body, err;
+    char path[64];
+    snprintf(path, sizeof(path), "/v1/chats?limit=%d", TG_CHAT_LIMIT);
+    if (!tg_get(path, body, &err)) return std::string();
+    cJSON *arr = cJSON_Parse(body.c_str());
+    if (!arr || !cJSON_IsArray(arr)) {
+        if (arr) cJSON_Delete(arr);
+        return std::string();
+    }
+    std::string title;
+    int n = cJSON_GetArraySize(arr);
+    for (int i = 0; i < n; i++) {
+        cJSON *it = cJSON_GetArrayItem(arr, i);
+        cJSON *jid = cJSON_GetObjectItemCaseSensitive(it, "id");
+        if (jid && cJSON_IsNumber(jid) && (long long)jid->valuedouble == id) {
+            cJSON *jti = cJSON_GetObjectItemCaseSensitive(it, "title");
+            if (jti && cJSON_IsString(jti) && jti->valuestring) {
+                title = jti->valuestring;
+            }
+            break;
+        }
+    }
+    cJSON_Delete(arr);
+    return title;
+}
+#endif
+
+// Single-favorite shortcut: skip the chat list and drop the user straight
+// into their one favorited chat. If we never cached the title (favorite
+// added by an older build), do a one-shot lookup over HTTP and persist it
+// so subsequent opens are instant.
+static void show_default_view()
+{
+    if (s_favorites.size() == 1) {
+        long long id = *s_favorites.begin();
+        std::string title;
+        auto it = s_favorite_titles.find(id);
+        if (it != s_favorite_titles.end() && !it->second.empty()) {
+            title = it->second;
+        } else {
+            // Avoid blocking HTTP fetch on UI open. Fallback to generic title.
+            title = "Chat";
+        }
+        show_chat(id, title.c_str());
+        return;
+    }
+    show_chat_list();
+}
+
 static void on_unlocked(bool ok, void *)
 {
     if (!ok) {
@@ -1170,8 +1241,7 @@ static void on_unlocked(bool ok, void *)
     }
     reload_config();
     if (configured()) {
-        s_auto_enter_single_pending = true;
-        show_chat_list();
+        show_default_view();
     } else {
         show_not_configured();
     }
@@ -1203,8 +1273,7 @@ public:
         }
 #endif
         if (configured()) {
-            s_auto_enter_single_pending = true;
-            show_chat_list();
+            show_default_view();
         } else {
             show_not_configured();
         }
@@ -1415,14 +1484,19 @@ bool tg_cfg_is_favorite(long long id)
     return s_favorites.find(id) != s_favorites.end();
 }
 
-void tg_cfg_set_favorite(long long id, bool on)
+void tg_cfg_set_favorite(long long id, const char *title, bool on)
 {
     if (!s_favorites_loaded) load_favorites();
     bool changed = false;
     if (on) {
         changed = s_favorites.insert(id).second;
+        if (title && *title) {
+            auto &cur = s_favorite_titles[id];
+            if (cur != title) { cur = title; changed = true; }
+        }
     } else {
         changed = s_favorites.erase(id) > 0;
+        if (s_favorite_titles.erase(id) > 0) changed = true;
     }
     if (changed) save_favorites();
     // If the chat list view is on screen, re-render so the filter is
@@ -1499,4 +1573,5 @@ void tg_begin_background_poll() {
     s_bg_timer = lv_timer_create(tg_bg_tick, 60000, nullptr);
 #endif
 }
+
 } // namespace apps

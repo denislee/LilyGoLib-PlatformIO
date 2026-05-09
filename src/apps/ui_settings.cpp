@@ -467,7 +467,7 @@ static lv_obj_t *create_subpage_notes_security(lv_obj_t *menu, lv_obj_t *main_pa
 static lv_obj_t *create_subpage_weather(lv_obj_t *menu, lv_obj_t *main_page)
 {
     lv_obj_t *cont = lv_menu_cont_create(main_page);
-    style_menu_item_icon(cont, LV_SYMBOL_GPS, "Weather");
+    style_menu_item_icon(cont, LV_SYMBOL_REFRESH, "Weather");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_user_data(sub_page, (void*)&weather_cfg::build_subpage);
     lv_menu_set_load_page_event(menu, cont, sub_page);
@@ -524,6 +524,16 @@ static lv_obj_t *create_subpage_home_apps(lv_obj_t *menu, lv_obj_t *main_page)
     style_menu_item_icon(cont, LV_SYMBOL_HOME, "Home Apps");
     lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
     lv_obj_set_user_data(sub_page, (void*)&home_apps_cfg::build_subpage);
+    lv_menu_set_load_page_event(menu, cont, sub_page);
+    return cont;
+}
+
+static lv_obj_t *create_subpage_imu_debug(lv_obj_t *menu, lv_obj_t *main_page)
+{
+    lv_obj_t *cont = lv_menu_cont_create(main_page);
+    style_menu_item_icon(cont, LV_SYMBOL_EYE_OPEN, "IMU Debug");
+    lv_obj_t *sub_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_user_data(sub_page, (void*)&imu_debug_cfg::build_subpage);
     lv_menu_set_load_page_event(menu, cont, sub_page);
     return cont;
 }
@@ -635,6 +645,7 @@ void ui_sys_enter(lv_obj_t *parent)
     // System
     cont = create_subpage_performance(menu, main_page);    add_grid_item(cont);
     cont = create_subpage_info(menu, main_page);           add_grid_item(cont);
+    cont = create_subpage_imu_debug(menu, main_page);      add_grid_item(cont);
 
     // Plugged-in entries (see core/settings_registry.h). Rendered between
     // the hand-wired grid and the Power Off tile so third-party tiles
@@ -702,6 +713,7 @@ void ui_sys_exit(lv_obj_t *parent)
     weather_cfg::reset_state();
     telegram_cfg::reset_state();
     notes_sync_cfg::reset_state();
+    imu_debug_cfg::reset_state();
     core::reset_settings_entries();
     main_page_group_count = 0;
     subpage_item_count = 0;

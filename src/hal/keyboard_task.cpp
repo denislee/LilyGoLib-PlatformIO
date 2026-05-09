@@ -87,8 +87,9 @@ void enqueue_event(const KeyEvent &ev)
 
 void keyboard_task_fn(void *)
 {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(kPollMs));
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(kPollMs));
 
         if ((hw_get_device_online() & HW_KEYBOARD_ONLINE) == 0) {
             continue;

@@ -34,7 +34,7 @@ namespace {
 constexpr UBaseType_t kTaskPriority = 8;
 constexpr BaseType_t  kTaskCore     = 1;
 constexpr uint32_t    kIdleMs       = 50;
-constexpr uint32_t    kMaxTickMs    = 5;
+constexpr uint32_t    kMaxTickMs    = 16;
 // FFat reads plus mbedTLS AES-CBC decrypt plus nested LVGL event dispatch
 // (e.g. menu rebuild from a click handler) easily cleared 6KB on 8KB stacks.
 constexpr uint32_t    kStackBytes   = 16384;

@@ -63,7 +63,10 @@ bool        tg_cfg_token_is_encrypted();
 // Favorite chat IDs. The Telegram app's chat list filters to favorites only;
 // the Settings → Telegram → Favorites subpage drives what gets stored.
 bool tg_cfg_is_favorite(long long id);
-void tg_cfg_set_favorite(long long id, bool on);
+// `title` is persisted alongside the id so the Telegram app can skip the
+// chat list and jump straight into the favorited chat when there is only
+// one. Pass nullptr/"" if no title is known; existing title is preserved.
+void tg_cfg_set_favorite(long long id, const char *title, bool on);
 
 // Notification channel toggles for new-message alerts raised by the
 // background poll (see tg_begin_background_poll). Default ON.

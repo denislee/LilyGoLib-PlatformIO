@@ -81,7 +81,6 @@ void        weather_set_user_location(const char *city, double lat, double lon);
 bool        weather_search_cities(const char *query,
                                   std::vector<weather_city_match> &out,
                                   std::string &err);
-
 // --- Per-sub-config entry points ---
 namespace weather_cfg {
     void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page);
@@ -172,4 +171,15 @@ namespace notes_sec_cfg {
 // (NVS-backed). No cached LVGL state.
 namespace home_apps_cfg {
     void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page);
+}
+
+// IMU Debug subpage — read-only diagnostic view of the BHI260 (or BMA423)
+// state. Shows which virtual sensors the loaded firmware advertises,
+// configure() success per sensor, live event counters, current accel /
+// roll / pitch / device-orientation values, and a "Re-init IMU" button to
+// retry registration without rebooting. A 200 ms lv_timer drives the
+// live rows; reset_state() kills the timer when the page is torn down.
+namespace imu_debug_cfg {
+    void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page);
+    void reset_state();
 }

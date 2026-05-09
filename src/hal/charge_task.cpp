@@ -50,27 +50,70 @@ bool poll_vbus_locked()
 #endif
 }
 
+// Pulse the charge icon's opacity so the overlay reads as "alive" — without
+// it, a static screen at full brightness for 4 s feels dead. Only opacity
+// is animated; the icon glyph itself never moves.
+static void charge_icon_pulse_cb(void *var, int32_t v)
+{
+    lv_obj_set_style_text_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+}
+
 lv_obj_t *build_charge_overlay()
 {
     monitor_params_t p;
     hw_get_monitor_params(p);
 
     lv_obj_t *overlay = ui_popup_create(NULL);
+    lv_obj_set_style_pad_row(overlay, 12, 0);
 
+    // Big pulsing lightning bolt — the dominant visual anchor.
     lv_obj_t *icon = lv_label_create(overlay);
     lv_label_set_text(icon, LV_SYMBOL_CHARGE);
     lv_obj_set_style_text_color(icon, lv_palette_main(LV_PALETTE_GREEN), 0);
-    lv_obj_set_style_text_font(icon, lv_theme_get_font_large(overlay), 0);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_opa(icon, LV_OPA_COVER, 0);
 
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, icon);
+    lv_anim_set_exec_cb(&a, charge_icon_pulse_cb);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_30);
+    lv_anim_set_time(&a, 700);
+    lv_anim_set_playback_time(&a, 700);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a);
+
+    // Hero percentage in a much larger face than the rest of the firmware.
     lv_obj_t *pct = lv_label_create(overlay);
     lv_label_set_text_fmt(pct, "%d%%", p.battery_percent);
     lv_obj_set_style_text_color(pct, UI_COLOR_FG, 0);
-    lv_obj_set_style_text_font(pct, lv_theme_get_font_large(overlay), 0);
+    lv_obj_set_style_text_font(pct, &lv_font_montserrat_48, 0);
+
+    // Battery progress bar — concrete read of how full the cell is right now.
+    // Ranged 0..100 so the user sees absolute fill, not a relative animation.
+    lv_obj_t *bar = lv_bar_create(overlay);
+    lv_obj_set_size(bar, lv_pct(70), 10);
+    lv_bar_set_range(bar, 0, 100);
+    int32_t bar_val = p.battery_percent;
+    if (bar_val < 0) bar_val = 0;
+    if (bar_val > 100) bar_val = 100;
+    lv_bar_set_value(bar, bar_val, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar, UI_COLOR_MUTED, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_30, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 5, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, lv_palette_main(LV_PALETTE_GREEN),
+                              LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, 5, LV_PART_INDICATOR);
+    lv_obj_set_style_shadow_color(bar, lv_palette_main(LV_PALETTE_GREEN),
+                                  LV_PART_INDICATOR);
+    lv_obj_set_style_shadow_width(bar, 16, LV_PART_INDICATOR);
+    lv_obj_set_style_shadow_opa(bar, LV_OPA_50, LV_PART_INDICATOR);
 
     lv_obj_t *sub = lv_label_create(overlay);
     lv_label_set_text(sub, "Charging");
     lv_obj_set_style_text_color(sub, UI_COLOR_MUTED, 0);
-    lv_obj_set_style_text_font(sub, get_small_font(), 0);
+    lv_obj_set_style_text_font(sub, &lv_font_montserrat_18, 0);
 
     return overlay;
 }

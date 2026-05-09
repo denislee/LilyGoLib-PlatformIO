@@ -75,7 +75,7 @@ void hal_loop(void)
     Uint32 lastTick = SDL_GetTicks();
     while (1) {
         fflush(stdout);
-        SDL_Delay(5);
+        SDL_Delay(16);
         Uint32 current = SDL_GetTicks();
         lv_tick_inc(current - lastTick);
         lastTick = current;

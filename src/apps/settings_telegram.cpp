@@ -210,21 +210,24 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_timer_set_repeat_count(t, 1);
 }
 
-// Per-button owned chat id — freed via LV_EVENT_DELETE since `long long`
-// won't fit in a 32-bit void* slot on the ESP32-S3.
+// Per-button owned (id, title) — freed via LV_EVENT_DELETE. Title is kept
+// so the toggle callback can push it through to tg_cfg_set_favorite, which
+// caches it for the single-favorite shortcut in the Telegram app.
+struct FavToggleCtx { long long id; std::string title; };
+
 static void fav_id_delete_cb(lv_event_t *e)
 {
-    auto *id = (long long *)lv_event_get_user_data(e);
-    delete id;
+    auto *ctx = (FavToggleCtx *)lv_event_get_user_data(e);
+    delete ctx;
 }
 
 static void fav_toggle_cb(lv_event_t *e)
 {
     lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
-    auto *id = (long long *)lv_event_get_user_data(e);
-    if (!id) return;
+    auto *ctx = (FavToggleCtx *)lv_event_get_user_data(e);
+    if (!ctx) return;
     bool checked = lv_obj_has_state(btn, LV_STATE_CHECKED);
-    apps::tg_cfg_set_favorite(*id, checked);
+    apps::tg_cfg_set_favorite(ctx->id, ctx->title.c_str(), checked);
     lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(btn);
     if (label) lv_label_set_text(label, checked ? LV_SYMBOL_OK : LV_SYMBOL_PLUS);
 }
@@ -289,9 +292,9 @@ static void build_favorites_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
         lv_obj_center(label);
         lv_obj_set_user_data(btn, label);
 
-        long long *id_heap = new long long(id);
-        lv_obj_add_event_cb(btn, fav_toggle_cb, LV_EVENT_VALUE_CHANGED, id_heap);
-        lv_obj_add_event_cb(btn, fav_id_delete_cb, LV_EVENT_DELETE, id_heap);
+        auto *ctx = new FavToggleCtx{id, title};
+        lv_obj_add_event_cb(btn, fav_toggle_cb, LV_EVENT_VALUE_CHANGED, ctx);
+        lv_obj_add_event_cb(btn, fav_id_delete_cb, LV_EVENT_DELETE, ctx);
         register_subpage_group_obj(sub_page, btn);
     }
 }

@@ -44,8 +44,11 @@
 #include <vector>
 
 #ifdef ARDUINO
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <Preferences.h>
 #include <mbedtls/base64.h>
+#include "../core/scoped_lock.h"
 extern "C" {
 #include "cJSON.h"
 }
@@ -179,6 +182,33 @@ static lv_obj_t *s_log_label = nullptr;
 static lv_obj_t *s_log_scroll = nullptr;
 static std::string s_log_text;
 static bool s_syncing = false;
+
+#ifdef ARDUINO
+// HTTP runs on a FreeRTOS task so the LVGL thread keeps servicing the
+// keyboard/encoder during sync. The bg task only ever touches `s_pending_log`
+// and the `s_bg_done` flag (under the instance mutex); a UI-thread timer
+// drains the queue and finalizes when the task is gone.
+static TaskHandle_t s_bg_task = nullptr;
+static lv_timer_t *s_bg_timer = nullptr;
+static std::vector<std::string> s_pending_log; // bg → ui log queue
+static volatile bool s_bg_done = false;
+
+static void bg_log_append(const char *line)
+{
+    core::ScopedInstanceLock lock;
+    s_pending_log.emplace_back(line ? line : "");
+}
+
+static void bg_log_appendf(const char *fmt, ...)
+{
+    char buf[160];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    bg_log_append(buf);
+}
+#endif
 
 static void log_append(const char *line)
 {
@@ -345,36 +375,38 @@ static bool try_hub_sync(const Config &cfg,
     cJSON_Delete(j);
 
     for (const auto &p : errors) {
-        log_appendf("  up %s FAIL: %s", p.first.c_str(), p.second.c_str());
+        bg_log_appendf("  up %s FAIL: %s", p.first.c_str(), p.second.c_str());
     }
-    log_appendf("Notes: +%d =%d (fail %d, skip %d)",
+    bg_log_appendf("Notes: +%d =%d (fail %d, skip %d)",
                 uploaded, already, (int)errors.size(), read_skipped);
     return true;
 }
 
 // --- sync driver ----------------------------------------------------------
 
-static void run_sync()
+// Runs on a FreeRTOS task. Touches only the bg log queue and shared task
+// flags; never the LVGL widget tree.
+static void run_sync_bg()
 {
     std::string err;
     Config cfg;
     if (!load_config(cfg, &err)) {
-        log_appendf("ERR: %s", err.c_str());
+        bg_log_appendf("ERR: %s", err.c_str());
         return;
     }
     if (!hw_get_wifi_connected()) {
-        log_append("ERR: WiFi not connected.");
+        bg_log_append("ERR: WiFi not connected.");
         return;
     }
 
     if (!hal::hub_is_enabled()) {
-        log_append("ERR: Local Hub is not enabled.");
-        log_append("     Set the URL in Settings " "\xC2\xBB" " Local Hub.");
+        bg_log_append("ERR: Local Hub is not enabled.");
+        bg_log_append("     Set the URL in Settings " "\xC2\xBB" " Local Hub.");
         scrub_string(cfg.token);
         return;
     }
 
-    log_appendf("Repo: %s  Branch: %s", cfg.repo.c_str(), cfg.branch.c_str());
+    bg_log_appendf("Repo: %s  Branch: %s", cfg.repo.c_str(), cfg.branch.c_str());
 
     // 1. Build the local candidate list from internal FFat only. The SD card
     //    is intentionally not consulted here — Settings » Storage » "Copy
@@ -391,7 +423,7 @@ static void run_sync()
         strip_slash(p);
         if (!p.empty()) local.push_back({p, true});
     }
-    log_appendf("Local notes: %u (internal only)", (unsigned)local.size());
+    bg_log_appendf("Local notes: %u (internal only)", (unsigned)local.size());
 
     // 2. Mirror every internal note to the hub before the GitHub push so the
     //    hub keeps a copy regardless of how the GitHub side resolves. Read
@@ -401,7 +433,7 @@ static void run_sync()
         std::vector<uint8_t> bytes;
         std::string abs = "/" + n.name;
         if (!hw_read_internal_bytes_raw(abs.c_str(), bytes)) {
-            log_appendf("  read %s: skip", n.name.c_str());
+            bg_log_appendf("  read %s: skip", n.name.c_str());
             continue;
         }
         std::string uerr;
@@ -409,20 +441,34 @@ static void run_sync()
             hub_up_ok++;
         } else {
             hub_up_fail++;
-            log_appendf("  hub %s FAIL: %s", n.name.c_str(), uerr.c_str());
+            bg_log_appendf("  hub %s FAIL: %s", n.name.c_str(), uerr.c_str());
         }
     }
-    log_appendf("Hub upload: ok=%d fail=%d", hub_up_ok, hub_up_fail);
+    bg_log_appendf("Hub upload: ok=%d fail=%d", hub_up_ok, hub_up_fail);
 
     // 3. Have the hub run the additive GitHub push. We still hand it the
     //    file manifest in-band so a single round-trip covers the whole sync.
-    log_append("[hub] delegating push to lilyhub...");
+    bg_log_append("[hub] delegating push to lilyhub...");
     std::string herr;
     if (!try_hub_sync(cfg, local, &herr)) {
-        log_appendf("[hub] failed: %s", herr.c_str());
+        bg_log_appendf("[hub] failed: %s", herr.c_str());
     }
 
     scrub_string(cfg.token);
+}
+
+static void notes_sync_bg_task(void *arg)
+{
+    (void)arg;
+    if (token_is_encrypted() && !notes_crypto_is_unlocked()) {
+        bg_log_append("ERR: Notes session locked. Open Notes and unlock.");
+    } else {
+        run_sync_bg();
+    }
+    bg_log_append("Done.");
+    s_bg_done = true;
+    s_bg_task = nullptr;
+    vTaskDelete(NULL);
 }
 
 static void scrub_string(std::string &s) { hal::secret_scrub(s); }
@@ -431,6 +477,31 @@ static void scrub_string(std::string &s) { hal::secret_scrub(s); }
 // --- UI -------------------------------------------------------------------
 
 static void back_btn_cb(lv_event_t *) { menu_show(); }
+
+#ifdef ARDUINO
+// LVGL timer: drains queued log lines from the background task and finalizes
+// once the task has exited. Runs inside `lv_timer_handler()` which already
+// holds the instance mutex, so direct reads of the shared queue are safe.
+static void notes_sync_drain_tick(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_pending_log.empty()) {
+        std::vector<std::string> drained;
+        drained.swap(s_pending_log);
+        for (auto &l : drained) {
+            if (s_log_label) log_append(l.c_str());
+        }
+    }
+    if (s_bg_done && s_bg_task == nullptr) {
+        s_bg_done = false;
+        s_syncing = false;
+        if (s_bg_timer) {
+            lv_timer_del(s_bg_timer);
+            s_bg_timer = nullptr;
+        }
+    }
+}
+#endif
 
 static void sync_btn_cb(lv_event_t *)
 {
@@ -441,20 +512,36 @@ static void sync_btn_cb(lv_event_t *)
     if (s_log_label) lv_label_set_text(s_log_label, "");
     log_append("Starting sync...");
 #ifdef ARDUINO
-    // Refuse to proceed unless the notes session is unlocked. load_token_plain
-    // returns empty in the locked state, so run_sync would fail later
-    // anyway, but checking up front gives the user a cleaner message and
-    // avoids a wasted remote list call.
-    if (token_is_encrypted() && !notes_crypto_is_unlocked()) {
-        log_append("ERR: Notes session locked. Open Notes and unlock.");
-    } else {
-        run_sync();
+    // Drop any leftover queue entries from a previous (cancelled-by-exit) run.
+    s_pending_log.clear();
+    s_bg_done = false;
+
+    if (s_bg_task != nullptr) {
+        // A previous task is still finishing in the background. Adopt it
+        // by starting the drain timer instead of spawning a duplicate.
+        if (!s_bg_timer) {
+            s_bg_timer = lv_timer_create(notes_sync_drain_tick, 100, nullptr);
+        }
+        return;
+    }
+
+    // 8 KB stack: HTTPS round-trip via mbedtls is the floor here — TLS
+    // handshake plus cert chain easily eats 6 KB on its own.
+    if (xTaskCreate(notes_sync_bg_task, "nsync_bg", 8192, nullptr, 2,
+                    &s_bg_task) != pdPASS) {
+        s_bg_task = nullptr;
+        log_append("ERR: failed to start sync task");
+        s_syncing = false;
+        return;
+    }
+    if (!s_bg_timer) {
+        s_bg_timer = lv_timer_create(notes_sync_drain_tick, 100, nullptr);
     }
 #else
     log_append("Not supported on emulator.");
-#endif
     log_append("Done.");
     s_syncing = false;
+#endif
 }
 
 static void enter(lv_obj_t *parent)
@@ -530,6 +617,17 @@ static void exit_cb(lv_obj_t *) {
     ui_hide_back_button();
     s_root = s_log_label = s_log_scroll = nullptr;
     s_log_text.clear();
+#ifdef ARDUINO
+    // Stop draining; the bg task (if any) is left to finish and self-delete.
+    // It only writes to the heap-backed log queue, never the UI tree, so it
+    // is safe to outlive the app instance. Drop queued log entries since
+    // there's no UI to render them into.
+    if (s_bg_timer) {
+        lv_timer_del(s_bg_timer);
+        s_bg_timer = nullptr;
+    }
+    s_pending_log.clear();
+#endif
     s_syncing = false;
 }
 

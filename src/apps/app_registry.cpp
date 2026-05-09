@@ -3,6 +3,7 @@
  */
 #include "app_registry.h"
 #include "../core/app_manager.h"
+#include "../hal/sensors.h"
 
 namespace apps {
 
@@ -28,6 +29,10 @@ void register_all() {
     // Start polling right after apps are registered so the badge can show
     // unread messages even before the user opens Telegram.
     tg_begin_background_poll();
+    // Bring the IMU online so hw_is_face_down() (driving the glance overlay)
+    // has accelerometer/quaternion data to read. Cheap when called against
+    // an offline IMU — the body short-circuits on the device-online check.
+    hw_register_imu_process();
 }
 
 } // namespace apps

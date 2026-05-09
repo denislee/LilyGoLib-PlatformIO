@@ -118,18 +118,6 @@ typedef enum {
 
 #define GMT_OFFSET_SECOND       (8*3600)
 
-typedef struct {
-    std::string model;
-    double lat;
-    double lng;
-    struct tm datetime;
-    double speed;
-    uint32_t rx_size;
-    uint16_t satellite;
-    bool pps;
-    bool enable_debug;
-} gps_params_t;
-
 enum RadioMode {
     RADIO_DISABLE,
     RADIO_TX,

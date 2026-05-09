@@ -1091,25 +1091,47 @@ bool hw_save_preferred_file(const char *path, const char *content, std::string *
 
 bool hw_read_preferred_file(const char *path, std::string &content)
 {
-    // Strictly use internal storage for core apps primary logic
-    return hw_read_internal_file(path, content);
+    return hw_read_file(path, content);
 }
 
 void hw_get_preferred_txt_files(std::vector<std::string> &list)
 {
     list.clear();
 #ifdef ARDUINO
-    std::vector<FileInfo> file_infos;
-    // Strictly use internal storage
-    list_files(file_infos, FFat, "/", ".txt");
+    std::vector<FileInfo> infos;
+    
+    // Scan Internal
+    list_files(infos, FFat, "/", ".txt");
+    
+    // Scan SD if available
+    if (HW_SD_ONLINE & hw_get_device_online()) {
+        std::vector<FileInfo> sd_infos;
+        instance.lockSPI();
+        list_files(sd_infos, SD, "/", ".txt");
+        instance.unlockSPI();
+        
+        // Merge SD into infos, avoiding duplicates (Internal wins)
+        for (const auto &sdi : sd_infos) {
+            bool found = false;
+            for (const auto &ii : infos) {
+                if (ii.name == sdi.name) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                infos.push_back(sdi);
+            }
+        }
+    }
 
     // Sort descending by time/name
-    std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo &a, const FileInfo &b) {
+    std::sort(infos.begin(), infos.end(), [](const FileInfo &a, const FileInfo &b) {
         if (a.time != b.time) return a.time > b.time;
         return a.name > b.name;
     });
 
-    for (const auto &fi : file_infos) {
+    for (const auto &fi : infos) {
         list.push_back(fi.name);
     }
 #else
@@ -1125,13 +1147,26 @@ bool hw_read_preferred_file_snippet(const char *path, std::string &content, size
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
 
+    File f = FFat.open(str, FILE_READ);
+    bool lock = false;
+    if (!f) {
+        if (HW_SD_ONLINE & hw_get_device_online()) {
+            instance.lockSPI();
+            f = SD.open(str, FILE_READ);
+            lock = true;
+        }
+    }
+    
+    if (!f) {
+        if (lock) instance.unlockSPI();
+        return false;
+    }
+
+    size_t total = f.size();
+
     /* Probe the first 8 bytes so encrypted files take the full-read path.
      * CBC ciphertext can't be partially decrypted, so for protected files we
      * must read the whole thing, decrypt, then truncate the plaintext. */
-    File f = FFat.open(str, FILE_READ);
-    if (!f) return false;
-    size_t total = f.size();
-
     uint8_t probe[8] = {0};
     size_t probe_len = total < 8 ? total : 8;
     if (probe_len) f.read(probe, probe_len);
@@ -1144,6 +1179,8 @@ bool hw_read_preferred_file_snippet(const char *path, std::string &content, size
         f.seek(0);
         if (total) f.read((uint8_t *)&full[0], total);
         f.close();
+        if (lock) instance.unlockSPI();
+
         if (!decode_after_read(full)) return false;
         if (full.size() > max_bytes) {
             content.assign(full.data(), max_bytes);
@@ -1162,6 +1199,8 @@ bool hw_read_preferred_file_snippet(const char *path, std::string &content, size
         f.read((uint8_t *)&content[0], to_read);
     }
     f.close();
+    if (lock) instance.unlockSPI();
+
     if (truncated) *truncated = total > max_bytes;
     return true;
 #else
@@ -1178,8 +1217,31 @@ void hw_get_preferred_txt_files_info(std::vector<std::pair<std::string, uint32_t
     list.clear();
 #ifdef ARDUINO
     std::vector<FileInfo> infos;
-    // Strictly use internal storage
+    
+    // Scan Internal
     list_files(infos, FFat, "/", ".txt", cb);
+    
+    // Scan SD if available
+    if (HW_SD_ONLINE & hw_get_device_online()) {
+        std::vector<FileInfo> sd_infos;
+        instance.lockSPI();
+        list_files(sd_infos, SD, "/", ".txt", cb);
+        instance.unlockSPI();
+        
+        // Merge SD into infos, avoiding duplicates (Internal wins)
+        for (const auto &sdi : sd_infos) {
+            bool found = false;
+            for (const auto &ii : infos) {
+                if (ii.name == sdi.name) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                infos.push_back(sdi);
+            }
+        }
+    }
 
     list.reserve(infos.size());
     for (const auto &fi : infos) {
@@ -1237,11 +1299,14 @@ bool hw_read_preferred_bytes(const char *path, std::vector<uint8_t> &buf)
     buf.clear();
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
-    bool use_sd = storage_should_use_sd();
     File f;
     bool lock = false;
 
-    if (use_sd) {
+    // Try Internal first (faster)
+    f = FFat.open(str, FILE_READ);
+    
+    // Fallback to SD if missing from Internal
+    if (!f && (HW_SD_ONLINE & hw_get_device_online())) {
         instance.lockSPI();
         f = SD.open(str, FILE_READ);
         if (f) {
@@ -1250,9 +1315,7 @@ bool hw_read_preferred_bytes(const char *path, std::vector<uint8_t> &buf)
             instance.unlockSPI();
         }
     }
-    if (!f) {
-        f = FFat.open(str, FILE_READ);
-    }
+
     if (!f) return false;
 
     size_t size = f.size();
@@ -1274,13 +1337,17 @@ bool hw_delete_preferred_file(const char *path)
     hw_set_filesystem_dirty(true);
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
-    if (storage_should_use_sd()) {
+    bool ok = false;
+    
+    // Always try to delete from both to be sure
+    if (FFat.remove(str)) ok = true;
+    
+    if (HW_SD_ONLINE & hw_get_device_online()) {
         instance.lockSPI();
-        bool ok = SD.remove(str);
+        if (SD.remove(str)) ok = true;
         instance.unlockSPI();
-        return ok;
     }
-    return FFat.remove(str);
+    return ok;
 #else
     (void)path;
     return true;

@@ -27,6 +27,7 @@ static lv_obj_t *task_container = NULL;
 static lv_obj_t *quit_btn = NULL;
 static int32_t add_ta_expanded_h = 0;
 static vector<TaskItem> tasks;
+static int32_t editing_idx = -1;
 
 static const char *tasks_file_path = "/tasks.txt";
 
@@ -51,19 +52,36 @@ static void task_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
 
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        bool checked = lv_obj_has_state(obj, LV_STATE_CHECKED);
-        for (auto &t : tasks) {
-            if (t.obj == obj) {
-                string icon = checked ? LV_SYMBOL_OK : LV_SYMBOL_MINUS;
-                string display_text = icon + "  " + t.text;
-                // Update the child label instead of the checkbox text
-                lv_obj_t * label = lv_obj_get_child(obj, 0);
-                if (label) lv_label_set_text(label, display_text.c_str());
+    if (code == LV_EVENT_SHORT_CLICKED) {
+        // Short-click opens the task for editing. SHORT_CLICKED (not CLICKED)
+        // is required because LVGL still fires CLICKED on release after a
+        // long-press — using CLICKED would toggle complete and immediately
+        // open the editor on the same gesture.
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            if (tasks[i].obj == obj && tasks[i].is_task) {
+                editing_idx = (int32_t)i;
+                if (add_ta) {
+                    lv_textarea_set_text(add_ta, tasks[i].text.c_str());
+                    lv_group_focus_obj(add_ta);
+                }
                 break;
             }
         }
-        save_tasks();
+    } else if (code == LV_EVENT_LONG_PRESSED) {
+        // Long-press toggles completion; checkbox auto-toggle is disabled.
+        for (auto &t : tasks) {
+            if (t.obj == obj && t.is_task) {
+                t.checked = !t.checked;
+                if (t.checked) lv_obj_add_state(obj, LV_STATE_CHECKED);
+                else lv_obj_remove_state(obj, LV_STATE_CHECKED);
+                string icon = t.checked ? LV_SYMBOL_OK : LV_SYMBOL_MINUS;
+                string display_text = icon + "  " + t.text;
+                lv_obj_t * label = lv_obj_get_child(obj, 0);
+                if (label) lv_label_set_text(label, display_text.c_str());
+                save_tasks();
+                break;
+            }
+        }
     } else if (code == LV_EVENT_FOCUSED || code == LV_EVENT_DEFOCUSED) {
         lv_obj_t * label = NULL;
         if (lv_obj_has_class(obj, &lv_checkbox_class)) {
@@ -155,7 +173,19 @@ static void add_ta_event_cb(lv_event_t *e) {
 
         if (key == LV_KEY_ENTER) {
             const char *txt = lv_textarea_get_text(ta);
-            if (strlen(txt) > 0) {
+            if (editing_idx >= 0 && editing_idx < (int32_t)tasks.size()) {
+                if (strlen(txt) > 0) {
+                    tasks[editing_idx].text = txt;
+                }
+                size_t focus_idx = (size_t)editing_idx;
+                editing_idx = -1;
+                save_tasks();
+                lv_textarea_set_text(ta, "");
+                ui_tasks_refresh();
+                if (focus_idx < tasks.size() && tasks[focus_idx].obj) {
+                    lv_group_focus_obj(tasks[focus_idx].obj);
+                }
+            } else if (strlen(txt) > 0) {
                 // Add new task
                 TaskItem t;
                 t.is_task = true;
@@ -173,6 +203,16 @@ static void add_ta_event_cb(lv_event_t *e) {
         }
 
         if (key == LV_KEY_ESC) {
+            if (editing_idx >= 0) {
+                size_t focus_idx = (size_t)editing_idx;
+                editing_idx = -1;
+                lv_textarea_set_text(ta, "");
+                if (focus_idx < tasks.size() && tasks[focus_idx].obj) {
+                    lv_group_focus_obj(tasks[focus_idx].obj);
+                }
+                lv_event_stop_processing(e);
+                return;
+            }
             if (menu) {
                 lv_obj_t *bb = lv_menu_get_main_header_back_button(menu);
                 if (bb) lv_obj_send_event(bb, LV_EVENT_CLICKED, NULL);
@@ -303,6 +343,9 @@ void ui_tasks_refresh() {
             if (t.checked) {
                 lv_obj_add_state(t.obj, LV_STATE_CHECKED);
             }
+            // Disable the built-in click-to-toggle. Click opens the editor;
+            // long-press is the explicit gesture for marking complete.
+            lv_obj_remove_flag(t.obj, LV_OBJ_FLAG_CHECKABLE);
             lv_obj_add_event_cb(t.obj, task_event_cb, LV_EVENT_ALL, NULL);
             lv_group_add_obj(lv_group_get_default(), t.obj);
         } else {
@@ -410,6 +453,7 @@ void ui_tasks_exit(lv_obj_t *parent) {
     add_ta = NULL;
     task_container = NULL;
     add_ta_expanded_h = 0;
+    editing_idx = -1;
     tasks.clear();
 }
 
