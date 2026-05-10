@@ -519,7 +519,10 @@ static void journal_key_event_cb(lv_event_t *e)
 
 static std::string parse_filename_to_human(const std::string &filename)
 {
+    /* Listing returns names like "notes/20260418_120530.txt" — skip past any
+     * leading slash and the "notes/" prefix before parsing the timestamp. */
     size_t start = (filename[0] == '/') ? 1 : 0;
+    if (filename.compare(start, 6, "notes/") == 0) start += 6;
     if (filename.length() < start + 15) return filename;
 
     std::string y = filename.substr(start, 4);

@@ -63,7 +63,7 @@ static bool save_content(bool show_error_popup)
         struct tm timeinfo;
         hw_get_date_time(timeinfo);
         char filename[64];
-        snprintf(filename, sizeof(filename), "/%04d%02d%02d_%02d%02d%02d.txt",
+        snprintf(filename, sizeof(filename), "/notes/%04d%02d%02d_%02d%02d%02d.txt",
                  timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
                  timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
         target_path = filename;

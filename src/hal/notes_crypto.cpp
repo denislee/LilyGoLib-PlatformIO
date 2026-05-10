@@ -319,28 +319,36 @@ static bool raw_write(const ProtFile &pf, const uint8_t *buf, size_t len)
 #endif
 }
 
-/* Walk the SD root for protected *.txt files. Mirrors hw_get_sd_txt_files but
- * kept inline so we can reuse the instance lock across the whole scan. */
+/* Walk the SD /notes directory for protected *.txt files. Mirrors
+ * hw_get_sd_txt_files but kept inline so we can reuse the instance lock
+ * across the whole scan. */
 #ifdef ARDUINO
 static void collect_sd_protected(std::vector<ProtFile> &out)
 {
     if (!(HW_SD_ONLINE & hw_get_device_online())) return;
     instance.lockSPI();
-    File root = SD.open("/");
-    if (root && root.isDirectory()) {
-        File f = root.openNextFile();
+    File dir = SD.open("/notes");
+    if (dir && dir.isDirectory()) {
+        File f = dir.openNextFile();
         while (f) {
             if (!f.isDirectory()) {
                 String n = f.name();
-                if (n.endsWith(".txt") &&
-                    notes_crypto_path_is_protected(n.c_str())) {
-                    out.push_back({std::string(n.c_str()), true});
+                if (n.endsWith(".txt")) {
+                    /* Normalize to leaf — SD returns the full path; we want a
+                     * "notes/<leaf>" relative path so the protection check and
+                     * raw_read/raw_write helpers route to /notes consistently. */
+                    int slash = n.lastIndexOf('/');
+                    String leaf = (slash >= 0) ? n.substring(slash + 1) : n;
+                    String rel = String("notes/") + leaf;
+                    if (notes_crypto_path_is_protected(rel.c_str())) {
+                        out.push_back({std::string(rel.c_str()), true});
+                    }
                 }
             }
             f.close();
-            f = root.openNextFile();
+            f = dir.openNextFile();
         }
-        root.close();
+        dir.close();
     }
     bool has_idx = SD.exists("/journal_idx.bin");
     instance.unlockSPI();
@@ -397,14 +405,19 @@ bool notes_crypto_path_is_protected(const char *path)
     if (!path) return false;
     const char *name = lstrip_slash(path);
 
+    /* Journal index lives at the FFat root and stays there because it's
+     * bookkeeping, not a user note. */
     if (strcmp(name, "journal_idx.bin") == 0) return true;
-    /* Only top-level files — subdirectory contents are outside the journal
-     * scope. */
-    if (strchr(name, '/') != nullptr) return false;
-    if (strcmp(name, "tasks.txt") == 0) return false;
 
-    size_t n = strlen(name);
-    if (n > 4 && strcmp(name + n - 4, ".txt") == 0) return true;
+    /* User notes now live one level deep under "notes/". Anything deeper is
+     * outside this app's scope. */
+    if (strncmp(name, "notes/", 6) == 0) {
+        const char *leaf = name + 6;
+        if (strchr(leaf, '/') != nullptr) return false;
+        size_t n = strlen(leaf);
+        return n > 4 && strcmp(leaf + n - 4, ".txt") == 0;
+    }
+
     return false;
 }
 

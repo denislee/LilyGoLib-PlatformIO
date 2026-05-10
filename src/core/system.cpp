@@ -256,8 +256,12 @@ void System::setupGlobalUI() {
 
         bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
         if (self._statSDLabel) {
-            if (sd_online) lv_obj_clear_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
-            else           lv_obj_add_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
+            if (sd_online) {
+                lv_obj_add_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_clear_flag(self._statSDLabel, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_style_text_color(self._statSDLabel, lv_palette_main(LV_PALETTE_RED), 0);
+            }
         }
 
         // Radio icons have three states each:

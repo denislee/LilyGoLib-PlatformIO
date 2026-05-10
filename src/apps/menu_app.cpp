@@ -86,6 +86,26 @@ struct WifiGatedTile {
 static std::vector<WifiGatedTile> s_wifi_gated;
 static int s_wifi_gated_last_state = -1;  // -1 = not yet applied
 
+static ui_loading_t s_sync_loader;
+static lv_timer_t*  s_sync_timer = nullptr;
+static uint32_t     s_sync_deadline_ms = 0;
+
+static void sync_poll_tick(lv_timer_t *t) {
+    (void)t;
+    int status = hw_get_time_sync_status();
+    if (status == 1) {
+        lv_timer_del(s_sync_timer);
+        s_sync_timer = nullptr;
+        ui_loading_close(&s_sync_loader);
+        ui_msg_pop_up("Time Sync", "Time synchronized successfully!");
+    } else if (lv_tick_get() > s_sync_deadline_ms) {
+        lv_timer_del(s_sync_timer);
+        s_sync_timer = nullptr;
+        ui_loading_close(&s_sync_loader);
+        ui_msg_pop_up("Time Sync", "Time sync timed out.");
+    }
+}
+
 static void format_badge_text(int n, char *buf, size_t cap) {
     if (n > 99) snprintf(buf, cap, "99+");
     else        snprintf(buf, cap, "%d", n);
@@ -497,6 +517,8 @@ static void glance_click_cb(lv_event_t *e) {
 static std::vector<lv_obj_t*> s_media_buttons;  // tracked for visibility only
 static lv_obj_t* s_volume_btn = nullptr;
 static lv_obj_t* s_volume_icon = nullptr;
+static lv_obj_t* s_wifi_btn = nullptr;  // WiFi quick-toggle pill, for 'w' shortcut
+static lv_obj_t* s_net_btn = nullptr;   // Internet-check pill, for 'p' shortcut
 static lv_timer_t* s_media_visibility_timer = nullptr;
 static bool s_media_last_visible = false;
 
@@ -651,6 +673,61 @@ static void volume_event_cb(lv_event_t* e) {
     }
 }
 
+// Home-screen single-letter shortcuts. Attached to every focusable object on
+// the home screen below; LV_EVENT_KEY only fires on the focused widget, so
+// this is dormant elsewhere in the app.
+//   d → light sleep
+//   w → toggle WiFi
+//   p → run internet ping test (same as the refresh pill)
+//   n → open Notes (Editor)
+//   t → open Tasks
+static void launch_app_from_home(const char* appName) {
+    hw_feedback();
+    core::System::getInstance().hideMenu();
+    core::AppManager::getInstance().switchApp(
+        appName, core::System::getInstance().getAppPanel());
+}
+
+static void home_shortcut_key_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_KEY) return;
+    uint32_t key = lv_event_get_key(e);
+    if (key == 'd' || key == 'D') {
+        hw_feedback();
+        hw_light_sleep();
+    } else if (key == 'w' || key == 'W') {
+        bool new_state = !hw_get_wifi_enable();
+        hw_set_wifi_enable(new_state);
+        if (s_wifi_btn) apply_toggle_style(s_wifi_btn, new_state);
+        hw_feedback();
+    } else if (key == 'p' || key == 'P') {
+        if (s_net_btn) lv_obj_send_event(s_net_btn, LV_EVENT_CLICKED, nullptr);
+    } else if (key == 'n' || key == 'N') {
+        launch_app_from_home("Editor");
+    } else if (key == 't' || key == 'T') {
+        launch_app_from_home("Tasks");
+    } else if (key == 'r' || key == 'R') {
+        launch_app_from_home("Recorder");
+    } else if (key == 's' || key == 'S') {
+        launch_app_from_home("Settings");
+    } else if (key == 'z' || key == 'Z') {
+        hw_feedback();
+        if (hw_get_wifi_connected()) {
+            if (s_sync_timer) {
+                return; // Already syncing
+            }
+            if (hw_start_time_sync_ntp()) {
+                ui_loading_open(&s_sync_loader, "Time Sync", "Syncing from internet...");
+                s_sync_deadline_ms = lv_tick_get() + 20000; // 20s deadline
+                s_sync_timer = lv_timer_create(sync_poll_tick, 500, nullptr);
+            } else {
+                ui_msg_pop_up("Time Sync", "Failed to start sync");
+            }
+        } else {
+            ui_msg_pop_up("Time Sync", "WiFi not connected");
+        }
+    }
+}
+
 void tile_click_cb(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     const HomeItem* item = (const HomeItem*)lv_event_get_user_data(e);
@@ -685,6 +762,8 @@ void MenuApp::onStop() {
     s_media_buttons.clear();
     s_volume_btn = nullptr;
     s_volume_icon = nullptr;
+    s_wifi_btn = nullptr;
+    s_net_btn = nullptr;
     s_media_last_visible = false;
     s_wifi_gated.clear();
     s_wifi_gated_last_state = -1;
@@ -712,6 +791,8 @@ void MenuApp::onStart(lv_obj_t* parent) {
     s_media_buttons.clear();
     s_volume_btn = nullptr;
     s_volume_icon = nullptr;
+    s_wifi_btn = nullptr;
+    s_net_btn = nullptr;
     s_media_last_visible = false;
     s_wifi_gated.clear();
     s_wifi_gated_last_state = -1;
@@ -831,6 +912,7 @@ void MenuApp::onStart(lv_obj_t* parent) {
         lv_obj_add_event_cb(btn, quick_toggle_click_cb, LV_EVENT_CLICKED,
                             (void*)&qt);
         if (grp) lv_group_add_obj(grp, btn);
+        if (qt.getter == hw_get_wifi_enable) s_wifi_btn = btn;
     }
 
     // --- Internet check shortcut ---
@@ -843,6 +925,7 @@ void MenuApp::onStart(lv_obj_t* parent) {
         lv_obj_add_event_cb(net_btn, internet_check_click_cb,
                             LV_EVENT_CLICKED, nullptr);
         if (grp) lv_group_add_obj(grp, net_btn);
+        s_net_btn = net_btn;
     }
 
     // --- Settings shortcut ---
@@ -1046,6 +1129,19 @@ void MenuApp::onStart(lv_obj_t* parent) {
     if (!s_media_buttons.empty() || !s_wifi_gated.empty()) {
         s_media_visibility_timer =
             lv_timer_create(media_visibility_tick, 1000, nullptr);
+    }
+
+    // Wire the 'd' → light-sleep shortcut on every focusable home object.
+    // LV_EVENT_KEY fires on the focused widget only, so attaching to each
+    // group member is the way to make the shortcut work regardless of which
+    // tile/pill the user happens to be sitting on.
+    if (grp) {
+        uint32_t n = lv_group_get_obj_count(grp);
+        for (uint32_t i = 0; i < n; i++) {
+            lv_obj_t* o = lv_group_get_obj_by_index(grp, i);
+            if (o) lv_obj_add_event_cb(o, home_shortcut_key_cb,
+                                       LV_EVENT_KEY, nullptr);
+        }
     }
 }
 

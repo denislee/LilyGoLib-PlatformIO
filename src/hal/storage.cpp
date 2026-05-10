@@ -27,6 +27,27 @@ static bool content_has_salted_magic(const char *buf, size_t len)
     return len >= 8 && memcmp(buf, "Salted__", 8) == 0;
 }
 
+/* Notes app .txt files live under "/notes" on both internal FFat and the SD
+ * card root. tasks.txt and journal_idx.bin remain at the FFat root because
+ * they are bookkeeping files, not user notes. */
+static const char *NOTES_DIR    = "/notes";
+static const char *NOTES_PREFIX = "notes/";
+
+#ifdef ARDUINO
+/* Cheap on every save — FFat.mkdir is a no-op when the entry exists. The SD
+ * branch only fires when the card is mounted; without a card the FFat copy
+ * is the user's only home. */
+static void ensure_notes_dir()
+{
+    if (!FFat.exists(NOTES_DIR)) FFat.mkdir(NOTES_DIR);
+    if (HW_SD_ONLINE & hw_get_device_online()) {
+        instance.lockSPI();
+        if (!SD.exists(NOTES_DIR)) SD.mkdir(NOTES_DIR);
+        instance.unlockSPI();
+    }
+}
+#endif
+
 /* Build a normalized "/path" into a fixed stack buffer. Avoids the heap
  * allocs of Arduino's `String("/") + String(path)` pattern in fs hot paths
  * (save/delete/read called per UI op, sometimes in directory loops). */
@@ -689,11 +710,10 @@ void hw_get_txt_files(std::vector<std::string> &list)
     std::vector<FileInfo> file_infos;
     if (HW_SD_ONLINE & hw_get_device_online()) {
         instance.lockSPI();
-        list_files(file_infos, SD, "/", ".txt");
+        list_files(file_infos, SD, NOTES_DIR, ".txt");
         instance.unlockSPI();
     }
-    list_files(file_infos, FFat, "/", ".txt");
-    // ... (rest remains same)
+    list_files(file_infos, FFat, NOTES_DIR, ".txt");
 
     std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo& a, const FileInfo& b) {
         if (a.time != b.time) {
@@ -705,11 +725,11 @@ void hw_get_txt_files(std::vector<std::string> &list)
     });
 
     for (const auto& fi : file_infos) {
-        list.push_back(fi.name);
+        list.push_back(NOTES_PREFIX + fi.name);
     }
 #else
-    list.push_back("test1.txt");
-    list.push_back("test2.txt");
+    list.push_back("notes/test1.txt");
+    list.push_back("notes/test2.txt");
 #endif
 }
 
@@ -718,7 +738,7 @@ void hw_get_internal_txt_files(std::vector<std::string> &list)
     list.clear();
 #ifdef ARDUINO
     std::vector<FileInfo> file_infos;
-    list_files(file_infos, FFat, "/", ".txt");
+    list_files(file_infos, FFat, NOTES_DIR, ".txt");
 
     std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo& a, const FileInfo& b) {
         if (a.time != b.time) {
@@ -728,11 +748,11 @@ void hw_get_internal_txt_files(std::vector<std::string> &list)
     });
 
     for (const auto& fi : file_infos) {
-        list.push_back(fi.name);
+        list.push_back(NOTES_PREFIX + fi.name);
     }
 #else
-    list.push_back("internal1.txt");
-    list.push_back("internal2.txt");
+    list.push_back("notes/internal1.txt");
+    list.push_back("notes/internal2.txt");
 #endif
 }
 
@@ -743,7 +763,7 @@ void hw_get_sd_txt_files(std::vector<std::string> &list)
     if (HW_SD_ONLINE & hw_get_device_online()) {
         std::vector<FileInfo> file_infos;
         instance.lockSPI();
-        list_files(file_infos, SD, "/", ".txt");
+        list_files(file_infos, SD, NOTES_DIR, ".txt");
         instance.unlockSPI();
 
         std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo & a, const FileInfo & b) {
@@ -752,12 +772,12 @@ void hw_get_sd_txt_files(std::vector<std::string> &list)
         });
 
         for (const auto &fi : file_infos) {
-            list.push_back(fi.name);
+            list.push_back(NOTES_PREFIX + fi.name);
         }
     }
 #else
-    list.push_back("sd1.txt");
-    list.push_back("sd2.txt");
+    list.push_back("notes/sd1.txt");
+    list.push_back("notes/sd2.txt");
 #endif
 }
 
@@ -864,16 +884,18 @@ void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
 uint32_t hw_count_internal_files()
 {
 #ifdef ARDUINO
+    /* Status-bar indicator counts user notes (under /notes), not bookkeeping
+     * files at the FFat root like tasks.txt or journal_idx.bin. */
     uint32_t count = 0;
-    File root = FFat.open("/");
-    if (!root || !root.isDirectory()) return 0;
-    File entry = root.openNextFile();
+    File dir = FFat.open(NOTES_DIR);
+    if (!dir || !dir.isDirectory()) return 0;
+    File entry = dir.openNextFile();
     while (entry) {
         if (!entry.isDirectory()) count++;
         entry.close();
-        entry = root.openNextFile();
+        entry = dir.openNextFile();
     }
-    root.close();
+    dir.close();
     return count;
 #else
     return 4;
@@ -938,15 +960,7 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
 
     if (cb) cb(0, 0, "Scanning internal storage...");
     std::vector<FileInfo> infos;
-    list_files(infos, FFat, "/", ".txt");
-
-    // tasks.txt is a single rolling file managed by the Tasks app; it must
-    // not be evicted regardless of age.
-    infos.erase(std::remove_if(infos.begin(), infos.end(),
-                               [](const FileInfo &fi) {
-                                   return fi.name == "/tasks.txt" || fi.name == "tasks.txt";
-                               }),
-                infos.end());
+    list_files(infos, FFat, NOTES_DIR, ".txt");
 
     if (infos.size() < kEvictThreshold) {
         if (cb) cb(0, 0, "No eviction needed.");
@@ -963,6 +977,7 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
         if (cb) cb(0, 0, "SD unavailable; eviction skipped.");
         return;
     }
+    ensure_notes_dir();
 
     // Sort by time ascending (oldest first) so the batch we move out is the
     // least-recently-touched notes.
@@ -980,8 +995,10 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
     bool hub_on = hal::hub_is_enabled();
 
     for (size_t i = 0; i < total_to_move; ++i) {
-        String path = infos[i].name.c_str();
-        if (!path.startsWith("/")) path = "/" + path;
+        // list_files returns leaf names; resolve back to absolute paths under
+        // /notes for both the read (FFat) and write (SD) sides.
+        String leaf = infos[i].name.c_str();
+        String path = String(NOTES_DIR) + "/" + leaf;
 
         if (cb) cb((int)i, (int)total_to_move, ("Moving to SD: " + path).c_str());
 
@@ -1057,6 +1074,12 @@ bool hw_save_preferred_file(const char *path, const char *content, std::string *
     if (!encode_for_write(path, content, payload, error)) return false;
 
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
+    /* Notes app saves land under /notes/ on both filesystems; create the
+     * directory lazily so the editor never has to. tasks.txt and the journal
+     * index are at the root and don't need it. */
+    if (str.startsWith(NOTES_DIR) && str.charAt(strlen(NOTES_DIR)) == '/') {
+        ensure_notes_dir();
+    }
     bool ok_int = false;
     {
         File f = FFat.open(str, "w");
@@ -1099,17 +1122,17 @@ void hw_get_preferred_txt_files(std::vector<std::string> &list)
     list.clear();
 #ifdef ARDUINO
     std::vector<FileInfo> infos;
-    
+
     // Scan Internal
-    list_files(infos, FFat, "/", ".txt");
-    
+    list_files(infos, FFat, NOTES_DIR, ".txt");
+
     // Scan SD if available
     if (HW_SD_ONLINE & hw_get_device_online()) {
         std::vector<FileInfo> sd_infos;
         instance.lockSPI();
-        list_files(sd_infos, SD, "/", ".txt");
+        list_files(sd_infos, SD, NOTES_DIR, ".txt");
         instance.unlockSPI();
-        
+
         // Merge SD into infos, avoiding duplicates (Internal wins)
         for (const auto &sdi : sd_infos) {
             bool found = false;
@@ -1132,11 +1155,11 @@ void hw_get_preferred_txt_files(std::vector<std::string> &list)
     });
 
     for (const auto &fi : infos) {
-        list.push_back(fi.name);
+        list.push_back(NOTES_PREFIX + fi.name);
     }
 #else
-    list.push_back("preferred1.txt");
-    list.push_back("preferred2.txt");
+    list.push_back("notes/preferred1.txt");
+    list.push_back("notes/preferred2.txt");
 #endif
 }
 
@@ -1217,17 +1240,17 @@ void hw_get_preferred_txt_files_info(std::vector<std::pair<std::string, uint32_t
     list.clear();
 #ifdef ARDUINO
     std::vector<FileInfo> infos;
-    
+
     // Scan Internal
-    list_files(infos, FFat, "/", ".txt", cb);
-    
+    list_files(infos, FFat, NOTES_DIR, ".txt", cb);
+
     // Scan SD if available
     if (HW_SD_ONLINE & hw_get_device_online()) {
         std::vector<FileInfo> sd_infos;
         instance.lockSPI();
-        list_files(sd_infos, SD, "/", ".txt", cb);
+        list_files(sd_infos, SD, NOTES_DIR, ".txt", cb);
         instance.unlockSPI();
-        
+
         // Merge SD into infos, avoiding duplicates (Internal wins)
         for (const auto &sdi : sd_infos) {
             bool found = false;
@@ -1245,7 +1268,7 @@ void hw_get_preferred_txt_files_info(std::vector<std::pair<std::string, uint32_t
 
     list.reserve(infos.size());
     for (const auto &fi : infos) {
-        list.emplace_back(fi.name, (uint32_t)fi.time);
+        list.emplace_back(NOTES_PREFIX + fi.name, (uint32_t)fi.time);
     }
 #endif
 }
