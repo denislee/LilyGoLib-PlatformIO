@@ -677,6 +677,20 @@ void hw_low_power_loop()
 #endif
 }
 
+#if defined(ARDUINO) && defined(ARDUINO_T_LORA_PAGER)
+extern "C" void lilygo_request_fake_sleep_toggle();
+#endif
+
+void hw_fake_sleep_toggle()
+{
+#if defined(ARDUINO) && defined(ARDUINO_T_LORA_PAGER)
+    notes_crypto_lock();
+    lilygo_request_fake_sleep_toggle();
+#else
+    hw_low_power_loop();
+#endif
+}
+
 void hw_set_cpu_freq(uint32_t mhz)
 {
 #ifdef ARDUINO

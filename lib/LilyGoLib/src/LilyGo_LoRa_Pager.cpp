@@ -1285,6 +1285,40 @@ static bool getButtonState()
     return false;
 }
 
+// File-scope so external callers (e.g. a keyboard shortcut) can request the
+// same fake-sleep toggle that a center-button long-press does, and the state
+// stays in sync no matter which path drove the transition.
+static bool s_display_off = false;
+static uint8_t s_saved_brightness = 127;
+static volatile bool s_request_fake_sleep_toggle = false;
+
+static void perform_fake_sleep_toggle()
+{
+    if (!s_display_off) {
+        s_saved_brightness = instance.getBrightness();
+        if (s_saved_brightness == 0) s_saved_brightness = 127;
+        instance.setBrightness(0);
+        instance.sleepDisplay();
+        s_display_off = true;
+        ui_lock();
+        ui_pause_timers();
+        ui_request_editor_switch();
+        ui_unlock();
+    } else {
+        instance.wakeupDisplay();
+        instance.setBrightness(s_saved_brightness);
+        s_display_off = false;
+        ui_lock();
+        ui_resume_timers();
+        ui_unlock();
+    }
+}
+
+extern "C" void lilygo_request_fake_sleep_toggle()
+{
+    s_request_fake_sleep_toggle = true;
+}
+
 static void rotaryTask(void *p)
 {
     RotaryMsg_t msg;
@@ -1293,7 +1327,6 @@ static void rotaryTask(void *p)
     bool btn_prev_state = HIGH;
     bool long_press_triggered = false;
     bool long_press_active = false;
-    static bool display_off = false;
 
     instance.rotary.begin();
     pinMode(ROTARY_C, INPUT_PULLUP);
@@ -1311,7 +1344,7 @@ static void rotaryTask(void *p)
         
         // Rising edge (Released)
         if (btn_curr_state == HIGH && btn_prev_state == LOW) {
-            if (!long_press_triggered && !display_off) {
+            if (!long_press_triggered && !s_display_off) {
                 // It was a short press/click, only allow if display is ON
                 msg.centerBtnPressed = true;
             }
@@ -1322,34 +1355,21 @@ static void rotaryTask(void *p)
         // Held
         if (btn_curr_state == LOW && !long_press_triggered) {
             if (millis() - press_time > 1000) {
-                // Long press detected
-                static uint8_t last_brightness = 127;
-                if (!display_off) {
-                    last_brightness = instance.getBrightness();
-                    if (last_brightness == 0) last_brightness = 127;
-                    instance.setBrightness(0);
-                    instance.sleepDisplay();
-                    display_off = true;
-                    ui_lock();
-                    ui_pause_timers();
-                    ui_request_editor_switch();
-                    ui_unlock();
-                } else {
-                    instance.wakeupDisplay();
-                    instance.setBrightness(last_brightness);
-                    display_off = false;
-                    ui_lock();
-                    ui_resume_timers();
-                    ui_unlock();
-                }
+                perform_fake_sleep_toggle();
                 long_press_triggered = true;
             }
         }
-        
+
+        // External request (e.g. 'l' keyboard shortcut) — same toggle path.
+        if (s_request_fake_sleep_toggle) {
+            s_request_fake_sleep_toggle = false;
+            perform_fake_sleep_toggle();
+        }
+
         btn_prev_state = btn_curr_state;
 
         uint8_t result = instance.rotary.process();
-        if (display_off) {
+        if (s_display_off) {
             result = 0; // Ignore rotary scroll events when display is off
         }
         

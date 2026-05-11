@@ -19,11 +19,9 @@ static void deferred_switch_timer_cb(lv_timer_t *t)
 {
     editor_auto_edit = false;
 
-    core::AppManager::getInstance().switchApp("Editor", app_panel);
+    // Return to the home menu instead of the note app
+    core::System::getInstance().showMenu();
 
-    if (core::System::getInstance().isInMenu()) {
-        menu_hidden();
-    }
     lv_display_trigger_activity(NULL);
 
     ui_pause_timers();

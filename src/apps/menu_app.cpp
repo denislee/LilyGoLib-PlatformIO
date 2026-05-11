@@ -201,24 +201,25 @@ static void settings_click_cb(lv_event_t* e) {
 // thread for up to 3 s so the colour change has to be flushed with
 // lv_refr_now() to be visible — then a result popup reports rtt or error.
 
-static void internet_check_click_cb(lv_event_t* e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    lv_obj_t* btn = (lv_obj_t*)lv_event_get_target(e);
-    hw_feedback();
-
+// Runs a TCP probe to 1.1.1.1:53 and shows a result popup. Optional `btn`
+// is tinted accent while the probe is in flight (ping blocks the LV thread
+// for up to 3 s, so we lv_refr_now() to flush the colour change first).
+static void run_internet_check(lv_obj_t* btn) {
     if (!hw_get_wifi_connected()) {
         ui_result_show("Internet", "Wi-Fi is not connected.", nullptr, 0);
         return;
     }
 
-    apply_toggle_style(btn, true);
-    lv_refr_now(NULL);
+    if (btn) {
+        apply_toggle_style(btn, true);
+        lv_refr_now(NULL);
+    }
 
     uint32_t rtt_ms = 0;
     std::string err;
     bool ok = hw_ping_internet("1.1.1.1", 53, 3000, &rtt_ms, &err);
 
-    apply_toggle_style(btn, false);
+    if (btn) apply_toggle_style(btn, false);
 
     if (ok) {
         char rtt_buf[16];
@@ -234,6 +235,12 @@ static void internet_check_click_cb(lv_event_t* e) {
                        err.empty() ? "Failed" : err.c_str(),
                        nullptr, 0);
     }
+}
+
+static void internet_check_click_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    hw_feedback();
+    run_internet_check((lv_obj_t*)lv_event_get_target(e));
 }
 
 // ---- Glance overlay ------------------------------------------------------
@@ -518,7 +525,7 @@ static std::vector<lv_obj_t*> s_media_buttons;  // tracked for visibility only
 static lv_obj_t* s_volume_btn = nullptr;
 static lv_obj_t* s_volume_icon = nullptr;
 static lv_obj_t* s_wifi_btn = nullptr;  // WiFi quick-toggle pill, for 'w' shortcut
-static lv_obj_t* s_net_btn = nullptr;   // Internet-check pill, for 'p' shortcut
+static lv_obj_t* s_bt_btn = nullptr;    // BT quick-toggle pill, for 'b' shortcut
 static lv_timer_t* s_media_visibility_timer = nullptr;
 static bool s_media_last_visible = false;
 
@@ -676,7 +683,7 @@ static void volume_event_cb(lv_event_t* e) {
 // Home-screen single-letter shortcuts. Attached to every focusable object on
 // the home screen below; LV_EVENT_KEY only fires on the focused widget, so
 // this is dormant elsewhere in the app.
-//   d → light sleep
+//   d → low-power loop (real ESP lightSleep / sleep, per sleep_mode)
 //   w → toggle WiFi
 //   p → run internet ping test (same as the refresh pill)
 //   n → open Notes (Editor)
@@ -693,14 +700,20 @@ static void home_shortcut_key_cb(lv_event_t* e) {
     uint32_t key = lv_event_get_key(e);
     if (key == 'd' || key == 'D') {
         hw_feedback();
-        hw_light_sleep();
+        hw_low_power_loop();
     } else if (key == 'w' || key == 'W') {
         bool new_state = !hw_get_wifi_enable();
         hw_set_wifi_enable(new_state);
         if (s_wifi_btn) apply_toggle_style(s_wifi_btn, new_state);
         hw_feedback();
+    } else if (key == 'b' || key == 'B') {
+        bool new_state = !hw_get_bt_enable();
+        hw_set_bt_enable(new_state);
+        if (s_bt_btn) apply_toggle_style(s_bt_btn, new_state);
+        hw_feedback();
     } else if (key == 'p' || key == 'P') {
-        if (s_net_btn) lv_obj_send_event(s_net_btn, LV_EVENT_CLICKED, nullptr);
+        hw_feedback();
+        run_internet_check(nullptr);
     } else if (key == 'n' || key == 'N') {
         launch_app_from_home("Editor");
     } else if (key == 't' || key == 'T') {
@@ -763,7 +776,7 @@ void MenuApp::onStop() {
     s_volume_btn = nullptr;
     s_volume_icon = nullptr;
     s_wifi_btn = nullptr;
-    s_net_btn = nullptr;
+    s_bt_btn = nullptr;
     s_media_last_visible = false;
     s_wifi_gated.clear();
     s_wifi_gated_last_state = -1;
@@ -792,7 +805,7 @@ void MenuApp::onStart(lv_obj_t* parent) {
     s_volume_btn = nullptr;
     s_volume_icon = nullptr;
     s_wifi_btn = nullptr;
-    s_net_btn = nullptr;
+    s_bt_btn = nullptr;
     s_media_last_visible = false;
     s_wifi_gated.clear();
     s_wifi_gated_last_state = -1;
@@ -863,18 +876,6 @@ void MenuApp::onStart(lv_obj_t* parent) {
         return btn;
     };
 
-    // --- Glance shortcut ---
-    // Pinned to the very front of the strip so it's always the first pill,
-    // regardless of whether the media controls below are currently visible.
-    // Styled like the muted on/off pills since it doesn't carry on/off state.
-    {
-        lv_obj_t* glance_btn = make_pill(toggle_bar, LV_SYMBOL_EYE_OPEN, 18);
-        apply_toggle_style(glance_btn, false);
-        lv_obj_add_event_cb(glance_btn, glance_click_cb,
-                            LV_EVENT_CLICKED, nullptr);
-        if (grp) lv_group_add_obj(grp, glance_btn);
-    }
-
     // --- Media pills (play/pause + volume) ---
     // Sit just after the glance pill, created hidden; a 1 s timer shows/hides
     // them based on BLE HID pairing state.
@@ -913,19 +914,7 @@ void MenuApp::onStart(lv_obj_t* parent) {
                             (void*)&qt);
         if (grp) lv_group_add_obj(grp, btn);
         if (qt.getter == hw_get_wifi_enable) s_wifi_btn = btn;
-    }
-
-    // --- Internet check shortcut ---
-    // Sits between the radios and Settings — a momentary action pill (not a
-    // toggle), styled muted at rest like Glance/Settings. Click runs a TCP
-    // probe to Cloudflare DNS and reports the result.
-    {
-        lv_obj_t* net_btn = make_pill(toggle_bar, LV_SYMBOL_REFRESH, 18);
-        apply_toggle_style(net_btn, false);
-        lv_obj_add_event_cb(net_btn, internet_check_click_cb,
-                            LV_EVENT_CLICKED, nullptr);
-        if (grp) lv_group_add_obj(grp, net_btn);
-        s_net_btn = net_btn;
+        if (qt.getter == hw_get_bt_enable) s_bt_btn = btn;
     }
 
     // --- Settings shortcut ---
@@ -1131,7 +1120,8 @@ void MenuApp::onStart(lv_obj_t* parent) {
             lv_timer_create(media_visibility_tick, 1000, nullptr);
     }
 
-    // Wire the 'd' → light-sleep shortcut on every focusable home object.
+    // Wire the home-screen letter shortcuts ('d'/'l'/'w'/'b'/'p'/...) on every
+    // focusable object — LV_EVENT_KEY fires only on the focused widget.
     // LV_EVENT_KEY fires on the focused widget only, so attaching to each
     // group member is the way to make the shortcut work regardless of which
     // tile/pill the user happens to be sitting on.

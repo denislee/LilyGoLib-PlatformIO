@@ -48,6 +48,10 @@ void hw_light_sleep();
 void hw_power_down_all();
 void hw_power_up_all();
 void hw_low_power_loop();
+// Fake-sleep toggle: same path as the T-LoRa-Pager scroll-wheel long-press
+// (sleepDisplay + ui_pause_timers, CPU keeps running). On boards without a
+// rotary encoder this falls through to hw_low_power_loop().
+void hw_fake_sleep_toggle();
 void hw_set_cpu_freq(uint32_t mhz);
 
 void hw_feedback();
