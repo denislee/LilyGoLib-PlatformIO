@@ -2,6 +2,18 @@
  * @file      ui_audio_notes.cpp
  * @brief     Audio "mental notes" app — record voice memos to SD, play them
  *            back, delete. All files live in /mental_notes/ on the SD card.
+ *
+ * State reset on onStop (ui_notes_exit):
+ *   - lv_obj_t*   menu, quit_btn   — destroyed via lv_obj_del / del_async
+ *   - lv_obj_t*   main_page        — nulled (was child of menu, destroyed above)
+ *   - lv_timer_t* tick_timer       — killed via kill_tick_timer()
+ *   - active recording             — flushed via finalize_recording()
+ *   - active playback              — stopped via hw_set_play_stop()
+ *   - notes / selected_* / pending_rec_path — cleared
+ *   - clear_view_refs()            — nulls per-view widget caches
+ * If you add a new cached LVGL pointer, timer handle, or hardware session,
+ * add it here AND extend ui_notes_exit() — leaks survive across app
+ * switches and surface as ghost widgets / dead callback ptrs.
  */
 #include "../ui_define.h"
 #include "app_registry.h"

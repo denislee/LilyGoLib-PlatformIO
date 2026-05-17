@@ -9,6 +9,7 @@
  */
 #include "../ui_define.h"
 #include "../ui_list_picker.h"
+#include "../hal/gps_time_sync.h"
 #include "settings_internal.h"
 
 #include <ctime>
@@ -25,6 +26,7 @@ typedef struct {
     lv_obj_t *tz_label;      // shows the currently-selected IANA timezone
     lv_timer_t *sync_timer;  // poll timer while a sync is in progress
     uint32_t sync_deadline_ms;
+    lv_timer_t *gps_timer;   // polls GPS NMEA + status during a GPS sync
 } datetime_setup_t;
 
 static datetime_setup_t dt_setup;
@@ -41,9 +43,19 @@ static void sync_stop_timer()
     }
 }
 
+static void gps_stop_timer()
+{
+    if (dt_setup.gps_timer) {
+        lv_timer_del(dt_setup.gps_timer);
+        dt_setup.gps_timer = nullptr;
+    }
+    hw_stop_time_sync_gps();
+}
+
 void reset_state()
 {
     sync_stop_timer();
+    gps_stop_timer();
     dt_setup.sync_status = nullptr;
     dt_setup.tz_label    = nullptr;
     dt_setup.year = dt_setup.mon = dt_setup.day = nullptr;
@@ -193,6 +205,48 @@ static void sync_time_cb(lv_event_t *)
     sync_set_status("Syncing...", UI_COLOR_ACCENT);
     dt_setup.sync_deadline_ms = lv_tick_get() + 15000;
     dt_setup.sync_timer = lv_timer_create(sync_poll_cb, 300, nullptr);
+}
+
+// --- GPS sync ------------------------------------------------------------
+// Independent from NTP: turns on the GPS rail (transiently if the user
+// hasn't enabled it), waits for the first valid date+time fix from NMEA,
+// and writes the RTC. Wall-clock conversion uses the same POSIX TZ rule
+// the NTP path uses, so picking a different timezone applies here too.
+static void gps_sync_poll_cb(lv_timer_t *t)
+{
+    (void)t;
+    hw_pump_time_sync_gps();
+    int s = hw_get_time_sync_gps_status();
+    if (s == 1) {
+        gps_stop_timer();
+        refresh_datetime_spinboxes();
+        sync_set_status(LV_SYMBOL_OK " GPS synced",
+                        lv_palette_main(LV_PALETTE_GREEN));
+    } else if (s == -1) {
+        gps_stop_timer();
+        sync_set_status("GPS sync timed out (no fix?)",
+                        lv_palette_main(LV_PALETTE_RED));
+    } else if (s == -2) {
+        gps_stop_timer();
+        sync_set_status("GPS not supported on this build",
+                        lv_palette_main(LV_PALETTE_RED));
+    }
+}
+
+static void gps_sync_cb(lv_event_t *)
+{
+    sync_stop_timer();
+    gps_stop_timer();
+
+    if (!hw_start_time_sync_gps()) {
+        sync_set_status("GPS sync unavailable",
+                        lv_palette_main(LV_PALETTE_RED));
+        return;
+    }
+    sync_set_status("Waiting for GPS fix...", UI_COLOR_ACCENT);
+    // 200 ms pump is fast enough that Serial1's 256B FIFO never overflows
+    // at 38400 baud (≈4 KB/s) while still keeping the status reactive.
+    dt_setup.gps_timer = lv_timer_create(gps_sync_poll_cb, 200, nullptr);
 }
 
 // --- Timezone picker -----------------------------------------------------
@@ -362,6 +416,16 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
     lv_obj_center(sync_label);
     lv_obj_add_event_cb(sync_btn, sync_time_cb, LV_EVENT_CLICKED, nullptr);
     register_subpage_group_obj(sub_page, sync_btn);
+
+    // GPS sync sits in the same card so its status piggybacks on the
+    // shared sync_status label below.
+    lv_obj_t *gps_btn = lv_btn_create(sync_card);
+    lv_obj_set_width(gps_btn, LV_PCT(100));
+    lv_obj_t *gps_label = lv_label_create(gps_btn);
+    lv_label_set_text(gps_label, LV_SYMBOL_GPS "  Sync from GPS");
+    lv_obj_center(gps_label);
+    lv_obj_add_event_cb(gps_btn, gps_sync_cb, LV_EVENT_CLICKED, nullptr);
+    register_subpage_group_obj(sub_page, gps_btn);
 
     // Status line grows in place below the button so the card doesn't jump.
     dt_setup.sync_status = lv_label_create(sync_card);

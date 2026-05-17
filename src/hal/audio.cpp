@@ -5,6 +5,7 @@
 #include "audio.h"
 #include "internal.h"
 #include "system.h"
+#include "../core/spi_lock.h"
 
 #ifdef ARDUINO
 #include <math.h>
@@ -181,10 +182,8 @@ struct mp3_file_ctx { File *f; bool sd_locked; };
 static int mp3_fill_file(uint8_t *dst, size_t maxlen, void *ctx)
 {
     auto *fc = (mp3_file_ctx *)ctx;
-    if (fc->sd_locked) instance.lockSPI();
-    int n = (int)fc->f->read(dst, maxlen);
-    if (fc->sd_locked) instance.unlockSPI();
-    return n;
+    core::MaybeSpiLock lock(fc->sd_locked);
+    return (int)fc->f->read(dst, maxlen);
 }
 
 #if defined(USING_AUDIO_CODEC)
@@ -212,14 +211,12 @@ static void hw_sd_play(audio_source_type_t source, const char *filename)
     File f;
 
     if (sd_locked) {
-        instance.lockSPI();
+        core::ScopedSpiLock lock;
         f = SD.open(path);
         if (!f) {
             log_e("SD Open %s failed!", filename);
-            instance.unlockSPI();
             return;
         }
-        instance.unlockSPI();
     } else {
         f = FFat.open(path);
         if (!f) {
@@ -230,9 +227,8 @@ static void hw_sd_play(audio_source_type_t source, const char *filename)
 
     if (f.size() == 0) {
         log_e("File %s size is 0!", filename);
-        if (sd_locked) instance.lockSPI();
+        core::MaybeSpiLock lock(sd_locked);
         f.close();
-        if (sd_locked) instance.unlockSPI();
         return;
     }
 
@@ -240,9 +236,10 @@ static void hw_sd_play(audio_source_type_t source, const char *filename)
     mp3_file_ctx ctx{&f, sd_locked};
     play_mp3_with_filler(mp3_fill_file, &ctx);
 
-    if (sd_locked) instance.lockSPI();
-    f.close();
-    if (sd_locked) instance.unlockSPI();
+    {
+        core::MaybeSpiLock lock(sd_locked);
+        f.close();
+    }
 }
 
 #if defined(USING_AUDIO_CODEC)
@@ -253,35 +250,27 @@ static void playWAV_sd(const char *filename)
 {
     char path[128];
     snprintf(path, sizeof(path), "/%s", filename);
-    instance.lockSPI();
-    File f = SD.open(path);
-    if (!f) {
-        instance.unlockSPI();
-        return;
+    File f;
+    {
+        core::ScopedSpiLock lock;
+        f = SD.open(path);
+        if (!f) return;
+        if (f.size() < 44) { f.close(); return; }
+        if (!f.seek(44))   { f.close(); return; }
     }
-    if (f.size() < 44) {
+
+    auto close_with_lock = [&] {
+        core::ScopedSpiLock lock;
         f.close();
-        instance.unlockSPI();
-        return;
-    }
-    if (!f.seek(44)) {
-        f.close();
-        instance.unlockSPI();
-        return;
-    }
-    instance.unlockSPI();
+    };
 
     if (!(HW_CODEC_ONLINE & hw_get_device_online())) {
-        instance.lockSPI();
-        f.close();
-        instance.unlockSPI();
+        close_with_lock();
         return;
     }
     int ret = instance.codec.open(16, 1, HW_REC_SAMPLE_RATE);
     if (ret < 0) {
-        instance.lockSPI();
-        f.close();
-        instance.unlockSPI();
+        close_with_lock();
         return;
     }
 
@@ -291,9 +280,7 @@ static void playWAV_sd(const char *filename)
     uint8_t *buf = (uint8_t *)heap_caps_malloc(CHUNK, MALLOC_CAP_SPIRAM);
     if (!buf) {
         instance.codec.close();
-        instance.lockSPI();
-        f.close();
-        instance.unlockSPI();
+        close_with_lock();
         xEventGroupClearBits(playerEvent, PLAYER_RUNNING | PLAYER_PLAY | PLAYER_END);
         return;
     }
@@ -303,9 +290,11 @@ static void playWAV_sd(const char *filename)
                                                pdFALSE, pdFALSE, portMAX_DELAY);
         if (bits & PLAYER_END) break;
 
-        instance.lockSPI();
-        int n = f.read(buf, CHUNK);
-        instance.unlockSPI();
+        int n;
+        {
+            core::ScopedSpiLock lock;
+            n = f.read(buf, CHUNK);
+        }
         if (n <= 0) break;
 
         instance.codec.write(buf, (size_t)n);
@@ -313,9 +302,7 @@ static void playWAV_sd(const char *filename)
 
     free(buf);
     instance.codec.close();
-    instance.lockSPI();
-    f.close();
-    instance.unlockSPI();
+    close_with_lock();
     xEventGroupClearBits(playerEvent, PLAYER_RUNNING | PLAYER_PLAY | PLAYER_END);
 }
 #endif /*USING_AUDIO_CODEC*/
@@ -581,9 +568,10 @@ static void recorderTask(void *args)
         log_e("recorder: buffer alloc failed");
         if (in_buf) free(in_buf);
         if (mono_buf) free(mono_buf);
-        instance.lockSPI();
-        if (recFile) recFile.close();
-        instance.unlockSPI();
+        {
+            core::ScopedSpiLock lock;
+            if (recFile) recFile.close();
+        }
         recorder_running = false;
         recorderTaskHandler = NULL;
         vTaskDelete(NULL);
@@ -627,9 +615,11 @@ static void recorderTask(void *args)
             write_len = in_bytes;
         }
 
-        instance.lockSPI();
-        size_t written = recFile.write(write_src, write_len);
-        instance.unlockSPI();
+        size_t written;
+        {
+            core::ScopedSpiLock lock;
+            written = recFile.write(write_src, write_len);
+        }
         recorder_bytes += written;
         if (written != write_len) {
             log_e("recorder: short write %u/%u (SD full?)",
@@ -639,13 +629,14 @@ static void recorderTask(void *args)
     }
 
     // Finalize WAV header with actual data size.
-    instance.lockSPI();
-    if (recFile) {
-        recFile.seek(0);
-        wav_write_header(recFile, recorder_bytes);
-        recFile.close();
+    {
+        core::ScopedSpiLock lock;
+        if (recFile) {
+            recFile.seek(0);
+            wav_write_header(recFile, recorder_bytes);
+            recFile.close();
+        }
     }
-    instance.unlockSPI();
 
 #if defined(USING_AUDIO_CODEC)
     if (codec_online) instance.codec.close();
@@ -666,15 +657,15 @@ bool hw_rec_start(const char *sd_path)
     if (!hw_mic_available()) return false;
     if (!sd_path || !sd_path[0]) return false;
 
-    instance.lockSPI();
-    recFile = SD.open(sd_path, FILE_WRITE);
-    if (!recFile) {
-        log_e("recorder: SD.open(%s) failed", sd_path);
-        instance.unlockSPI();
-        return false;
+    {
+        core::ScopedSpiLock lock;
+        recFile = SD.open(sd_path, FILE_WRITE);
+        if (!recFile) {
+            log_e("recorder: SD.open(%s) failed", sd_path);
+            return false;
+        }
+        wav_write_header(recFile, 0);
     }
-    wav_write_header(recFile, 0);
-    instance.unlockSPI();
 
 #if defined(USING_AUDIO_CODEC)
     if (HW_CODEC_ONLINE & hw_get_device_online()) {
@@ -682,10 +673,9 @@ bool hw_rec_start(const char *sd_path)
                                       HW_REC_SAMPLE_RATE);
         if (ret < 0) {
             log_e("recorder: codec.open failed 0x%X", ret);
-            instance.lockSPI();
+            core::ScopedSpiLock lock;
             recFile.close();
             SD.remove(sd_path);
-            instance.unlockSPI();
             return false;
         }
     }
@@ -706,10 +696,11 @@ bool hw_rec_start(const char *sd_path)
             instance.codec.close();
         }
 #endif
-        instance.lockSPI();
-        recFile.close();
-        SD.remove(sd_path);
-        instance.unlockSPI();
+        {
+            core::ScopedSpiLock lock;
+            recFile.close();
+            SD.remove(sd_path);
+        }
         return false;
     }
     return true;
@@ -847,16 +838,14 @@ static void hw_fat_list(std::vector<AudioParams_t> &list, const char *dirname, u
 static bool hw_sd_list(std::vector<AudioParams_t> &list, const char *dirname, uint8_t levels)
 {
 #if defined(HAS_SD_CARD_SOCKET)
-    instance.lockSPI();
+    core::ScopedSpiLock lock;
     if (instance.installSD()) {
         Serial.println("SD Card mount success.");
     } else {
         Serial.println("SD Card mount failed.");
-        instance.unlockSPI();
         return false;
     }
     listDir(list, SD, dirname, levels, AUDIO_SOURCE_SDCARD);
-    instance.unlockSPI();
 #endif
     return true;
 }

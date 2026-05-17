@@ -26,6 +26,16 @@
  * text_font style on the parent: local styles on the panel survive onStop(),
  * and a leaked Montserrat-10 font on the panel would shrink every label in
  * the next app that inherits from it.
+ *
+ * State reset on onStop (ui_weather_exit):
+ *   widgets: root, hourly_col, daily_col, status_label
+ *                                       — nulled (deleted with parent)
+ *   timers:  s_w_timer (drain ticker)   — lv_timer_del + null
+ *   tasks:   s_w_bg (HTTPS fetcher)     — cooperatively stopped via flag,
+ *                                          joined before timer null
+ * If you add new cached LVGL pointers or a background task, list them
+ * above AND extend ui_weather_exit() — see the file header note about
+ * panel-inherited styles; the same hazard applies to leaked timers.
  */
 #include "../ui_define.h"
 #include "../hal/wireless.h"

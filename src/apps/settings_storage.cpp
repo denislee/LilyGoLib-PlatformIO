@@ -22,6 +22,7 @@
 #include "../hal/storage.h"
 #include "settings_internal.h"
 
+#include <memory>
 #include <string>
 
 namespace {
@@ -300,14 +301,17 @@ void set_pw_cb(const char *pw, void *)
 // --- Change passphrase flow: ask old, then ask new (with confirm). ---
 void change_new_cb(const char *pw, void *ud)
 {
-    ChangeCtx *ctx = (ChangeCtx *)ud;
-    if (!pw) { delete ctx; return; }
+    /* Take ownership of the heap-allocated ChangeCtx that change_old_cb
+     * passed via ud. The unique_ptr release()/reset() pair across this
+     * pair of callbacks is the safe equivalent of new/delete — both
+     * cancel and OK paths drop the allocation when this scope exits. */
+    std::unique_ptr<ChangeCtx> ctx((ChangeCtx *)ud);
+    if (!pw) return;
     std::string new_pw = pw;
     show_storage_loader("Re-encrypting notes");
     bool ok = notes_crypto_change_passphrase(ctx->old_pw.c_str(),
                                              new_pw.c_str(),
                                              storage_progress_cb);
-    delete ctx;
     hide_storage_loader();
     ui_msg_pop_up("Notes Security",
                   ok ? "Passphrase changed." : "Passphrase change failed.");
@@ -323,11 +327,13 @@ void change_old_cb(const char *pw, void *)
         ui_msg_pop_up("Notes Security", "Wrong current passphrase.");
         return;
     }
-    ChangeCtx *ctx = new ChangeCtx();
+    auto ctx = std::make_unique<ChangeCtx>();
     ctx->old_pw = pw;
+    /* Ownership of ctx travels to change_new_cb via the void* user-data
+     * slot. release() detaches the unique_ptr; change_new_cb re-wraps. */
     ui_passphrase_prompt("New passphrase",
                          "Enter a new passphrase for your notes.",
-                         /*confirm=*/true, change_new_cb, ctx);
+                         /*confirm=*/true, change_new_cb, ctx.release());
 }
 
 // --- Disable flow ---

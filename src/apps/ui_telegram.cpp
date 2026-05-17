@@ -16,6 +16,17 @@
  * missing ones, so non-ASCII characters survive if the selected font has
  * the glyph. The Inter font (idx 4) covers Latin-1 (á, é, ã, ç, …) — it's
  * the default for Telegram so Portuguese messages render out of the box.
+ *
+ * State reset on onStop (telegram_exit):
+ *   widgets: s_root, s_list_holder, s_msgs_holder, s_status_label, s_input_ta
+ *                                       — nulled (deleted with parent)
+ *   timers:  s_timer (UI poll),         — lv_timer_del + null
+ *            s_bg_timer (drain ticker)
+ *   tasks:   s_bg_task (HTTPS fetcher)  — cooperatively stopped via flag,
+ *                                          then joined before the timer null
+ * If you add a new cached LVGL pointer or background task, list it above
+ * AND extend telegram_exit() — the fetcher writes into shared queues that
+ * the UI thread reads, so missing a join here is a use-after-free risk.
  */
 #include "../ui_define.h"
 #include "../hal/wireless.h"

@@ -23,6 +23,16 @@
  * Bytes go to the repo as raw ciphertext when notes crypto is enabled;
  * hw_read_internal_bytes_raw() bypasses the decrypt-on-read path so
  * the repo gets the opaque Salted__ blob.
+ *
+ * State reset on onStop (exit_cb):
+ *   widgets: s_root, s_log_label, s_log_scroll       — nulled
+ *   timers:  s_bg_timer (drain ticker)               — lv_timer_del + null
+ *   tasks:   s_bg_task (sync worker)                 — cooperatively stopped
+ *                                                      via stop flag, then
+ *                                                      joined
+ * If you add a new cached LVGL pointer, timer, or FreeRTOS task, list it
+ * above AND extend exit_cb() — a sync worker outliving the UI would
+ * write into freed log buffers.
  */
 #include "../ui_define.h"
 #include "../hal/storage.h"
@@ -436,12 +446,12 @@ static void run_sync_bg()
             bg_log_appendf("  read %s: skip", n.name.c_str());
             continue;
         }
-        std::string uerr;
-        if (hal::hub_upload_note(n.name.c_str(), bytes.data(), bytes.size(), &uerr)) {
+        HalError uerr = hal::hub_upload_note(n.name.c_str(), bytes.data(), bytes.size());
+        if (uerr == HalError::Ok) {
             hub_up_ok++;
         } else {
             hub_up_fail++;
-            bg_log_appendf("  hub %s FAIL: %s", n.name.c_str(), uerr.c_str());
+            bg_log_appendf("  hub %s FAIL: %s", n.name.c_str(), hal_error_string(uerr));
         }
     }
     bg_log_appendf("Hub upload: ok=%d fail=%d", hub_up_ok, hub_up_fail);

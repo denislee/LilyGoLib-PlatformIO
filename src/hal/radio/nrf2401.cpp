@@ -8,6 +8,7 @@
  */
 
 #include "../../hal_interface.h"
+#include "../../core/spi_lock.h"
 
 #if defined(USING_EXTERN_NRF2401)
 
@@ -72,7 +73,7 @@ int16_t hw_set_nrf24_params(radio_params_t &params)
     static uint8_t addr[] = {0x01, 0x23, 0x45, 0x67, 0x89};
     int state = RADIOLIB_ERR_NONE;
 
-    instance.lockSPI();
+    core::ScopedSpiLock lock;
 
     state = nrf24.setFrequency(params.freq);
     if (state == RADIOLIB_ERR_INVALID_FREQUENCY) {
@@ -122,7 +123,6 @@ int16_t hw_set_nrf24_params(radio_params_t &params)
     default:
         break;
     }
-    instance.unlockSPI();
 
     return state;
 #else
@@ -164,9 +164,10 @@ bool hw_set_nrf24_tx(radio_tx_params_t &params, bool continuous)
     Serial.print("[TX LEN:]");
     Serial.println(params.length);
 
-    instance.lockSPI();
-    params.state = nrf24.startTransmit((const uint8_t*)params.data, params.length, 0);
-    instance.unlockSPI();
+    {
+        core::ScopedSpiLock lock;
+        params.state = nrf24.startTransmit((const uint8_t*)params.data, params.length, 0);
+    }
 
     if (params.state == RADIOLIB_ERR_NONE) {
         // packet was successfully sent
@@ -194,13 +195,14 @@ void hw_get_nrf24_rx(radio_rx_params_t &params)
         return;
     }
 
-    instance.lockSPI();
-    size_t  length = nrf24.getPacketLength();
-    params.length = length > params.length ? params.length : length;
-    params.state = nrf24.readData(params.data, params.length);
-    // Start next packet recv
-    nrf24.startReceive();
-    instance.unlockSPI();
+    {
+        core::ScopedSpiLock lock;
+        size_t  length = nrf24.getPacketLength();
+        params.length = length > params.length ? params.length : length;
+        params.state = nrf24.readData(params.data, params.length);
+        // Start next packet recv
+        nrf24.startReceive();
+    }
 
 
     Serial.print("[RX DATA:]");

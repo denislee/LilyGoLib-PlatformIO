@@ -11,6 +11,7 @@
 #include "hal/notes_crypto.h"
 
 #include <cstring>
+#include <memory>
 #include <string>
 
 namespace {
@@ -35,7 +36,7 @@ struct LockCtx {
 
 /* Single-instance guard — the caller is expected to wait for one modal
  * before opening another. */
-static LockCtx *g_ctx = nullptr;
+static std::unique_ptr<LockCtx> g_ctx;
 
 static void set_error(LockCtx *ctx, const char *msg)
 {
@@ -47,12 +48,14 @@ static void set_error(LockCtx *ctx, const char *msg)
 
 static void tear_down(LockCtx *ctx)
 {
-    if (g_ctx != ctx) return;
-    if (ctx->overlay) lv_obj_del(ctx->overlay);
-    if (ctx->group)   lv_group_del(ctx->group);
-    if (ctx->prev_group) set_default_group(ctx->prev_group);
-    g_ctx = nullptr;
-    delete ctx;
+    if (g_ctx.get() != ctx) return;
+    /* Move ownership into a local so g_ctx is null while LVGL teardown
+     * fires deletion events — they re-enter our callbacks and the null
+     * g_ctx check guards against double-fire. */
+    std::unique_ptr<LockCtx> owned = std::move(g_ctx);
+    if (owned->overlay) lv_obj_del(owned->overlay);
+    if (owned->group)   lv_group_del(owned->group);
+    if (owned->prev_group) set_default_group(owned->prev_group);
 }
 
 static void cancel_event_cb(lv_event_t *e)
@@ -140,8 +143,8 @@ static void build(const char *title, const char *subtitle,
         return;
     }
 
-    LockCtx *ctx = new LockCtx();
-    g_ctx = ctx;
+    g_ctx = std::make_unique<LockCtx>();
+    LockCtx *ctx = g_ctx.get();
     ctx->confirm       = confirm;
     ctx->verify_unlock = verify_unlock;
     ctx->password      = password;
@@ -327,6 +330,11 @@ static void build(const char *title, const char *subtitle,
 } /* namespace */
 
 /* Public API (see ui_define.h). */
+
+bool ui_passphrase_is_active()
+{
+    return g_ctx != nullptr;
+}
 
 void ui_passphrase_unlock(ui_passphrase_unlock_cb cb, void *ud)
 {

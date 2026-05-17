@@ -12,6 +12,16 @@
  * (we'd have to embed a Groq key on the device, defeating the point of
  * the hub). When the hub is disabled or unreachable the app surfaces a
  * clean error and does nothing else.
+ *
+ * State reset on onStop (exit_cb):
+ *   widgets: s_root, s_log_scroll, s_log_label, s_input_ta, s_mic_btn,
+ *            s_status_lbl                  — nulled (deleted with parent)
+ *   timers:  s_poll_timer                  — lv_timer_del + null
+ *   tasks:   s_send_task                   — abandoned via s_ctx handoff
+ *   hw:      mic recording                 — stopped via hw_rec_stop()
+ *   ctx:     s_ctx (SendCtx*)              — abandoned + freed if worker done
+ * If you add new cached state, list it here AND extend exit_cb() — a
+ * leaked timer pointer will fire into a destroyed LVGL tree on next entry.
  */
 #include "../ui_define.h"
 #include "../hal/hub.h"

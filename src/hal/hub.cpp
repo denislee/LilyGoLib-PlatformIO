@@ -177,29 +177,16 @@ std::string json_escape_str(const std::string &in)
 } // namespace
 #endif
 
-bool hub_upload_note(const char *name, const uint8_t *bytes, size_t len,
-                     std::string *error)
+HalError hub_upload_note(const char *name, const uint8_t *bytes, size_t len)
 {
 #ifdef ARDUINO
-    if (!name || !*name) {
-        if (error) *error = "empty name";
-        return false;
-    }
+    if (!name || !*name)                return HalError::InvalidArgument;
     std::string base = hub_get_url();
-    if (base.empty()) {
-        if (error) *error = "hub disabled";
-        return false;
-    }
-    if (!hw_get_wifi_connected()) {
-        if (error) *error = "wifi not connected";
-        return false;
-    }
+    if (base.empty())                   return HalError::HubDisabled;
+    if (!hw_get_wifi_connected())       return HalError::WifiOffline;
 
     std::string b64;
-    if (!b64_encode_str(bytes, len, b64)) {
-        if (error) *error = "base64 failed";
-        return false;
-    }
+    if (!b64_encode_str(bytes, len, b64)) return HalError::InternalError;
 
     std::string body;
     body.reserve(64 + b64.size());
@@ -214,26 +201,13 @@ bool hub_upload_note(const char *name, const uint8_t *bytes, size_t len,
                               body.c_str(), body.size(),
                               "application/json",
                               nullptr, resp, &code, &terr);
-    if (!ok || code / 100 != 2) {
-        if (error) {
-            if (!terr.empty()) {
-                *error = terr;
-            } else if (code != 0) {
-                char buf[24];
-                snprintf(buf, sizeof(buf), "HTTP %d", code);
-                *error = buf;
-                if (!resp.empty()) *error += ": " + resp.substr(0, 120);
-            } else {
-                *error = "no response";
-            }
-        }
-        return false;
-    }
-    return true;
+    if (!ok)            return HalError::HubUnreachable;
+    if (code == 401 || code == 403) return HalError::Unauthorized;
+    if (code / 100 != 2) return HalError::HttpError;
+    return HalError::Ok;
 #else
     (void)name; (void)bytes; (void)len;
-    if (error) *error = "not supported";
-    return false;
+    return HalError::NotSupported;
 #endif
 }
 

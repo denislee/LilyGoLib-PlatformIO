@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <string>
 
+#include "result.h"
+
 namespace hal {
 
 // True iff the master toggle is ON *and* a non-empty URL is configured. This
@@ -49,9 +51,11 @@ bool hub_is_reachable(uint32_t timeout_ms = 1500);
 // under its notes dir keyed by `name` (overwrites on second upload). Used to
 // mirror flash-resident notes when internal storage is being pruned, and as
 // the source of truth for the new notes-sync flow that no longer touches the
-// SD card. Returns true on a 2xx response. `error` (optional) receives a
-// short diagnostic on failure.
-bool hub_upload_note(const char *name, const uint8_t *bytes, size_t len,
-                     std::string *error = nullptr);
+// SD card.
+//
+// Returns HalError::Ok on a 2xx response. On failure the caller can use
+// `hal_error_string(err)` for a user-facing message or branch on specific
+// causes (HubDisabled / WifiOffline / HttpError / Unauthorized / ...).
+HalError hub_upload_note(const char *name, const uint8_t *bytes, size_t len);
 
 } // namespace hal

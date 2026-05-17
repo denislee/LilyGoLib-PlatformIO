@@ -6,7 +6,9 @@
 #include "system.h"
 #include "internal.h"
 #include "notes_crypto.h"
+#include "notes_path.h"
 #include "hub.h"
+#include "../core/spi_lock.h"
 
 #include <cstring>
 
@@ -22,10 +24,6 @@
  * transparently encrypt on save and decrypt on load for any path that
  * `notes_crypto_path_is_protected()` matches. On a locked session, a read
  * that hits encrypted content fails so callers don't show ciphertext. */
-static bool content_has_salted_magic(const char *buf, size_t len)
-{
-    return len >= 8 && memcmp(buf, "Salted__", 8) == 0;
-}
 
 /* Notes app .txt files live under "/notes" on both internal FFat and the SD
  * card root. tasks.txt and journal_idx.bin remain at the FFat root because
@@ -41,9 +39,8 @@ static void ensure_notes_dir()
 {
     if (!FFat.exists(NOTES_DIR)) FFat.mkdir(NOTES_DIR);
     if (HW_SD_ONLINE & hw_get_device_online()) {
-        instance.lockSPI();
+        core::ScopedSpiLock lock;
         if (!SD.exists(NOTES_DIR)) SD.mkdir(NOTES_DIR);
-        instance.unlockSPI();
     }
 }
 #endif
@@ -123,11 +120,10 @@ void hw_get_storage_info(uint64_t &total, uint64_t &used, uint64_t &free)
 #if defined(ARDUINO)
 #if defined(HAS_SD_CARD_SOCKET)
     if (HW_SD_ONLINE & hw_get_device_online()) {
-        instance.lockSPI();
+        core::ScopedSpiLock lock;
         total = SD.totalBytes();
         used = SD.usedBytes();
         free = total - used;
-        instance.unlockSPI();
     }
 #elif defined(USING_FATFS)
     total = FFat.totalBytes();
@@ -254,7 +250,7 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
     char str[256];
     normalize_path(path, str, sizeof(str));
     File f;
-    bool lock = false;
+    core::MaybeSpiLock lock;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
     const char *target = "Internal";
 
@@ -267,9 +263,8 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
     if (exists_internal) {
         f = FFat.open(str, "w");
     } else if (is_sd) {
-        instance.lockSPI();
+        lock.acquire();
         f = SD.open(str, "w"); // Use "w" for overwrite
-        lock = true;
         target = "SD";
     } else {
         f = FFat.open(str, "w"); // Use "w" for overwrite
@@ -277,7 +272,6 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
 
     if (!f) {
         log_e("Failed to open file for writing: %s", str);
-        if (lock) instance.unlockSPI();
         if (error) {
             *error = std::string("Cannot open ") + target + " file for writing.";
         }
@@ -286,9 +280,8 @@ bool hw_save_file(const char *path, const char *content, std::string *error)
 
     size_t written = payload.empty() ? 0 : f.write(payload.data(), payload.size());
     f.close();
-    if (lock) instance.unlockSPI();
 
-    log_d("Saved %u bytes to %s (%s)", (unsigned int)written, str, lock ? "SD" : "Internal");
+    log_d("Saved %u bytes to %s (%s)", (unsigned int)written, str, lock.held() ? "SD" : "Internal");
     bool ok = (written == payload.size());
     if (!ok && error) {
         *error = std::string("Write to ") + target + " failed (storage full?).";
@@ -349,9 +342,8 @@ bool hw_delete_file(const char *path)
     bool res_sd = false;
     bool sd_online = (HW_SD_ONLINE & hw_get_device_online());
     if (sd_online) {
-        instance.lockSPI();
+        core::ScopedSpiLock lock;
         res_sd = SD.remove(str);
-        instance.unlockSPI();
     }
     bool res_int = FFat.remove(str);
     return res_sd || res_int;
@@ -418,10 +410,8 @@ bool hw_delete_path(const char *path, bool use_sd)
     std::string str(buf); // delete_path_recursive uses std::string children list
     if (use_sd) {
         if (!(HW_SD_ONLINE & hw_get_device_online())) return false;
-        instance.lockSPI();
-        bool ok = delete_path_recursive(SD, str);
-        instance.unlockSPI();
-        return ok;
+        core::ScopedSpiLock lock;
+        return delete_path_recursive(SD, str);
     }
     return delete_path_recursive(FFat, str);
 #else
@@ -437,16 +427,14 @@ bool hw_read_file(const char *path, std::string &content)
     char str[256];
     normalize_path(path, str, sizeof(str));
     File f;
-    bool lock = false;
+    core::MaybeSpiLock lock;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
 
     if (is_sd) {
-        instance.lockSPI();
+        lock.acquire();
         f = SD.open(str, FILE_READ);
-        if (f) {
-            lock = true;
-        } else {
-            instance.unlockSPI();
+        if (!f) {
+            lock.release();
         }
     }
 
@@ -465,8 +453,7 @@ bool hw_read_file(const char *path, std::string &content)
         f.read((uint8_t *)&content[0], size);
     }
     f.close();
-    if (lock) instance.unlockSPI();
-    log_d("Read %u bytes from %s (%s)", (unsigned int)size, str, lock ? "SD" : "Internal");
+    log_d("Read %u bytes from %s (%s)", (unsigned int)size, str, lock.held() ? "SD" : "Internal");
     if (!decode_after_read(content)) {
         content.clear();
         return false;
@@ -485,18 +472,14 @@ size_t hw_get_file_size(const char *path)
     char str[256];
     normalize_path(path, str, sizeof(str));
     File f;
-    bool lock = false;
+    core::MaybeSpiLock lock;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
     size_t size = 0;
 
     if (is_sd) {
-        instance.lockSPI();
+        lock.acquire();
         f = SD.open(str, FILE_READ);
-        if (f) {
-            lock = true;
-        } else {
-            instance.unlockSPI();
-        }
+        if (!f) lock.release();
     }
 
     if (!f) {
@@ -507,7 +490,6 @@ size_t hw_get_file_size(const char *path)
         size = f.size();
         f.close();
     }
-    if (lock) instance.unlockSPI();
     return size;
 #else
     return 1024;
@@ -520,17 +502,13 @@ bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::s
     char str[256];
     normalize_path(path, str, sizeof(str));
     File f;
-    bool lock = false;
+    core::MaybeSpiLock lock;
     bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
 
     if (is_sd) {
-        instance.lockSPI();
+        lock.acquire();
         f = SD.open(str, FILE_READ);
-        if (f) {
-            lock = true;
-        } else {
-            instance.unlockSPI();
-        }
+        if (!f) lock.release();
     }
 
     if (!f) {
@@ -544,7 +522,6 @@ bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::s
 
     if (offset > f.size()) {
         f.close();
-        if (lock) instance.unlockSPI();
         return false;
     }
 
@@ -557,8 +534,8 @@ bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::s
         f.read((uint8_t *)&content[0], read_size);
     }
     f.close();
-    if (lock) instance.unlockSPI();
-    
+
+
     // Attempt to slice content neatly at a space or newline so we don't cut words in half
     // Only if we haven't reached the end of the file.
     if (read_size == size && read_size > 0) {
@@ -616,17 +593,13 @@ bool hw_read_sd_bytes_raw(const char *path, std::vector<uint8_t> &buf)
     if (!(HW_SD_ONLINE & hw_get_device_online())) return false;
     char str[256];
     normalize_path(path, str, sizeof(str));
-    instance.lockSPI();
+    core::ScopedSpiLock lock;
     File f = SD.open(str, FILE_READ);
-    if (!f) {
-        instance.unlockSPI();
-        return false;
-    }
+    if (!f) return false;
     size_t size = f.size();
     buf.resize(size);
     if (size > 0) f.read(buf.data(), size);
     f.close();
-    instance.unlockSPI();
     return true;
 #else
     (void)path;
@@ -709,9 +682,8 @@ void hw_get_txt_files(std::vector<std::string> &list)
 #ifdef ARDUINO
     std::vector<FileInfo> file_infos;
     if (HW_SD_ONLINE & hw_get_device_online()) {
-        instance.lockSPI();
+        core::ScopedSpiLock lock;
         list_files(file_infos, SD, NOTES_DIR, ".txt");
-        instance.unlockSPI();
     }
     list_files(file_infos, FFat, NOTES_DIR, ".txt");
 
@@ -762,9 +734,10 @@ void hw_get_sd_txt_files(std::vector<std::string> &list)
 #ifdef ARDUINO
     if (HW_SD_ONLINE & hw_get_device_online()) {
         std::vector<FileInfo> file_infos;
-        instance.lockSPI();
-        list_files(file_infos, SD, NOTES_DIR, ".txt");
-        instance.unlockSPI();
+        {
+            core::ScopedSpiLock lock;
+            list_files(file_infos, SD, NOTES_DIR, ".txt");
+        }
 
         std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo & a, const FileInfo & b) {
             if (a.time != b.time) return a.time > b.time;
@@ -856,9 +829,8 @@ void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
     if (!dirname || !dirname[0]) dirname = "/";
 #ifdef ARDUINO
     if (HW_SD_ONLINE & hw_get_device_online()) {
-        instance.lockSPI();
+        core::ScopedSpiLock lock;
         list_entries(list, SD, dirname, filter_ext);
-        instance.unlockSPI();
     }
 #else
     bool all = !(filter_ext && filter_ext[0]);
@@ -1011,14 +983,13 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
 
         bool copied = false;
         {
-            instance.lockSPI();
+            core::ScopedSpiLock lock;
             File dst = SD.open(path, "w");
             if (dst) {
                 size_t w = sz ? dst.write(buf.data(), sz) : 0;
                 dst.close();
                 copied = (w == sz);
             }
-            instance.unlockSPI();
         }
 
         bool hub_ok = false;
@@ -1026,10 +997,10 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
             // Strip leading slash so the hub stores under just the name.
             const char *leaf = path.c_str();
             while (*leaf == '/') leaf++;
-            std::string herr;
-            hub_ok = hal::hub_upload_note(leaf, buf.data(), sz, &herr);
+            HalError herr = hal::hub_upload_note(leaf, buf.data(), sz);
+            hub_ok = (herr == HalError::Ok);
             if (!hub_ok) {
-                printf("Eviction hub upload failed (%s): %s\n", leaf, herr.c_str());
+                printf("Eviction hub upload failed (%s): %s\n", leaf, hal_error_string(herr));
             }
         }
 
@@ -1094,13 +1065,12 @@ bool hw_save_preferred_file(const char *path, const char *content, std::string *
     }
 
     if (HW_SD_ONLINE & hw_get_device_online()) {
-        instance.lockSPI();
+        core::ScopedSpiLock lock;
         File f = SD.open(str, "w");
         if (f) {
             if (!payload.empty()) f.write(payload.data(), payload.size());
             f.close();
         }
-        instance.unlockSPI();
     }
 
     prune_internal_storage();
@@ -1129,9 +1099,10 @@ void hw_get_preferred_txt_files(std::vector<std::string> &list)
     // Scan SD if available
     if (HW_SD_ONLINE & hw_get_device_online()) {
         std::vector<FileInfo> sd_infos;
-        instance.lockSPI();
-        list_files(sd_infos, SD, NOTES_DIR, ".txt");
-        instance.unlockSPI();
+        {
+            core::ScopedSpiLock lock;
+            list_files(sd_infos, SD, NOTES_DIR, ".txt");
+        }
 
         // Merge SD into infos, avoiding duplicates (Internal wins)
         for (const auto &sdi : sd_infos) {
@@ -1171,19 +1142,15 @@ bool hw_read_preferred_file_snippet(const char *path, std::string &content, size
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
 
     File f = FFat.open(str, FILE_READ);
-    bool lock = false;
+    core::MaybeSpiLock lock;
     if (!f) {
         if (HW_SD_ONLINE & hw_get_device_online()) {
-            instance.lockSPI();
+            lock.acquire();
             f = SD.open(str, FILE_READ);
-            lock = true;
         }
     }
-    
-    if (!f) {
-        if (lock) instance.unlockSPI();
-        return false;
-    }
+
+    if (!f) return false;
 
     size_t total = f.size();
 
@@ -1202,7 +1169,7 @@ bool hw_read_preferred_file_snippet(const char *path, std::string &content, size
         f.seek(0);
         if (total) f.read((uint8_t *)&full[0], total);
         f.close();
-        if (lock) instance.unlockSPI();
+        lock.release();
 
         if (!decode_after_read(full)) return false;
         if (full.size() > max_bytes) {
@@ -1222,7 +1189,6 @@ bool hw_read_preferred_file_snippet(const char *path, std::string &content, size
         f.read((uint8_t *)&content[0], to_read);
     }
     f.close();
-    if (lock) instance.unlockSPI();
 
     if (truncated) *truncated = total > max_bytes;
     return true;
@@ -1247,9 +1213,10 @@ void hw_get_preferred_txt_files_info(std::vector<std::pair<std::string, uint32_t
     // Scan SD if available
     if (HW_SD_ONLINE & hw_get_device_online()) {
         std::vector<FileInfo> sd_infos;
-        instance.lockSPI();
-        list_files(sd_infos, SD, NOTES_DIR, ".txt", cb);
-        instance.unlockSPI();
+        {
+            core::ScopedSpiLock lock;
+            list_files(sd_infos, SD, NOTES_DIR, ".txt", cb);
+        }
 
         // Merge SD into infos, avoiding duplicates (Internal wins)
         for (const auto &sdi : sd_infos) {
@@ -1296,13 +1263,12 @@ bool hw_save_preferred_bytes(const char *path, const uint8_t *buf, size_t len, s
 
     // Redundant save to SD if available
     if (HW_SD_ONLINE & hw_get_device_online()) {
-        instance.lockSPI();
+        core::ScopedSpiLock lock;
         File fsd = SD.open(str, "w");
         if (fsd) {
             fsd.write(buf, len);
             fsd.close();
         }
-        instance.unlockSPI();
     }
 
     // Only prune if it was a data file (not the index)
@@ -1323,20 +1289,16 @@ bool hw_read_preferred_bytes(const char *path, std::vector<uint8_t> &buf)
 #ifdef ARDUINO
     String str = (path[0] == '/') ? String(path) : ("/" + String(path));
     File f;
-    bool lock = false;
+    core::MaybeSpiLock lock;
 
     // Try Internal first (faster)
     f = FFat.open(str, FILE_READ);
-    
+
     // Fallback to SD if missing from Internal
     if (!f && (HW_SD_ONLINE & hw_get_device_online())) {
-        instance.lockSPI();
+        lock.acquire();
         f = SD.open(str, FILE_READ);
-        if (f) {
-            lock = true;
-        } else {
-            instance.unlockSPI();
-        }
+        if (!f) lock.release();
     }
 
     if (!f) return false;
@@ -1347,7 +1309,6 @@ bool hw_read_preferred_bytes(const char *path, std::vector<uint8_t> &buf)
         f.read(buf.data(), size);
     }
     f.close();
-    if (lock) instance.unlockSPI();
     return true;
 #else
     (void)path;
@@ -1366,9 +1327,8 @@ bool hw_delete_preferred_file(const char *path)
     if (FFat.remove(str)) ok = true;
     
     if (HW_SD_ONLINE & hw_get_device_online()) {
-        instance.lockSPI();
+        core::ScopedSpiLock lock;
         if (SD.remove(str)) ok = true;
-        instance.unlockSPI();
     }
     return ok;
 #else
@@ -1377,182 +1337,6 @@ bool hw_delete_preferred_file(const char *path)
 #endif
 }
 
-bool hw_copy_all_notes_to_hub(int *copied, int *failed, std::string *error,
-                              void (*cb)(int, int, const char *))
-{
-    if (copied) *copied = 0;
-    if (failed) *failed = 0;
-#ifdef ARDUINO
-    if (!hal::hub_is_enabled()) {
-        if (error) *error = "Hub is not enabled.";
-        return false;
-    }
-
-    // Walk internal first, then SD; same-name conflicts resolve in favour of
-    // internal (which is the user's most-recently-edited copy by convention
-    // — see notes-sync rationale). Read raw bytes so encrypted Salted__
-    // blobs ride through verbatim.
-    std::vector<std::string> internal_names;
-    hw_get_internal_txt_files(internal_names);
-
-    std::vector<std::string> sd_names;
-    if (HW_SD_ONLINE & hw_get_device_online()) {
-        hw_get_sd_txt_files(sd_names);
-    }
-
-    auto strip_slash = [](std::string &p) {
-        if (!p.empty() && p[0] == '/') p.erase(0, 1);
-    };
-
-    struct UpItem { std::string name; bool internal; };
-    std::vector<UpItem> items;
-    items.reserve(internal_names.size() + sd_names.size());
-
-    std::vector<std::string> seen;
-    seen.reserve(internal_names.size());
-    for (auto &n : internal_names) {
-        strip_slash(n);
-        if (n.empty()) continue;
-        items.push_back({n, true});
-        seen.push_back(n);
-    }
-    for (auto &n : sd_names) {
-        strip_slash(n);
-        if (n.empty()) continue;
-        bool dup = false;
-        for (const auto &s : seen) {
-            if (s == n) { dup = true; break; }
-        }
-        if (dup) continue;
-        items.push_back({n, false});
-    }
-
-    int total = (int)items.size();
-    int ok = 0, fail = 0;
-    std::string last_err;
-    for (int i = 0; i < total; ++i) {
-        const auto &it = items[i];
-        if (cb) cb(i, total, it.name.c_str());
-
-        std::vector<uint8_t> bytes;
-        std::string abs = "/" + it.name;
-        bool read_ok = it.internal
-            ? hw_read_internal_bytes_raw(abs.c_str(), bytes)
-            : hw_read_sd_bytes_raw(abs.c_str(), bytes);
-        if (!read_ok) {
-            fail++;
-            continue;
-        }
-        std::string uerr;
-        if (hal::hub_upload_note(it.name.c_str(), bytes.data(), bytes.size(), &uerr)) {
-            ok++;
-        } else {
-            fail++;
-            last_err = uerr;
-        }
-    }
-    if (cb) cb(total, total, "Done");
-
-    if (copied) *copied = ok;
-    if (failed) *failed = fail;
-    if (ok == 0 && total > 0) {
-        if (error) *error = last_err.empty() ? "No notes uploaded." : last_err;
-        return false;
-    }
-    return true;
-#else
-    (void)error; (void)cb;
-    return false;
-#endif
-}
-
-bool hw_copy_internal_to_sd(int *copied, int *failed, std::string *error, void (*cb)(int, int, const char *))
-{
-    if (copied) *copied = 0;
-    if (failed) *failed = 0;
-#ifdef ARDUINO
-    if (!(HW_SD_ONLINE & hw_get_device_online())) {
-        // Attempt to mount before giving up.
-        hw_mount_sd();
-        if (!(HW_SD_ONLINE & hw_get_device_online())) {
-            if (error) *error = "SD card not available.";
-            return false;
-        }
-    }
-
-    File root = FFat.open("/");
-    if (!root || !root.isDirectory()) {
-        if (error) *error = "Cannot open internal storage.";
-        return false;
-    }
-
-    // First pass: count files
-    int total_files = 0;
-    File count_entry = root.openNextFile();
-    while (count_entry) {
-        if (!count_entry.isDirectory()) {
-            total_files++;
-        }
-        count_entry.close();
-        count_entry = root.openNextFile();
-    }
-    root.close();
-
-    // Re-open for copying
-    root = FFat.open("/");
-    int ok_count = 0;
-    int fail_count = 0;
-    int current_idx = 0;
-    File entry = root.openNextFile();
-    while (entry) {
-        if (!entry.isDirectory()) {
-            const char* name = entry.name();
-            String dst = (name[0] == '/') ? String(name) : ("/" + String(name));
-
-            if (cb) cb(current_idx, total_files, name);
-
-            size_t size = entry.size();
-            std::string buf;
-            buf.resize(size);
-            if (size > 0) {
-                entry.read((uint8_t *)&buf[0], size);
-            }
-            entry.close();
-
-            instance.lockSPI();
-            File out = SD.open(dst, "w");
-            bool wrote = false;
-            if (out) {
-                size_t n = size > 0 ? out.write((const uint8_t *)buf.data(), size) : 0;
-                wrote = (size == 0) || (n == size);
-                out.close();
-            }
-            instance.unlockSPI();
-
-            if (wrote) ok_count++;
-            else fail_count++;
-
-            current_idx++;
-        } else {
-            entry.close();
-        }
-        entry = root.openNextFile();
-    }
-    root.close();
-
-    if (cb) cb(total_files, total_files, "Done");
-
-    if (copied) *copied = ok_count;
-    if (failed) *failed = fail_count;
-    if (fail_count > 0 && error) {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "%d file(s) failed to copy.", fail_count);
-        *error = msg;
-    }
-    return fail_count == 0;
-#else
-    (void)error;
-    (void)cb;
-    return false;
-#endif
-}
+/* hw_copy_all_notes_to_hub and hw_copy_internal_to_sd live in
+ * storage_bulk.cpp — extracted because they're coordination layers over
+ * the public storage.h API and have no file-static dependencies here. */

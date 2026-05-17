@@ -4,6 +4,16 @@
  * @license   MIT
  * @date      2026-04-10
  *
+ * State reset on onStop (editor_exit):
+ *   widgets: menu, text_area, quit_btn, word_count_label, float_bar,
+ *            float_sync_btn, float_sync_icon, float_journal_btn
+ *                                       — destroyed via lv_obj_del then nulled
+ *   widgets: pending_editor_parent      — nulled (was deferred-build pointer)
+ *   timers:  sync_pill_wifi_timer       — lv_timer_del + null
+ *            word_count_debounce_timer  — lv_timer_del + null
+ * If you add a new cached LVGL pointer or timer, list it above AND
+ * extend editor_exit() — the debounce timer in particular will fire
+ * into a destroyed textarea if leaked.
  */
 #include "../ui_define.h"
 #include "../core/app_manager.h"

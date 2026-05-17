@@ -7,6 +7,15 @@
  * vol±) and work against whichever media app is foregrounded on the phone.
  * When the "Keyboard → Phone" switch is on, every keypress on the physical
  * keyboard is also forwarded as a HID keystroke.
+ *
+ * State reset on onStop (ui_media_remote_exit):
+ *   widgets: status_label, ble_switch, kb_switch, disconnect_btn,
+ *            volume_btn, volume_label             — nulled (deleted w/ parent)
+ *   timers:  status_timer                         — lv_timer_del + null
+ *   hw:      BLE keyboard forwarding hook         — unregistered
+ * If you add a new cached LVGL pointer, timer handle, or HID hook, list
+ * it above AND extend ui_media_remote_exit() — a stray hook in the
+ * keyboard input path will fire into a destroyed UI on next entry.
  */
 #include "../ui_define.h"
 #include "app_registry.h"

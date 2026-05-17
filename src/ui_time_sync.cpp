@@ -158,6 +158,16 @@ void timezone_set_user_tz(const char *tz)
     if (tz && *tz) p.putString("tz", tz);
     else           p.remove("tz");
     p.end();
+
+    // Apply the new zone to the C library env so localtime()/mktime() use
+    // it immediately. Without this, the picker would only take effect on
+    // the next reboot or NTP run — which is what bit us before factory.ino
+    // started seeding TZ at boot.
+    const char *posix = tz_find_posix((tz && *tz) ? tz : TZ_DEFAULT);
+    if (posix) {
+        setenv("TZ", posix, 1);
+        tzset();
+    }
 #else
     (void)tz;
 #endif

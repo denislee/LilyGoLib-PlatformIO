@@ -5,6 +5,16 @@
  * @copyright Copyright (c) 2025  ShenZhen XinYuan Electronic Technology Co., Ltd
  * @date      2025-01-05
  *
+ * State reset on onStop (ui_sys_exit):
+ *   widgets: menu, quit_btn, settings_main_page, settings_exit_btn
+ *                                       — destroyed via lv_obj_del then nulled
+ *   arrays:  main_page_group_items[]    — cleared, count reset to 0
+ *   subpages: every settings_X / notes_sec namespace's reset_state() fires
+ *             via the settings_internal.h contract to null its cached state
+ * Each settings_X.cpp is responsible for its own subpage state; ui_sys_exit
+ * just walks the list and calls reset_state() on each. If you add a new
+ * subpage TU, register its reset_state() callback per the contract in
+ * settings_internal.h — otherwise its cached lv_obj_t* will dangle.
  */
 #include "../ui_define.h"
 #include "../hal/notes_crypto.h"

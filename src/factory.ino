@@ -20,6 +20,7 @@
 
 std::string timezone_get_user_tz();
 bool timezone_fetch_offset(const char *tz, int &raw_offset_sec, int &dst_offset_sec, std::string &err);
+const char *timezone_get_user_posix();
 
 
 
@@ -92,6 +93,15 @@ void setup()
     sntp_set_time_sync_notification_cb(time_available);
     WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
     WiFi.setAutoReconnect(false);
+
+    // Apply the saved POSIX TZ rule to the C library env BEFORE hw_init()
+    // reads the RTC. hw_init() pushes the RTC's broken-down time through
+    // mktime() + settimeofday(); mktime() interprets its argument as local
+    // time under the active TZ, so an unset TZ here would silently shift
+    // the system clock by the user's UTC offset (the symptom: localtime()
+    // returns UTC+8 from the GMT_OFFSET_SECOND fallback until NTP runs).
+    setenv("TZ", timezone_get_user_posix(), 1);
+    tzset();
 
     hw_init();
 

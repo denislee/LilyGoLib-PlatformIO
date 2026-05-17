@@ -4,6 +4,11 @@
  * @license   MIT
  * @date      2026-04-10
  *
+ * State reset on onStop (ui_tasks_exit):
+ *   widgets: parent_obj, menu, main_page, add_ta, task_container, quit_btn
+ *                                       — destroyed via lv_obj_del then nulled
+ * No timers, tasks, or hw sessions. If you add any, list them above AND
+ * extend the exit path.
  */
 #include "../ui_define.h"
 #include <vector>

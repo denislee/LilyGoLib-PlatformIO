@@ -19,8 +19,14 @@ static void deferred_switch_timer_cb(lv_timer_t *t)
 {
     editor_auto_edit = false;
 
-    // Return to the home menu instead of the note app
-    core::System::getInstance().showMenu();
+    // Return to the home menu instead of the note app — but only when no
+    // passphrase modal is showing. showMenu() reassigns every indev to the
+    // menu group, which would steal input from a modal that's still on
+    // lv_layer_top(), leaving the user staring at a password field they
+    // can't type into until they navigate the menu underneath.
+    if (!ui_passphrase_is_active()) {
+        core::System::getInstance().showMenu();
+    }
 
     lv_display_trigger_activity(NULL);
 

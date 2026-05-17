@@ -2,6 +2,15 @@
  * @file      ui_file_browser.cpp
  * @brief     File browser with source selection, extension filter,
  *            and folder listing.
+ *
+ * State reset on onStop (ui_files_exit):
+ *   widgets: menu, parent_obj, file_list, quit_btn, main_page,
+ *            src_btn_int, src_btn_sd,
+ *            filter_btn_txt / _non_txt / _all   — destroyed via lv_obj_del
+ *                                                  then nulled
+ * No timers, tasks, or hardware sessions are held here. If you add any,
+ * list them above AND kill them in the exit path — a leaked pointer to
+ * a destroyed widget crashes on next entry.
  */
 #include "../ui_define.h"
 #include "app_registry.h"

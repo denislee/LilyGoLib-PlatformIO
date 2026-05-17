@@ -19,6 +19,17 @@
  * notes_crypto is enabled+unlocked we save it on prompt submit, and the
  * Connect button uses the saved password directly on subsequent runs — no
  * prompts. The pencil (edit) button forces a fresh prompt chain.
+ *
+ * State reset on onStop (SshApp::onStop):
+ *   timers:  poll_timer_                  — lv_timer_del + nullptr
+ *   tasks:   backend_->disconnect()       — kills SSH worker task, frees
+ *                                            shared_ptr in unique_ptr reset
+ *   ui:      ui_hide_back_button()         — releases shared status-bar hook
+ *   statics: s_prompt_app                 — cleared if this app owns it
+ * Unlike most apps, this one holds state as App members (poll_timer_,
+ * backend_) rather than file statics. Add new members alongside and make
+ * sure onStop() releases them BEFORE chaining core::App::onStop() — the
+ * base destroys the parent panel and any timer pointing into it explodes.
  */
 #include "../ui_define.h"
 #include "../core/app.h"

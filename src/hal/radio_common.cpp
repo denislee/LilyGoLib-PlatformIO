@@ -10,6 +10,7 @@
 
 #include "radio.h"
 #include "radio_chip.h"
+#include "../core/spi_lock.h"
 
 #ifdef ARDUINO
 #include <LilyGoLib.h>
@@ -58,10 +59,8 @@ int16_t hw_set_radio_params(radio_params_t &params)
     }
 
 #ifdef ARDUINO
-    instance.lockSPI();
-    int16_t state = radio_chip::configure(params);
-    instance.unlockSPI();
-    return state;
+    core::ScopedSpiLock lock;
+    return radio_chip::configure(params);
 #else
     (void)params;
     return 0;
@@ -83,9 +82,8 @@ int16_t hw_set_radio_default()
 void hw_set_radio_listening()
 {
 #ifdef ARDUINO
-    instance.lockSPI();
+    core::ScopedSpiLock lock;
     radio.startReceive();
-    instance.unlockSPI();
 #endif
 }
 
@@ -110,10 +108,11 @@ void hw_set_radio_tx(radio_tx_params_t &params, bool continuous)
     // Both calls touch the SPI bus, so they must sit inside the instance lock.
     // Pre-refactor, the SX1262 path ran finishTransmit() outside the lock —
     // a latent race against other SPI users (e.g. the display flush task).
-    instance.lockSPI();
-    radio.finishTransmit();
-    params.state = radio.startTransmit(params.data, params.length);
-    instance.unlockSPI();
+    {
+        core::ScopedSpiLock lock;
+        radio.finishTransmit();
+        params.state = radio.startTransmit(params.data, params.length);
+    }
 #else
     (void)params;
     (void)continuous;
@@ -137,14 +136,15 @@ void hw_get_radio_rx(radio_rx_params_t &params)
         return;
     }
 
-    instance.lockSPI();
-    params.length = radio.getPacketLength();
-    params.state  = radio.readData(params.data, params.length);
-    params.rssi   = radio.getRSSI();
-    params.snr    = radio.getSNR();
-    // Re-arm receive before releasing the lock so we don't drop the next packet.
-    radio.startReceive();
-    instance.unlockSPI();
+    {
+        core::ScopedSpiLock lock;
+        params.length = radio.getPacketLength();
+        params.state  = radio.readData(params.data, params.length);
+        params.rssi   = radio.getRSSI();
+        params.snr    = radio.getSNR();
+        // Re-arm receive before releasing the lock so we don't drop the next packet.
+        radio.startReceive();
+    }
 
     // Suppress echoes of our own just-transmitted packet.
     if (last_send_millis + 200 > millis()) {

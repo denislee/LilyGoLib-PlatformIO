@@ -3,8 +3,10 @@
  * @brief     OpenSSL-compatible AES-256-CBC / PBKDF2-HMAC-SHA256 for notes.
  */
 #include "notes_crypto.h"
+#include "notes_path.h"
 #include "storage.h"
 #include "../hal_interface.h"
+#include "../core/spi_lock.h"
 
 #include <cstring>
 #include <cstdio>
@@ -51,16 +53,9 @@ static void zeroize(void *buf, size_t n)
 #endif
 }
 
-/* Strip one leading '/' so policy checks can ignore the anchor. */
-static const char *lstrip_slash(const char *p)
-{
-    if (p && *p == '/') return p + 1;
-    return p ? p : "";
-}
-
 static bool has_magic(const uint8_t *buf, size_t n)
 {
-    return n >= 8 && memcmp(buf, NC_MAGIC, 8) == 0;
+    return content_has_salted_magic((const char *)buf, n);
 }
 
 /* ---- NVS canary helpers ---- */
@@ -274,20 +269,17 @@ static bool raw_read(const ProtFile &pf, std::vector<uint8_t> &out)
                ? String(pf.path.c_str())
                : ("/" + String(pf.path.c_str()));
     File f;
-    bool lock = false;
+    core::MaybeSpiLock lock(pf.on_sd);
     if (pf.on_sd) {
-        instance.lockSPI();
         f = SD.open(s, FILE_READ);
-        lock = true;
     } else {
         f = FFat.open(s, FILE_READ);
     }
-    if (!f) { if (lock) instance.unlockSPI(); return false; }
+    if (!f) return false;
     size_t n = f.size();
     out.resize(n);
     if (n) f.read(out.data(), n);
     f.close();
-    if (lock) instance.unlockSPI();
     return true;
 #else
     (void)pf; return false;
@@ -301,18 +293,15 @@ static bool raw_write(const ProtFile &pf, const uint8_t *buf, size_t len)
                ? String(pf.path.c_str())
                : ("/" + String(pf.path.c_str()));
     File f;
-    bool lock = false;
+    core::MaybeSpiLock lock(pf.on_sd);
     if (pf.on_sd) {
-        instance.lockSPI();
         f = SD.open(s, "w");
-        lock = true;
     } else {
         f = FFat.open(s, "w");
     }
-    if (!f) { if (lock) instance.unlockSPI(); return false; }
+    if (!f) return false;
     size_t w = f.write(buf, len);
     f.close();
-    if (lock) instance.unlockSPI();
     return w == len;
 #else
     (void)pf; (void)buf; (void)len; return true;
@@ -326,7 +315,7 @@ static bool raw_write(const ProtFile &pf, const uint8_t *buf, size_t len)
 static void collect_sd_protected(std::vector<ProtFile> &out)
 {
     if (!(HW_SD_ONLINE & hw_get_device_online())) return;
-    instance.lockSPI();
+    core::ScopedSpiLock lock;
     File dir = SD.open("/notes");
     if (dir && dir.isDirectory()) {
         File f = dir.openNextFile();
@@ -351,7 +340,6 @@ static void collect_sd_protected(std::vector<ProtFile> &out)
         dir.close();
     }
     bool has_idx = SD.exists("/journal_idx.bin");
-    instance.unlockSPI();
     if (has_idx) out.push_back({"/journal_idx.bin", true});
 }
 #endif
@@ -398,27 +386,6 @@ bool notes_crypto_should_encrypt()
      * encryption is enabled but we're locked, the caller must fail hard rather
      * than silently leak plaintext — see hal/storage.cpp. */
     return g_unlocked;
-}
-
-bool notes_crypto_path_is_protected(const char *path)
-{
-    if (!path) return false;
-    const char *name = lstrip_slash(path);
-
-    /* Journal index lives at the FFat root and stays there because it's
-     * bookkeeping, not a user note. */
-    if (strcmp(name, "journal_idx.bin") == 0) return true;
-
-    /* User notes now live one level deep under "notes/". Anything deeper is
-     * outside this app's scope. */
-    if (strncmp(name, "notes/", 6) == 0) {
-        const char *leaf = name + 6;
-        if (strchr(leaf, '/') != nullptr) return false;
-        size_t n = strlen(leaf);
-        return n > 4 && strcmp(leaf + n - 4, ".txt") == 0;
-    }
-
-    return false;
 }
 
 bool notes_crypto_unlock(const char *pw)

@@ -10,6 +10,8 @@
 #include "ui_list_picker.h"
 #include "ui_define.h"
 
+#include <memory>
+
 namespace {
 
 struct PickerCtx {
@@ -23,16 +25,15 @@ struct PickerCtx {
     bool fired = false;
 };
 
-static PickerCtx *g_ctx = nullptr;
+static std::unique_ptr<PickerCtx> g_ctx;
 
 static void tear_down(int picked_index)
 {
     if (!g_ctx) return;
-    PickerCtx *ctx = g_ctx;
-    g_ctx = nullptr;
+    /* Move ownership into a local so g_ctx is null while the user callback
+     * runs — letting it safely reopen the picker without racing our delete. */
+    std::unique_ptr<PickerCtx> ctx = std::move(g_ctx);
 
-    // Fire the callback BEFORE destroying LVGL objects so the caller can
-    // reopen the picker or open another modal without racing our teardown.
     ui_list_picker_cb cb = ctx->cb;
     void *ud = ctx->ud;
     bool will_fire = !ctx->fired && cb;
@@ -42,7 +43,7 @@ static void tear_down(int picked_index)
     if (ctx->group)   lv_group_del(ctx->group);
     if (ctx->prev_group) set_default_group(ctx->prev_group);
     if (ctx->prev_back_cb) ui_show_back_button(ctx->prev_back_cb);
-    delete ctx;
+    ctx.reset();
 
     if (will_fire) cb(picked_index, ud);
 }
@@ -69,8 +70,8 @@ void ui_list_picker_open(const char *title,
         return;
     }
 
-    PickerCtx *ctx = new PickerCtx();
-    g_ctx = ctx;
+    g_ctx = std::make_unique<PickerCtx>();
+    PickerCtx *ctx = g_ctx.get();
     ctx->cb = cb;
     ctx->ud = ud;
 

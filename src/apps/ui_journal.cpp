@@ -1,6 +1,12 @@
 /**
  * @file      ui_journal.cpp
  * @brief     Chronological view of internal files with timestamps in blog style.
+ *
+ * State reset on onStop (ui_journal_exit):
+ *   widgets: menu, quit_btn, parent_obj, pending_journal_parent
+ *                                       — destroyed via lv_obj_del then nulled
+ * No timers, tasks, or hardware sessions are held here. If you add any,
+ * list them above AND extend the exit path.
  */
 #include "../ui_define.h"
 #include "app_registry.h"
