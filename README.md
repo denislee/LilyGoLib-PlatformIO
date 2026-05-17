@@ -2,7 +2,7 @@
   <img src=".github/LilyGo_logo.png" alt="LilyGo logo" width="100"/>
 </div>
 
-<h1 align = "center">🌟LilyGoLib-PlatformIO🌟</h1>
+<h1 align = "center">🌟t-lora-pager🌟</h1>
 
 # `1` Overview
 
@@ -40,7 +40,7 @@
 1. Install [Visual Studio Code](https://code.visualstudio.com/) and [Python](https://www.python.org/)
 2. Search for the `PlatformIO` plugin in the `Visual Studio Code` extension and install it.
 3. After the installation is complete, you need to restart `Visual Studio Code`
-4. After restarting `Visual Studio Code`, select `File` in the upper left corner of `Visual Studio Code` -> `Open Folder` -> select the `LilyGoLib-PlatformIO` directory
+4. After restarting `Visual Studio Code`, select `File` in the upper left corner of `Visual Studio Code` -> `Open Folder` -> select the `t-lora-pager` directory
 5. Wait for the installation of third-party dependent libraries to complete
 6. Click on the `platformio.ini` file, and in the `platformio` column
 7. Select the board name you want to use in `default_envs` and uncomment it.

@@ -1,4 +1,4 @@
-# LilyGoLib-PlatformIO Project Overview
+# t-lora-pager Project Overview
 
 This project is a PlatformIO-based firmware for LilyGo ESP32-S3 devices, specifically targeting the **T-LoRa-Pager**, **T-Watch-S3**, and **T-Watch-Ultra**. It leverages the `LilyGoLib` hardware abstraction library and uses **LVGL v9** for high-quality GUI rendering.
 

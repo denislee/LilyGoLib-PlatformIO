@@ -1,4 +1,4 @@
-# Lint configuration for the LilyGoLib-PlatformIO firmware.
+# Lint configuration for the t-lora-pager firmware.
 #
 # Scope is intentionally narrow: we enable checks that catch real bugs or
 # obvious hygiene issues, and disable chatty stylistic checks that would drown

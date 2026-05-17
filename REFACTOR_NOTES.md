@@ -250,7 +250,7 @@ during recommendation) have now been addressed. Summary:
 2. Run `pio run -e tlora_pager -e emulator_lora_pager` to confirm a
    green baseline before making changes.
 3. Read `REFACTOR_NOTES.md` (this file) + the auto-memory at
-   `~/.claude/projects/-home-dns-tmp-LilyGoLib-PlatformIO/memory/project_architecture_direction.md`.
+   `~/.claude/projects/-home-dns-tmp-t-lora-pager/memory/project_architecture_direction.md`.
 4. For any split work: verify line-number boundaries with `grep -n`
    before `sed -i`, then rebuild after every extraction.
 5. Do not revert user-applied changes flagged by system-reminder notes
