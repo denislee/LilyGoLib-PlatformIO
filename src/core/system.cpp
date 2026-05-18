@@ -97,6 +97,9 @@ void System::setupGlobalUI() {
     lv_obj_center(_statTimeLabel);
     lv_obj_set_style_text_color(_statTimeLabel, lv_color_white(), 0);
     lv_obj_set_style_text_font(_statTimeLabel, header_font, 0);
+    /* Avoid LVGL's default "Text" leaking through any modal (e.g. the
+     * passphrase prompt) that opens before the 1Hz timer below has fired. */
+    lv_label_set_text(_statTimeLabel, "");
 
     // Right-side flex container holding SD, USB and battery indicators.
     // Flex order: SD, USB, Battery — so hidden icons collapse naturally and
@@ -157,6 +160,7 @@ void System::setupGlobalUI() {
     _statBattLabel = lv_label_create(_statRightCont);
     lv_obj_set_style_text_color(_statBattLabel, lv_color_white(), 0);
     lv_obj_set_style_text_font(_statBattLabel, header_font, 0);
+    lv_label_set_text(_statBattLabel, "");
 
     _statMemLabel = lv_label_create(_statusBar);
     lv_obj_align(_statMemLabel, LV_ALIGN_LEFT_MID, 5, 0);
@@ -425,6 +429,26 @@ void System::setupGlobalUI() {
             }
         }
     }, 1000, NULL);
+
+    /* Populate clock and battery synchronously so they're visible before the
+     * first 1Hz tick. If a passphrase modal (or any textarea) opens during the
+     * first second of boot, the timer's text-input gate would otherwise freeze
+     * these labels at their empty state — and the dimmed status bar would
+     * appear blank behind the modal. */
+    {
+        struct tm timeinfo;
+        hw_get_date_time(timeinfo);
+        lv_label_set_text_fmt(_statTimeLabel, "%02d/%02d/%04d %02d:%02d",
+                              timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900,
+                              timeinfo.tm_hour, timeinfo.tm_min);
+
+        monitor_params_t params;
+        hw_get_monitor_params(params);
+        const char *batt_sym = LV_SYMBOL_BATTERY_FULL;
+        if (params.is_charging) batt_sym = LV_SYMBOL_CHARGE;
+        else if (params.battery_percent < 20) batt_sym = LV_SYMBOL_BATTERY_EMPTY;
+        lv_label_set_text_fmt(_statBattLabel, "%s %d%%", batt_sym, params.battery_percent);
+    }
 }
 
 void System::showMenu() {
