@@ -20,6 +20,7 @@
 #include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 #endif
 
 /* When notes_crypto is enabled+unlocked, the text I/O wrappers below
@@ -45,6 +46,28 @@ static void ensure_notes_dir()
         if (!SD.exists(NOTES_DIR)) SD.mkdir(NOTES_DIR);
     }
 }
+
+/* Serialises note-directory mutations on the internal FFat volume so the
+ * background eviction sweep (prune_task) can't interleave a directory scan or
+ * FFat.remove() with a concurrent save's write and corrupt FATFS state. Held
+ * only around the flash ops themselves — never across the SD mirror write or a
+ * hub network POST — so a save contending with an active sweep waits at most
+ * for one file's flash I/O, not the whole burst. Kept strictly disjoint from
+ * ScopedSpiLock (never nested) so there is no lock-ordering hazard. */
+static SemaphoreHandle_t notes_fs_mutex()
+{
+    /* C++11 thread-safe static init: created exactly once, even under a
+     * first-call race between the UI task and the prune task. */
+    static SemaphoreHandle_t m = xSemaphoreCreateMutex();
+    return m;
+}
+
+struct NotesFsLock {
+    NotesFsLock()  { xSemaphoreTake(notes_fs_mutex(), portMAX_DELAY); }
+    ~NotesFsLock() { xSemaphoreGive(notes_fs_mutex()); }
+    NotesFsLock(const NotesFsLock &) = delete;
+    NotesFsLock &operator=(const NotesFsLock &) = delete;
+};
 #endif
 
 /* Build a normalized "/path" into a fixed stack buffer. Avoids the heap
@@ -934,7 +957,10 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
 
     if (cb) cb(0, 0, "Scanning internal storage...");
     std::vector<FileInfo> infos;
-    list_files(infos, FFat, NOTES_DIR, ".txt");
+    {
+        NotesFsLock fs;   // serialise the directory scan against concurrent saves
+        list_files(infos, FFat, NOTES_DIR, ".txt");
+    }
 
     if (infos.size() < kEvictThreshold) {
         if (cb) cb(0, 0, "No eviction needed.");
@@ -976,12 +1002,17 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
 
         if (cb) cb((int)i, (int)total_to_move, ("Moving to SD: " + path).c_str());
 
-        File src = FFat.open(path);
-        if (!src) continue;
-        size_t sz = src.size();
-        std::vector<uint8_t> buf(sz);
-        if (sz) src.read(buf.data(), sz);
-        src.close();
+        size_t sz = 0;
+        std::vector<uint8_t> buf;
+        {
+            NotesFsLock fs;   // FFat read, serialised against concurrent saves
+            File src = FFat.open(path);
+            if (!src) continue;   // lock released by RAII on continue
+            sz = src.size();
+            buf.resize(sz);
+            if (sz) src.read(buf.data(), sz);
+            src.close();
+        }
 
         bool copied = false;
         {
@@ -1009,6 +1040,7 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
         if (copied || hub_ok) {
             printf("Eviction move: %s (sd=%d hub=%d)\n",
                    path.c_str(), (int)copied, (int)hub_ok);
+            NotesFsLock fs;   // FFat remove, serialised against concurrent saves
             FFat.remove(path);
         } else {
             printf("Eviction copy failed, keeping: %s\n", path.c_str());
@@ -1086,6 +1118,7 @@ bool hw_save_preferred_file(const char *path, const char *content, std::string *
     }
     bool ok_int = false;
     {
+        NotesFsLock fs;   // serialise against the background eviction sweep
         File f = FFat.open(str, "w");
         if (f) {
             size_t w = payload.empty() ? 0 : f.write(payload.data(), payload.size());
