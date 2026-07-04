@@ -164,7 +164,11 @@ void charger_current_cb(lv_event_t *e)
     int32_t val = lv_slider_get_value(slider);
     local_param.charger_current = hw_set_charger_current_level(val);
     lv_label_set_text_fmt(slider_label, "%04umA", local_param.charger_current);
-    hw_set_user_setting(local_param);
+    // The current is applied to the PMIC live above. Like the sibling display
+    // sliders, do NOT persist per notch — dragging fires this callback on every
+    // step, and hw_set_user_setting() rewrites the whole NVS blob each time.
+    // local_param is flushed once when the user leaves Settings (ui_sys_exit),
+    // so the setting still survives without thrashing flash on every drag.
 }
 
 void charge_limit_cb(lv_event_t *e)
