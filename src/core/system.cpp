@@ -243,10 +243,9 @@ void System::setupGlobalUI() {
         monitor_params_t params;
         hw_get_monitor_params(params);
         if (self._statBattLabel) {
-            const char *batt_sym = LV_SYMBOL_BATTERY_FULL;
-            if (params.is_charging) batt_sym = LV_SYMBOL_CHARGE;
-            else if (params.battery_percent < 20) batt_sym = LV_SYMBOL_BATTERY_EMPTY;
-            lv_label_set_text_fmt(self._statBattLabel, "%s %d%%", batt_sym, params.battery_percent);
+            lv_label_set_text_fmt(self._statBattLabel, "%s %d%%",
+                                  ui_battery_icon(params.battery_percent, params.is_charging),
+                                  params.battery_percent);
         }
 
         // When the back button is visible, push the memory readout right so
@@ -444,10 +443,9 @@ void System::setupGlobalUI() {
 
         monitor_params_t params;
         hw_get_monitor_params(params);
-        const char *batt_sym = LV_SYMBOL_BATTERY_FULL;
-        if (params.is_charging) batt_sym = LV_SYMBOL_CHARGE;
-        else if (params.battery_percent < 20) batt_sym = LV_SYMBOL_BATTERY_EMPTY;
-        lv_label_set_text_fmt(_statBattLabel, "%s %d%%", batt_sym, params.battery_percent);
+        lv_label_set_text_fmt(_statBattLabel, "%s %d%%",
+                              ui_battery_icon(params.battery_percent, params.is_charging),
+                              params.battery_percent);
     }
 }
 

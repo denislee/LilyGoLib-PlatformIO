@@ -12,6 +12,17 @@ static lv_group_t *msg_group = NULL;
 static lv_group_t *prev_group;
 
 
+const char *ui_battery_icon(int percent, bool is_charging)
+{
+    if (is_charging) return LV_SYMBOL_CHARGE;
+    if (percent >= 88) return LV_SYMBOL_BATTERY_FULL;
+    if (percent >= 63) return LV_SYMBOL_BATTERY_3;
+    if (percent >= 38) return LV_SYMBOL_BATTERY_2;
+    if (percent >= 13) return LV_SYMBOL_BATTERY_1;
+    return LV_SYMBOL_BATTERY_EMPTY;
+}
+
+
 lv_obj_t *ui_create_process_bar(lv_obj_t *parent, const char *title)
 {
 #if LVGL_VERSION_MAJOR == 8

@@ -35,6 +35,11 @@ lv_obj_t *create_dropdown(lv_obj_t *parent, const char *icon, const char *txt, c
 
 lv_obj_t *ui_create_process_bar(lv_obj_t *parent, const char *title);
 
+/* Pick the LVGL battery glyph that best represents the current cell state.
+ * Returns LV_SYMBOL_CHARGE while charging; otherwise quantizes percent into
+ * the five LV_SYMBOL_BATTERY_* steps so the icon actually tracks the level. */
+const char *ui_battery_icon(int percent, bool is_charging);
+
 lv_obj_t *create_floating_button(lv_event_cb_t event_cb, void *user_data);
 lv_obj_t *create_menu(lv_obj_t *parent, lv_event_cb_t event_cb);
 lv_obj_t *create_radius_button(lv_obj_t *parent, const void *image, lv_event_cb_t event_cb, void *user_data);

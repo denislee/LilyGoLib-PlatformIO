@@ -59,11 +59,9 @@ static void glance_refresh(lv_timer_t *t) {
     if (s_glance_batt_lbl) {
         monitor_params_t params;
         hw_get_monitor_params(params);
-        const char *sym = LV_SYMBOL_BATTERY_FULL;
-        if (params.is_charging) sym = LV_SYMBOL_CHARGE;
-        else if (params.battery_percent < 20) sym = LV_SYMBOL_BATTERY_EMPTY;
         lv_label_set_text_fmt(s_glance_batt_lbl, "%s  %d%%",
-                              sym, params.battery_percent);
+                              ui_battery_icon(params.battery_percent, params.is_charging),
+                              params.battery_percent);
     }
     if (s_glance_conn_lbl) {
         // Single line of active connectivity glyphs so the user can tell

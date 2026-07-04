@@ -284,7 +284,11 @@ void hw_get_monitor_params(monitor_params_t &params)
 #if defined(USING_PPM_MANAGE)
     params.type = MONITOR_PPM;
     params.charge_state = instance.ppm.getChargeStatusString();
-    params.is_charging = instance.ppm.isVbusIn(); // If VBUS is in, we consider it "charging" for the icon
+    // "Charging" means current is actually flowing into the cell. VBUS-in
+    // alone over-reports — a plugged-in device that has hit termination is
+    // not charging anymore. isChargeDone() drops to false during pre/fast
+    // charge and rises to true at termination.
+    params.is_charging = instance.ppm.isCharging() && !instance.ppm.isChargeDone();
     params.usb_voltage = instance.ppm.getVbusVoltage();
     params.sys_voltage = instance.ppm.getSystemVoltage();
     instance.ppm.getFaultStatus();
@@ -320,7 +324,14 @@ void hw_get_monitor_params(monitor_params_t &params)
         params.maxLoadCurrent = instance.gauge.getMaxLoadCurrent();
         BatteryStatus batteryStatus = instance.gauge.getBatteryStatus();
 
-        params.is_charging = !batteryStatus.isInDischargeMode();
+        // Do NOT derive is_charging from the gauge alone — once the cell hits
+        // termination current drops to ~0 and isInDischargeMode() reports
+        // false, which would leave the lightning icon stuck at 100%. On the
+        // pager the PPM (set above) is authoritative for charge state; we
+        // only veto it here when the gauge confirms a full charge.
+        if (batteryStatus.isFullChargeDetected()) {
+            params.is_charging = false;
+        }
 
         if (batteryStatus.isInDischargeMode()) {
             params.timeToEmpty = instance.gauge.getTimeToEmpty();
