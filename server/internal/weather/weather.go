@@ -8,6 +8,8 @@
 package weather
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"time"
@@ -15,6 +17,23 @@ import (
 	"github.com/lilygo/lilyhub/internal/cache"
 	"github.com/lilygo/lilyhub/internal/httpx"
 )
+
+// ipAPIStatusOK rejects ip-api's 200-with-error responses. ip-api reports
+// failure as {"status":"fail",...} at HTTP 200, which the generic proxy would
+// otherwise cache as a success for the full 30-minute TTL — pinning a transient
+// failure (rate limit, reserved range) and starving the device of a retry.
+func ipAPIStatusOK(body []byte) error {
+	var s struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &s); err != nil {
+		return fmt.Errorf("unparseable ip-api body")
+	}
+	if s.Status != "success" {
+		return fmt.Errorf("ip-api status %q", s.Status)
+	}
+	return nil
+}
 
 type Handler struct {
 	cache  *cache.Cache
@@ -40,7 +59,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 // previous call so the on-device JSON parser is untouched.
 func (h *Handler) geoIP(w http.ResponseWriter, r *http.Request) {
 	const upstream = "http://ip-api.com/json/?fields=status,lat,lon,city,regionName,country"
-	httpx.Proxy(h.cache, h.client, w, r, "geoip", upstream, 30*time.Minute)
+	httpx.Proxy(h.cache, h.client, w, r, "geoip", upstream, 30*time.Minute, ipAPIStatusOK)
 }
 
 // geoSearch — pass-through of geocoding-api.open-meteo.com/v1/search.
@@ -58,7 +77,7 @@ func (h *Handler) geoSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	upstream := "https://geocoding-api.open-meteo.com/v1/search?name=" +
 		url.QueryEscape(q) + "&count=" + url.QueryEscape(count) + "&format=json"
-	httpx.Proxy(h.cache, h.client, w, r, "geosearch:"+q+":"+count, upstream, 24*time.Hour)
+	httpx.Proxy(h.cache, h.client, w, r, "geosearch:"+q+":"+count, upstream, 24*time.Hour, nil)
 }
 
 // forecast — pass-through of api.open-meteo.com/v1/forecast. We forward the
@@ -72,5 +91,5 @@ func (h *Handler) forecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upstream := "https://api.open-meteo.com/v1/forecast?" + qs
-	httpx.Proxy(h.cache, h.client, w, r, "forecast:"+qs, upstream, 10*time.Minute)
+	httpx.Proxy(h.cache, h.client, w, r, "forecast:"+qs, upstream, 10*time.Minute, nil)
 }

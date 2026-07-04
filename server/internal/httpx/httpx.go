@@ -14,11 +14,21 @@ import (
 	"github.com/lilygo/lilyhub/internal/cache"
 )
 
-// Proxy fetches `upstream` (GET) and writes the body back to w. Successful
-// responses are cached under `key` for `ttl`. On any error a 502 is returned;
-// the device is expected to fall back to the public internet on its own.
+// maxBodyBytes caps how much of an upstream response we buffer and cache. A
+// body larger than this is treated as an upstream error rather than silently
+// truncated — caching a half-read body would pin broken JSON as a 200 HIT for
+// the whole TTL.
+const maxBodyBytes = 1 << 20
+
+// Proxy fetches `upstream` (GET) and writes the body back to w. A 200 response
+// is cached under `key` for `ttl`. If `validate` is non-nil it is run against
+// the body first; a non-nil error means the payload is not cacheable and is
+// treated as an upstream failure — this stops APIs that report errors in a 200
+// body (e.g. ip-api's {"status":"fail"}) from being cached as success. On any
+// error a 502 is returned; the device is expected to fall back to the public
+// internet on its own.
 func Proxy(c *cache.Cache, client *http.Client, w http.ResponseWriter, r *http.Request,
-	key, upstream string, ttl time.Duration,
+	key, upstream string, ttl time.Duration, validate func([]byte) error,
 ) {
 	if body, ok := c.Get(key); ok {
 		w.Header().Set("Content-Type", "application/json")
@@ -41,7 +51,9 @@ func Proxy(c *cache.Cache, client *http.Client, w http.ResponseWriter, r *http.R
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// Read one byte past the cap so an oversized body is distinguishable from
+	// one that lands exactly on the limit.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		http.Error(w, "upstream read: "+err.Error(), http.StatusBadGateway)
 		return
@@ -49,6 +61,16 @@ func Proxy(c *cache.Cache, client *http.Client, w http.ResponseWriter, r *http.R
 	if resp.StatusCode != http.StatusOK {
 		http.Error(w, fmt.Sprintf("upstream %d", resp.StatusCode), http.StatusBadGateway)
 		return
+	}
+	if len(body) > maxBodyBytes {
+		http.Error(w, "upstream body too large", http.StatusBadGateway)
+		return
+	}
+	if validate != nil {
+		if err := validate(body); err != nil {
+			http.Error(w, "upstream invalid: "+err.Error(), http.StatusBadGateway)
+			return
+		}
 	}
 
 	c.Set(key, body, ttl)
