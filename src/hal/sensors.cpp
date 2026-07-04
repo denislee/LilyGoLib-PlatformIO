@@ -164,8 +164,16 @@ void hw_register_imu_process()
         }
         s_imu_diag.sensor_count = count;
 
-        float sample_rate = 100.0f;      /* 100 Hz for accel + quaternion */
-        uint32_t report_latency_ms = 0;  /* report immediately */
+        // Power: the only consumers of the accel + game-rotation streams are
+        // hw_is_face_down() (a slow physical gesture) and the IMU debug page,
+        // which reads the cached values at 5 Hz — nothing needs 100 Hz. Run the
+        // BHI260 at 25 Hz and let it batch ~200 ms of samples in its own FIFO
+        // before interrupting the host: that collapses ~200 host I2C wakeups/s
+        // (100 Hz x accel+GRV) to ~10/s while keeping face-down latency well
+        // under a frame. A future high-rate consumer (e.g. tilt-to-wake) should
+        // raise these back up. DEVICE_ORIENTATION already runs at 5 Hz below.
+        float sample_rate = 25.0f;
+        uint32_t report_latency_ms = 200;
 
         // Force-configure all three regardless of what the info table says
         // — the GPIO firmware variant on the Pager has been observed to
