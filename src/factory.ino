@@ -213,7 +213,14 @@ void loop()
         }
     }
 
-    delay(50);
+    // Idle cadence. This loop is pure housekeeping (NTP re-trigger, vendor
+    // instance.loop(), CPU-freq management) — LVGL rendering and rotary/NFC
+    // input each run on their own FreeRTOS tasks. During fake-sleep the display
+    // is off and nothing here needs 20 Hz, so back off to 2 Hz to cut the
+    // always-on I2C/PMU polling and dynamic-power draw of the busiest task.
+    // Wake is driven entirely by the separate rotary task, so display/UI
+    // responsiveness on wake is unaffected.
+    delay(ui_is_fake_sleep() ? 500 : 50);
 }
 
 #endif
