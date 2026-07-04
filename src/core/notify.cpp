@@ -179,6 +179,15 @@ void pump()
     // Pull pending items under the lock, then dispatch without holding it
     // so subscribers (which may allocate, touch LVGL, etc.) don't serialize
     // against `post()` from other tasks.
+    // Fast path: nothing queued. Checked under the lock but before allocating
+    // any batch container, so the idle ~60 Hz tick does zero heap work.
+    // (libstdc++ default-constructs std::deque with a live allocation.) A post()
+    // racing in right after we return here is simply picked up next tick.
+    {
+        std::lock_guard<std::mutex> g(s_mu);
+        if (s_queue.empty() && s_dismissed.empty()) return;
+    }
+
     std::deque<Notification> batch;
     std::vector<uint32_t>    to_dismiss;
     {
