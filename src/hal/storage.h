@@ -77,7 +77,12 @@ bool hw_get_filesystem_dirty();
 void hw_set_filesystem_dirty(bool dirty);
 
 // Preference-aware variants used by apps that want to honour the toggle.
-bool hw_save_preferred_file(const char *path, const char *content, std::string *error = nullptr);
+// `allow_prune` gates the periodic internal-storage eviction sweep that a save
+// may trigger. Latency-sensitive callers (e.g. the editor's exit teardown) pass
+// false so returning to the caller is never delayed by housekeeping; the sweep
+// still fires on the next ordinary save.
+bool hw_save_preferred_file(const char *path, const char *content, std::string *error = nullptr,
+                            bool allow_prune = true);
 bool hw_read_preferred_file(const char *path, std::string &content);
 void hw_get_preferred_txt_files(std::vector<std::string> &list);
 

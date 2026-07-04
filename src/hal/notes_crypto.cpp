@@ -43,6 +43,33 @@ namespace {
 bool g_unlocked = false;
 std::string g_passphrase;   /* Held in RAM while unlocked. */
 
+/* One pre-derived (salt, key, iv) triple, primed by notes_crypto_prewarm() and
+ * consumed by the next encrypt so it can skip the ~10k-iteration PBKDF2. Bound
+ * to the passphrase it was derived under so a mid-session rotation can't hand a
+ * stale key to encrypt. Consumed exactly once — the salt is never reused. */
+struct PrewarmSlot {
+    bool valid = false;
+    std::string pw;
+    uint8_t salt[8];    /* NC_SALT_LEN */
+    uint8_t key[32];    /* NC_KEY_LEN  */
+    uint8_t iv[16];     /* NC_IV_LEN   */
+};
+PrewarmSlot g_prewarm;
+
+static void zeroize(void *buf, size_t n);
+
+static void prewarm_clear()
+{
+    if (g_prewarm.valid) {
+        zeroize(g_prewarm.salt, sizeof(g_prewarm.salt));
+        zeroize(g_prewarm.key, sizeof(g_prewarm.key));
+        zeroize(g_prewarm.iv, sizeof(g_prewarm.iv));
+    }
+    if (!g_prewarm.pw.empty()) zeroize(&g_prewarm.pw[0], g_prewarm.pw.size());
+    g_prewarm.pw.clear();
+    g_prewarm.valid = false;
+}
+
 static void zeroize(void *buf, size_t n)
 {
 #ifdef ARDUINO
@@ -145,11 +172,21 @@ static bool encrypt_with_pw(const char *pw,
 {
 #ifdef ARDUINO
     uint8_t salt[NC_SALT_LEN];
-    esp_fill_random(salt, NC_SALT_LEN);
-
     uint8_t key[NC_KEY_LEN];
     uint8_t iv[NC_IV_LEN];
-    if (!derive_key_iv(pw, salt, key, iv)) return false;
+
+    /* Consume a matching pre-derived triple if one is primed for this exact
+     * passphrase; otherwise derive synchronously. Either way the salt is fresh
+     * and used once. */
+    if (g_prewarm.valid && g_prewarm.pw == pw) {
+        memcpy(salt, g_prewarm.salt, NC_SALT_LEN);
+        memcpy(key, g_prewarm.key, NC_KEY_LEN);
+        memcpy(iv, g_prewarm.iv, NC_IV_LEN);
+        prewarm_clear();
+    } else {
+        esp_fill_random(salt, NC_SALT_LEN);
+        if (!derive_key_iv(pw, salt, key, iv)) return false;
+    }
 
     /* PKCS7 pad to 16-byte block. */
     size_t pad = NC_IV_LEN - (pt_len % NC_IV_LEN);
@@ -398,6 +435,7 @@ bool notes_crypto_unlock(const char *pw)
     if (!decrypt_with_pw(pw, canary.data(), canary.size(), dec)) return false;
     if (dec != NC_CANARY_PT) return false;
 
+    prewarm_clear();
     g_passphrase = pw;
     g_unlocked = true;
     return true;
@@ -405,6 +443,7 @@ bool notes_crypto_unlock(const char *pw)
 
 void notes_crypto_lock()
 {
+    prewarm_clear();    /* drop the pre-derived key with the passphrase */
     if (!g_passphrase.empty()) {
         zeroize(&g_passphrase[0], g_passphrase.size());
     }
@@ -417,6 +456,30 @@ bool notes_crypto_encrypt_buffer(const uint8_t *pt, size_t pt_len,
 {
     if (!g_unlocked) return false;
     return encrypt_with_pw(g_passphrase.c_str(), pt, pt_len, out);
+}
+
+void notes_crypto_prewarm()
+{
+#ifdef ARDUINO
+    if (!g_unlocked) return;
+    if (g_prewarm.valid) return;    /* already primed */
+
+    uint8_t salt[NC_SALT_LEN];
+    esp_fill_random(salt, NC_SALT_LEN);
+    uint8_t key[NC_KEY_LEN];
+    uint8_t iv[NC_IV_LEN];
+    if (!derive_key_iv(g_passphrase.c_str(), salt, key, iv)) return;
+
+    memcpy(g_prewarm.salt, salt, NC_SALT_LEN);
+    memcpy(g_prewarm.key, key, NC_KEY_LEN);
+    memcpy(g_prewarm.iv, iv, NC_IV_LEN);
+    g_prewarm.pw = g_passphrase;
+    g_prewarm.valid = true;
+
+    zeroize(salt, sizeof(salt));
+    zeroize(key, sizeof(key));
+    zeroize(iv, sizeof(iv));
+#endif
 }
 
 bool notes_crypto_decrypt_buffer(const uint8_t *ct, size_t ct_len,
@@ -439,6 +502,7 @@ bool notes_crypto_set_passphrase(const char *new_pw)
                          strlen(NC_CANARY_PT), canary_ct)) return false;
     if (!write_canary(canary_ct)) return false;
 
+    prewarm_clear();
     g_passphrase = new_pw;
     g_unlocked = true;
     return true;

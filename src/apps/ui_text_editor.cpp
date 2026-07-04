@@ -51,7 +51,10 @@ void ui_text_editor_exit(lv_obj_t *parent);
 static void update_word_count();
 static void schedule_word_count_update();
 
-static bool save_content(bool show_error_popup)
+// `allow_prune` forwards to hw_save_preferred_file: the exit/teardown path
+// passes false so returning to the menu is never delayed by the internal-storage
+// eviction sweep, which runs on the next ordinary save instead.
+static bool save_content(bool show_error_popup, bool allow_prune = true)
 {
     if (!text_area) return true;
     if (!content_dirty) return true;
@@ -80,7 +83,7 @@ static bool save_content(bool show_error_popup)
     }
 
     string err;
-    bool success = hw_save_preferred_file(target_path.c_str(), txt, &err);
+    bool success = hw_save_preferred_file(target_path.c_str(), txt, &err, allow_prune);
     if (success) {
         content_dirty = false;
         if (current_file_path.empty()) current_file_path = target_path;
@@ -484,6 +487,13 @@ static void editor_build_ui(lv_obj_t *parent)
     }
     update_word_count();
 
+    // Pre-derive the note-encryption key now, while the user is just opening
+    // the editor, so the save that fires on exit only pays for the AES pass and
+    // not the ~10k-iteration PBKDF2. No-op when notes crypto is off/locked.
+    if (notes_crypto_should_encrypt()) {
+        notes_crypto_prewarm();
+    }
+
 #ifdef USING_TOUCHPAD
     quit_btn = create_floating_button([](lv_event_t *e) {
         do_exit();
@@ -527,8 +537,9 @@ void ui_text_editor_exit(lv_obj_t *parent)
     // AppManager can stop us from app-switching, sleep, or any code that
     // calls switchApp() without routing through our back button. Save
     // silently here — the UI is already going away so a popup would race
-    // with the destruction.
-    save_content(false);
+    // with the destruction. Skip the eviction sweep (allow_prune=false): the
+    // teardown must return promptly, and the sweep will run on the next save.
+    save_content(false, /*allow_prune=*/false);
 
     ui_hide_back_button();
 

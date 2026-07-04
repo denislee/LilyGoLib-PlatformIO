@@ -18,6 +18,8 @@
 #include <SD.h>
 #include <FFat.h>
 #include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #endif
 
 /* When notes_crypto is enabled+unlocked, the text I/O wrappers below
@@ -1018,23 +1020,54 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
 #endif
 }
 
+#ifdef ARDUINO
+/* An eviction sweep moves up to kEvictBatch notes to SD and may POST each to
+ * the hub — seconds of blocking flash + network I/O. Running it inline on the
+ * save that triggered it meant a note "save on exit" could stall the UI for
+ * that whole burst. Detach it onto a one-shot task so the save (and the exit
+ * that drove it) returns immediately. The flag serialises sweeps: at most one
+ * runs at a time, and a save arriving mid-sweep just defers re-triggering to a
+ * later save rather than stacking a second sweep. */
+static volatile bool s_prune_task_running = false;
+
+static void prune_task(void *arg)
+{
+    (void)arg;
+    hw_prune_internal_storage(nullptr);
+    s_prune_task_running = false;
+    vTaskDelete(nullptr);
+}
+#endif
+
 static void prune_internal_storage()
 {
 #ifdef ARDUINO
     if (!user_setting.prune_internal) return;
-    
-    // Optimization: FFat directory scan is O(N) and slow. 
-    // Only perform the scan every 10 saves. The eviction threshold is 50,
-    // so overshooting by 10 is perfectly safe.
+
+    // FFat directory scan is O(N) and slow, so only evaluate every 10 saves.
+    // The eviction threshold is 50, so overshooting by 10 is perfectly safe.
     static int s_save_calls = 0;
     if (++s_save_calls < 10) return;
     s_save_calls = 0;
 
-    hw_prune_internal_storage(nullptr);
+    // A sweep is already running in the background; let it finish and re-check
+    // on a future save rather than piling on a concurrent one.
+    if (s_prune_task_running) return;
+
+    s_prune_task_running = true;
+    // 8 KB matches the other background workers (notes-sync/weather); the hub is
+    // plaintext LAN HTTP so there's no TLS stack to accommodate.
+    if (xTaskCreate(prune_task, "notes_prune", 8192, nullptr, 2, nullptr) != pdPASS) {
+        // Spawn failed (severe memory pressure) — fall back to a synchronous
+        // sweep so eviction still happens.
+        s_prune_task_running = false;
+        hw_prune_internal_storage(nullptr);
+    }
 #endif
 }
 
-bool hw_save_preferred_file(const char *path, const char *content, std::string *error)
+bool hw_save_preferred_file(const char *path, const char *content, std::string *error,
+                            bool allow_prune)
 {
     hw_set_filesystem_dirty(true);
 
@@ -1073,10 +1106,11 @@ bool hw_save_preferred_file(const char *path, const char *content, std::string *
         }
     }
 
-    prune_internal_storage();
+    if (allow_prune) prune_internal_storage();
     return ok_int;
 #else
     (void)error;
+    (void)allow_prune;
     printf("Save to preferred file: %s, content: %s\n", path, content);
     return true;
 #endif
