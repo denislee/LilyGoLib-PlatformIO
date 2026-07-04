@@ -889,6 +889,18 @@ void SshApp::append_terminal(const std::string& chunk) {
     std::string clean = ansi_.feed(chunk);
     if (clean.empty()) return;
     lv_textarea_add_text(term_, clean.c_str());
+
+    // Bound the scrollback: a long-lived session would otherwise grow the
+    // textarea's buffer without limit and eventually OOM. Keep the last
+    // ~kTermMax bytes, trimmed to a line boundary so we don't cut mid-line.
+    constexpr size_t kTermMax = 8000;
+    std::string cur = lv_textarea_get_text(term_);
+    if (cur.size() > kTermMax) {
+        size_t cut = cur.size() - kTermMax;
+        size_t nl = cur.find('\n', cut);
+        cur.erase(0, nl == std::string::npos ? cut : nl + 1);
+        lv_textarea_set_text(term_, cur.c_str());
+    }
     lv_obj_scroll_to_y(term_, LV_COORD_MAX, LV_ANIM_OFF);
 }
 

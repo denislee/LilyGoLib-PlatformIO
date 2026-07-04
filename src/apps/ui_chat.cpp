@@ -157,6 +157,16 @@ static void log_append(const char *prefix, const std::string &text)
     if (!s_log_text.empty()) s_log_text.push_back('\n');
     if (prefix) s_log_text.append(prefix);
     s_log_text.append(text);
+
+    // Bound the transcript so a long chat can't grow this string (and the label
+    // it backs) without limit. Drop whole lines from the front once over cap.
+    constexpr size_t kLogMax = 8000;
+    if (s_log_text.size() > kLogMax) {
+        size_t cut = s_log_text.size() - kLogMax;
+        size_t nl = s_log_text.find('\n', cut);
+        s_log_text.erase(0, nl == std::string::npos ? cut : nl + 1);
+    }
+
     lv_label_set_text(s_log_label, s_log_text.c_str());
     if (s_log_scroll) {
         lv_obj_update_layout(s_log_scroll);
