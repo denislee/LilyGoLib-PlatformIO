@@ -91,7 +91,13 @@ extern "C" int main(void)
 
     hal_setup();
     printf("hello lvgl\n");
+    // hw_init() no longer loads settings itself (factory.ino loads them
+    // before hw_init() on hardware); populate the emulator defaults here.
+    hw_load_setting();
     hw_init();
+    // No-op on the emulator (connectivity toggles are Arduino-only), kept for
+    // parity with the hardware setup() sequence.
+    hw_connectivity_init();
 
     apps::register_all();
     core::System::getInstance().init();

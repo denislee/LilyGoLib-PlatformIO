@@ -7,6 +7,10 @@
 #include "types.h"
 
 void hw_init();
+// Applies the persisted WiFi/BT/LoRa/NFC enable toggles. Deliberately called
+// AFTER the LVGL task starts (see factory.ino setup()) so radio/network stack
+// bring-up (~0.5–1 s when enabled) doesn't block the first rendered frame.
+void hw_connectivity_init();
 
 uint16_t hw_get_devices_nums();
 const char *hw_get_devices_name(int index);

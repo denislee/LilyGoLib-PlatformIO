@@ -278,7 +278,9 @@ uint32_t LilyGoLoRaPager::begin(uint32_t disable_hw_init)
 
     Wire.begin(SDA, SCL);
 
-    SensorWireHelper::dumpDevices(Wire, Serial);
+    if (!(disable_hw_init & NO_SCAN_I2C_DEV)) {
+        SensorWireHelper::dumpDevices(Wire, Serial);
+    }
 
     if (!gauge.begin(Wire, SDA, SCL)) {
         log_e("Failed to find GAUGE.");

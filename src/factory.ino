@@ -77,6 +77,9 @@ void setup()
     setCpuFrequencyMhz(settings.cpu_freq_mhz);
 
     uint32_t disable_flags = 0;
+    // The vendor begin() I2C scan is a debug aid that costs ~100+ ms of I2C
+    // probing + serial dump per scan — skip it unconditionally.
+    disable_flags |= NO_SCAN_I2C_DEV;
     if (!settings.gps_enable) disable_flags |= NO_HW_GPS;
     if (!settings.nfc_enable) disable_flags |= NO_HW_NFC;
     if (!settings.haptic_enable) disable_flags |= NO_HW_DRV;
@@ -85,11 +88,12 @@ void setup()
 
     beginLvglHelper(instance);
 
-    // Arm the SNTP and WiFi event callbacks BEFORE hw_init() — hw_init() calls
-    // hw_set_wifi_enable() which in turn fires WiFi.begin() from saved
-    // credentials. Registering the notification callback after WiFi.begin()
-    // races the first DHCP/GOT_IP event and can miss the sync that kicks off
-    // on cold boot, leaving the clock stuck at 1970.
+    // Arm the SNTP and WiFi event callbacks BEFORE connectivity bring-up —
+    // hw_connectivity_init() (called near the end of setup(), after the LVGL
+    // task starts) calls hw_set_wifi_enable() which in turn fires WiFi.begin()
+    // from saved credentials. Registering the notification callback after
+    // WiFi.begin() races the first DHCP/GOT_IP event and can miss the sync
+    // that kicks off on cold boot, leaving the clock stuck at 1970.
     sntp_set_time_sync_notification_cb(time_available);
     WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
     WiFi.setAutoReconnect(false);
@@ -120,6 +124,13 @@ void setup()
     hw_nfc_task_start();
     hw_rotary_task_start();
     hw_charge_task_start();
+
+    // Bring up WiFi/BLE/LoRa/NFC only after the LVGL task is rendering so
+    // stack bring-up (~0.5–1 s per radio when enabled) doesn't delay the
+    // first frame. The SNTP/WiFi callbacks were armed earlier in setup(),
+    // so the boot-time NTP sync path is unaffected; the NFC task tolerates
+    // discovery starting late (same as a runtime toggle from Settings).
+    hw_connectivity_init();
 
     Serial.println("Start done. run main loop");
 }

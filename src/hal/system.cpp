@@ -239,17 +239,10 @@ void hw_init()
 
 #endif
 
-    hw_load_setting();
-
 #ifdef ARDUINO
     hw_set_charger(user_setting.charger_enable);
     hw_set_charger_current(user_setting.charger_current);
-    // Ensure WiFi, BT and Radio match settings on boot
-    hw_set_wifi_enable(user_setting.wifi_enable);
     instance.setMSCPreferSD(user_setting.msc_prefer_sd != 0);
-    hw_set_bt_enable(user_setting.bt_enable);
-    hw_set_radio_enable(user_setting.radio_enable);
-    hw_set_nfc_enable(user_setting.nfc_enable);
     hw_set_gps_enable(user_setting.gps_enable);
     hw_set_speaker_enable(user_setting.speaker_enable);
     hw_set_haptic_enable(user_setting.haptic_enable);
@@ -282,6 +275,22 @@ void hw_init()
     hw_keyboard_task_start();
 #endif
 
+}
+
+// Applies the four connectivity toggles from the already-loaded user_setting.
+// Deliberately called from setup() AFTER hw_lvgl_task_start() — WiFi/BLE/LoRa/
+// NFC stack bring-up takes ~0.5–1 s each when enabled and used to block the
+// first frame when it ran inside hw_init(). Late start is safe: all four are
+// runtime-toggleable from Settings already, and the NFC task's poll is a no-op
+// until discovery starts.
+void hw_connectivity_init()
+{
+#ifdef ARDUINO
+    hw_set_wifi_enable(user_setting.wifi_enable);
+    hw_set_bt_enable(user_setting.bt_enable);
+    hw_set_radio_enable(user_setting.radio_enable);
+    hw_set_nfc_enable(user_setting.nfc_enable);
+#endif
 }
 
 void hw_load_setting()
@@ -331,7 +340,7 @@ void hw_load_setting()
     const size_t stored_size = prefs.getBytesLength(NVS_NAME);
     constexpr size_t kVersionedSize = sizeof(SettingsHeader) + sizeof(user_setting_params_t);
 
-    bool loaded = false;
+    bool needs_save = true;
 
     if (stored_size == kVersionedSize) {
         uint8_t buf[kVersionedSize];
@@ -341,7 +350,9 @@ void hw_load_setting()
             h->version == SETTINGS_VERSION &&
             h->payload_size == sizeof(user_setting_params_t)) {
             memcpy(&user_setting, buf + sizeof(SettingsHeader), sizeof(user_setting_params_t));
-            loaded = true;
+            // Fast path: the stored blob is already valid current-format, so
+            // there is nothing to rewrite.
+            needs_save = false;
         } else {
             log_i("Settings header mismatch (magic=%08x ver=%u size=%u), resetting to defaults",
                   (unsigned)h->magic, (unsigned)h->version, (unsigned)h->payload_size);
@@ -350,15 +361,17 @@ void hw_load_setting()
         // Legacy unversioned blob: copy what fits onto defaults, then re-save with header.
         prefs.getBytes(NVS_NAME, &user_setting, stored_size);
         log_i("Migrating legacy settings blob (%u bytes) to versioned format", (unsigned)stored_size);
-        loaded = true;
     } else if (stored_size != 0) {
         log_i("Stored settings size %u unrecognized, resetting to defaults", (unsigned)stored_size);
     } else {
         log_i("No stored settings found, using defaults");
     }
-    (void)loaded;
-    // Always persist in the current format so subsequent boots take the fast path.
-    save_user_setting_nvs();
+    // Persist only when the stored blob wasn't already valid current-format
+    // (legacy migration, header mismatch, unrecognized size, or nothing
+    // stored) so a normal boot performs no redundant NVS flash write.
+    if (needs_save) {
+        save_user_setting_nvs();
+    }
 #else
     user_setting.brightness_level = 10;
     user_setting.keyboard_bl_level = 255;
