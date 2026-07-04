@@ -34,9 +34,19 @@ struct sys_label_t {
 
 sys_label_t sys_label;
 lv_timer_t *info_timer = nullptr;
+// Captured in build_subpage so the 1 Hz refresh can skip its RTC/PMIC I2C reads
+// while this page is off-screen — lv_menu keeps the built page (and this timer)
+// alive after the user navigates away.
+lv_obj_t *s_menu = nullptr;
+lv_obj_t *s_page = nullptr;
 
 void sys_timer_event_cb(lv_timer_t *)
 {
+    // Only do the live reads while this page is actually on screen; otherwise
+    // the RTC + fuel gauge got polled at 1 Hz across the whole Settings app
+    // after one visit here. Fully torn down on Settings exit (reset_state).
+    if (!s_menu || lv_menu_get_cur_main_page(s_menu) != s_page) return;
+
     std::string datetime;
     hw_get_date_time(datetime);
     lv_label_set_text_fmt(sys_label.datetime_label, "%s", datetime.c_str());
@@ -115,12 +125,15 @@ void reset_state()
         lv_timer_del(info_timer);
         info_timer = nullptr;
     }
+    s_menu = nullptr;
+    s_page = nullptr;
     sys_label = sys_label_t{};
 }
 
 void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    (void)menu;
+    s_menu = menu;
+    s_page = sub_page;
     sys_label.info_loaded = false;
     lv_obj_add_flag(sub_page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);

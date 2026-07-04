@@ -56,6 +56,11 @@ struct labels_t {
 
 labels_t lbl;
 lv_timer_t *tick = nullptr;
+// Captured in build_subpage so render_tick can skip its I2C reads while this
+// subpage is off-screen — lv_menu keeps the built page (and this timer) alive
+// after the user navigates away.
+lv_obj_t *s_menu = nullptr;
+lv_obj_t *s_page = nullptr;
 
 lv_obj_t *add_row(lv_obj_t *parent, const char *key, const char *val)
 {
@@ -169,6 +174,11 @@ void serial_dump_cb(lv_event_t *)
 
 void render_tick(lv_timer_t *)
 {
+    // Only poll the IMU while this page is actually on screen. Without this the
+    // BHI260 got read at 5 Hz the whole time the user browsed other settings
+    // subpages after visiting this one once. Fully torn down on Settings exit.
+    if (!s_menu || lv_menu_get_cur_main_page(s_menu) != s_page) return;
+
     char buf[96];
 
     imu_diag_t d;
@@ -306,12 +316,15 @@ void reset_state()
         lv_timer_del(tick);
         tick = nullptr;
     }
+    s_menu = nullptr;
+    s_page = nullptr;
     lbl = labels_t{};
 }
 
 void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
 {
-    (void)menu;
+    s_menu = menu;
+    s_page = sub_page;
     lv_obj_add_flag(sub_page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(sub_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(sub_page, 4, 0);
