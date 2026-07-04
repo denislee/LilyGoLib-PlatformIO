@@ -38,6 +38,9 @@ static void deferred_switch_timer_cb(lv_timer_t *t)
 void ui_request_editor_switch()
 {
     fake_sleep_active = false;
+    // Wake the LVGL task now so the deferred-switch timer below runs on the
+    // next cycle instead of waiting out its fake-sleep idle timeout.
+    hw_lvgl_task_notify_wake();
     lv_timer_create(deferred_switch_timer_cb, 10, NULL);
 }
 
@@ -47,6 +50,9 @@ void ui_resume_timers()
     hw_power_up_all();
     enable_keyboard();
     lv_display_trigger_activity(NULL);
+    // Kick the LVGL task out of its fake-sleep block so the first frame after
+    // wake renders immediately rather than after the idle-poll fallback.
+    hw_lvgl_task_notify_wake();
 }
 
 void ui_pause_timers()
@@ -54,6 +60,9 @@ void ui_pause_timers()
     fake_sleep_active = true;
     disable_keyboard();
     hw_power_down_all();
+    // Fake-sleep just began — let the charge task start watching VBUS so a
+    // cable plug can still surface the charging overlay.
+    hw_charge_task_on_fake_sleep_enter();
 }
 
 bool ui_is_fake_sleep()

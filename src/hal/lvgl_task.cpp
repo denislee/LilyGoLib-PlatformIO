@@ -33,7 +33,11 @@ namespace {
 // for UI responsiveness without the starvation hazard.
 constexpr UBaseType_t kTaskPriority = 8;
 constexpr BaseType_t  kTaskCore     = 1;
-constexpr uint32_t    kIdleMs       = 50;
+// Fallback re-check cadence while the display is off. Normally the task is
+// woken instantly by hw_lvgl_task_notify_wake() (wake / editor-switch); this
+// timeout only bounds latency if a notification is ever missed, so it can be
+// generous without hurting responsiveness.
+constexpr uint32_t    kFakeSleepIdleMs = 200;
 constexpr uint32_t    kMaxTickMs    = 16;
 // FFat reads plus mbedTLS AES-CBC decrypt plus nested LVGL event dispatch
 // (e.g. menu rebuild from a click handler) easily cleared 6KB on 8KB stacks.
@@ -45,7 +49,11 @@ void lvgl_task_fn(void *)
 {
     for (;;) {
         if (ui_is_fake_sleep()) {
-            vTaskDelay(pdMS_TO_TICKS(kIdleMs));
+            // Nothing to render while the display is off. Block until a wake /
+            // editor-switch notification arrives instead of spinning at 20 Hz;
+            // the timeout is a safety net so a missed notify still gets
+            // re-checked within kFakeSleepIdleMs.
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kFakeSleepIdleMs));
             continue;
         }
 
@@ -64,6 +72,13 @@ void lvgl_task_fn(void *)
 
 }  // namespace
 
+void hw_lvgl_task_notify_wake()
+{
+    // Safe from any task context; a give while the task is running (not
+    // blocked) simply leaves the notification pending for the next take.
+    if (s_task) xTaskNotifyGive(s_task);
+}
+
 void hw_lvgl_task_start()
 {
     if (s_task) return;
@@ -80,5 +95,6 @@ void hw_lvgl_task_start()
 #else  // !ARDUINO
 
 void hw_lvgl_task_start() {}
+void hw_lvgl_task_notify_wake() {}
 
 #endif  // ARDUINO

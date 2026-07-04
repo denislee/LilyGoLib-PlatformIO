@@ -36,6 +36,10 @@ constexpr UBaseType_t kTaskPriority = 3;
 constexpr BaseType_t  kTaskCore     = 0;
 constexpr uint32_t    kPollMs       = 500;
 constexpr uint32_t    kShowMs       = 4000;
+// Fallback re-check while awake. Normally we block until ui_pause_timers()
+// notifies us that fake-sleep began; this bounds recovery if a notify is
+// ever missed, without polling VBUS over I2C around the clock.
+constexpr uint32_t    kAwakeBlockMs = 3000;
 
 TaskHandle_t s_task = nullptr;
 
@@ -124,6 +128,19 @@ void charge_task_fn(void *)
     bool primed    = false;  // ignore first sample; we want edges, not boot state
 
     for (;;) {
+        if (!ui_is_fake_sleep()) {
+            // The charging overlay only ever shows during fake-sleep, so there
+            // is nothing to detect while the device is awake. Block until
+            // fake-sleep is entered (ui_pause_timers notifies us) rather than
+            // polling VBUS over I2C at 2 Hz around the clock. The timeout is a
+            // safety net so a lost notify can't strand us.
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kAwakeBlockMs));
+            // Re-prime so the first fake-sleep sample only sets the baseline —
+            // a cable already plugged before sleeping must not fire the overlay.
+            primed = false;
+            continue;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(kPollMs));
 
         bool cur_vbus;
@@ -175,6 +192,11 @@ void charge_task_fn(void *)
 
 }  // namespace
 
+void hw_charge_task_on_fake_sleep_enter()
+{
+    if (s_task) xTaskNotifyGive(s_task);
+}
+
 void hw_charge_task_start()
 {
     if (s_task) return;
@@ -190,5 +212,6 @@ void hw_charge_task_start()
 #else  // !ARDUINO
 
 void hw_charge_task_start() {}
+void hw_charge_task_on_fake_sleep_enter() {}
 
 #endif  // ARDUINO

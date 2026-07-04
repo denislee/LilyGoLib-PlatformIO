@@ -32,6 +32,8 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
+#include "../core/system_hooks.h"
+
 #ifdef USING_INPUT_DEV_ROTARY
 
 namespace {
@@ -39,6 +41,7 @@ namespace {
 constexpr UBaseType_t kTaskPriority = configMAX_PRIORITIES - 2;
 constexpr BaseType_t  kTaskCore     = 0;   // Opposite of Arduino loopTask / LVGL task (core 1).
 constexpr UBaseType_t kQueueDepth   = 16;  // Burst of fast clicks while LVGL is briefly blocked.
+constexpr uint32_t    kFakeSleepIdleMs = 200;  // Idle cadence while the display is off.
 
 QueueHandle_t s_event_queue = nullptr;
 TaskHandle_t  s_task        = nullptr;
@@ -58,6 +61,16 @@ void enqueue_event(const RotaryMsg_t &ev)
 void rotary_task_fn(void *)
 {
     for (;;) {
+        // While the display is off (fake-sleep) the vendor rotaryTask drops
+        // every scroll notch and never enqueues a center-press, so getRotary()
+        // would just wake us at 20 Hz to receive nothing. Idle at a slower
+        // cadence instead — hold-to-wake is detected by the vendor task, not
+        // here, so resuming a little later after wake costs nothing.
+        if (ui_is_fake_sleep()) {
+            vTaskDelay(pdMS_TO_TICKS(kFakeSleepIdleMs));
+            continue;
+        }
+
         // instance.getRotary() blocks up to 50 ms on the vendor's
         // rotaryMsg queue. That's fine here — this task has no other
         // job and does not hold the instance mutex. On real scroll

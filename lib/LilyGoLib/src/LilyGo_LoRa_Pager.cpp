@@ -1391,12 +1391,12 @@ static void rotaryTask(void *p)
         }
         // Poll fast (2 ms) while the display is on for responsive scrolling and
         // clicks. During fake-sleep (display off) the only event that matters is
-        // the >1000 ms center-button hold to wake — 30 ms resolution detects
-        // that with ample margin (worst-case ~30 ms extra wake latency) and
-        // stops this task busy-polling GPIO at 500 Hz on a second core while
-        // nothing is on screen. Scroll events are already ignored above when the
-        // display is off, so nothing else is lost.
-        delay(s_display_off ? 30 : 2);
+        // the >1000 ms center-button hold to wake — 100 ms resolution detects
+        // that with ample margin (worst-case ~100 ms extra wake latency, still
+        // imperceptible against a 1 s hold) and cuts this task's GPIO polling on
+        // a second core to 10 Hz while nothing is on screen. Scroll events are
+        // already ignored above when the display is off, so nothing else is lost.
+        delay(s_display_off ? 100 : 2);
     }
     vTaskDelete(NULL);
 }

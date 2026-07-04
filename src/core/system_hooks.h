@@ -31,6 +31,17 @@ bool ui_is_fake_sleep();
 void ui_pause_timers();
 void ui_resume_timers();
 
+// Fake-sleep task-coordination notifies. During fake-sleep the LVGL and
+// charge tasks block instead of polling; these unblock them the moment the
+// state changes so wake/overlay latency stays low without a busy poll. Both
+// are no-ops on the emulator build.
+//   - hw_lvgl_task_notify_wake(): the display is coming back (ui_resume_timers)
+//     or an editor switch needs a render cycle (ui_request_editor_switch).
+//   - hw_charge_task_on_fake_sleep_enter(): fake-sleep was entered
+//     (ui_pause_timers); the charge task should start watching VBUS.
+void hw_lvgl_task_notify_wake();
+void hw_charge_task_on_fake_sleep_enter();
+
 // Vendor-compat aliases for the instance lock. New in-tree code should
 // prefer core::ScopedInstanceLock directly.
 void ui_lock();
