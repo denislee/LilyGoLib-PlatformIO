@@ -42,27 +42,38 @@ std::string trim_url(const std::string &in)
 // key. Safe to call repeatedly: once the legacy slot is gone, this is a no-op.
 void maybe_migrate_legacy()
 {
+    // Runs at most once per boot. The migration is idempotent and, once the
+    // legacy slot is resolved, permanently pointless — yet every hub getter
+    // used to reopen NVS to re-check it forever. The guard collapses that to a
+    // single check; a benign race (two threads both seeing false) just runs the
+    // idempotent check twice. s_checked is only latched once we've positively
+    // determined the migration state, so a transient begin() failure retries.
+    static bool s_checked = false;
+    if (s_checked) return;
+
     Preferences neu;
-    if (!neu.begin(NS, true)) return;
+    if (!neu.begin(NS, true)) return;   // transient open failure — retry later
     bool have_new = neu.isKey(KEY_URL);
     neu.end();
-    if (have_new) return;
+    if (have_new) { s_checked = true; return; }
 
     Preferences old;
     if (!old.begin(LEGACY_NS, false)) return;
     String legacy = old.getString(LEGACY_KEY, "");
     if (legacy.length() == 0) {
         old.end();
+        s_checked = true;   // no legacy value exists — nothing to migrate, ever
         return;
     }
     old.remove(LEGACY_KEY);
     old.end();
 
     Preferences w;
-    if (!w.begin(NS, false)) return;
+    if (!w.begin(NS, false)) return;    // write failed — retry migration later
     w.putString(KEY_URL, legacy);
     w.putBool(KEY_ENABLED, true);
     w.end();
+    s_checked = true;
 }
 #endif
 
