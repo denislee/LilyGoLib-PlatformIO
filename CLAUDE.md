@@ -4,106 +4,121 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PlatformIO-based firmware for LilyGo ESP32-S3 devices (T-LoRa-Pager, T-Watch-S3, T-Watch-Ultra). Uses the Arduino framework with LVGL v9 for GUI rendering. The same codebase also compiles as an SDL2 desktop emulator for UI development without hardware.
+PlatformIO-based firmware for LilyGo ESP32-S3 devices (T-LoRa-Pager, T-Watch-S3, T-Watch-Ultra). Arduino framework + LVGL v9. The same source tree compiles as an SDL2 desktop emulator so the UI can be iterated on without hardware. Companion Go service (`server/`, "lilyhub") runs on a LAN box and proxies/caches external APIs the firmware talks to.
 
-## Build Commands
+`REFACTOR_NOTES.md` is the authoritative handoff document for the in-flight `core::`/`hal/`/`apps/` reorganization — read it before any nontrivial structural work.
+
+## Build / Run
 
 ```bash
-# Build (default env: tlora_pager)
-pio run
+# Default env is tlora_pager (set in [platformio].default_envs)
+pio run                              # build default
+pio run -e tlora_pager               # build for T-LoRa-Pager
+pio run -e twatchs3                  # build for T-Watch-S3
+pio run -e twatch_ultra              # build for T-Watch-Ultra
+pio run -e tlora_pager -t upload     # flash device
+pio device monitor                   # serial @ 115200
 
-# Build specific environment
-pio run -e tlora_pager
-pio run -e twatchs3
-pio run -e twatch_ultra
-
-# Upload to device
-pio run -e tlora_pager --target upload
-
-# Serial monitor (115200 baud)
-pio device monitor
-
-# Build SDL2 emulator (requires SDL2 dev libs)
+# SDL2 desktop emulator (no hardware needed)
 pio run -e emulator_lora_pager
 pio run -e emulator_twatchs3
 pio run -e emulator_watch_ultra
+
+# Native unit tests (Unity) — pure-logic modules only
+pio test -e native_test
 ```
 
-There are no test targets or linting configured in this project.
+After structural changes always rebuild **both** the hardware target and its matching emulator before moving on; `REFACTOR_NOTES.md` codifies this discipline.
 
-## Selecting Radio Module
+## Selecting the radio chip
 
-Only one radio module can be active at build time. In `platformio.ini` under `[env_arduino]` build_flags, uncomment exactly one:
+Exactly one `ARDUINO_LILYGO_LORA_*` must be defined in `[env_arduino].build_flags`:
+`SX1262` (default), `CC1101`, `SX1280`, `LR1121`, `SI4432`. The matching driver in `src/hal/radio/` activates via `#ifdef`.
 
-```
--D ARDUINO_LILYGO_LORA_SX1262   (default)
--D ARDUINO_LILYGO_LORA_CC1101
--D ARDUINO_LILYGO_LORA_SX1280
--D ARDUINO_LILYGO_LORA_LR1121
--D ARDUINO_LILYGO_LORA_SI4432
-```
+## Selecting an alternate source tree
 
-## Selecting Source Directory
-
-By default `src/` is compiled. To compile a LilyGoLib example instead, uncomment one `src_dir` line in `platformio.ini` under `[platformio]` and comment out `src_dir = src`.
+`src_dir = src` is the default. To build a LilyGoLib example instead, comment that line and uncomment one of the `src_dir = ${platformio.libdeps_dir}/.../examples/...` lines under `[platformio]`.
 
 ## Architecture
 
-### Entry Points
-- **`src/factory.ino`** - Arduino entry point (`setup()` / `loop()`). Initializes LilyGoLib hardware instance, LVGL, HAL, and GUI. The main loop runs LVGL timer handler and NFC polling inside a FreeRTOS mutex.
-- **`src/main.cpp`** - SDL2 emulator entry point. Provides a desktop simulation of the UI without hardware.
+### Layered layout
 
-### Hardware Abstraction Layer (HAL)
-- **`src/hal_interface.h`** - Declares 100+ functions that abstract all hardware: radio, GPS, power, audio, WiFi, display, sensors, NFC, keyboard, storage. Defines hardware status bitmask constants (`HW_RADIO_ONLINE`, `HW_NFC_ONLINE`, etc.) and parameter structs.
-- **`src/hal_interface.cpp`** - Implements HAL functions using LilyGoLib APIs. Handles NVS settings persistence, battery monitoring, audio playback (MP3 decode via FreeRTOS task), WiFi management, file system abstraction (SD card / FFat).
+```
+src/
+├── factory.ino, factory.ino.cpp   Arduino entry (setup/loop) — thin shell
+├── main.cpp                       SDL2 emulator entry
+├── core/                          Cross-module skeleton (App, AppManager, System, locks)
+├── hal/                           Hardware abstraction (split into domain headers)
+│   └── radio/                     Per-chip radio drivers (one .cpp per chip)
+├── apps/                          Every core::App subclass + the settings split
+├── ui/                            Focused UI sub-headers (theme, fonts, widgets, modals, back_button)
+├── ui_*.cpp                       Shared UI infrastructure (NOT app subclasses)
+├── ui_define.h                    Thin aggregator re-exporting src/ui/*.h for back-compat
+├── images/, fonts/, src/          Source images + generated LVGL C arrays
+server/                            Go "lilyhub" LAN service (weather proxy, notes sync, chat)
+boards/, variants/                 PlatformIO board JSON + pins_arduino.h per device
+test/                              Native Unity tests (notes_path, hal_result, desktop)
+```
 
-### Radio Module Drivers
-Each file implements the same set of functions (`hw_radio_begin`, `hw_set_radio_params`, `hw_set_radio_listening`, `hw_set_radio_tx`, `hw_get_radio_rx`, etc.) guarded by `#ifdef ARDUINO_LILYGO_LORA_<MODULE>`:
-- `src/hw_sx1262.cpp` - SX1262 LoRa (sub-GHz)
-- `src/hw_cc1101.cpp` - CC1101 FSK/OOK
-- `src/hw_sx1280.cpp` - SX1280 2.4GHz LoRa
-- `src/hw_lr1121.cpp` - LR1121 multi-band LoRa
-- `src/hw_nrf2401.cpp` - nRF24L01 2.4GHz
+### Core skeleton (`src/core/`)
 
-All radio drivers use interrupt-driven TX/RX with FreeRTOS EventGroups (`LORA_ISR_FLAG`).
+- `core::App` — abstract base; every screen subclasses it. Lifecycle: `onStart` / `onStop` / `onUpdate`. Each `apps/ui_*.cpp` opens with a "State reset on onStop" comment block listing every cached `lv_obj_t*`, `lv_timer_t*`, and FreeRTOS task the exit path must release — keep that block current.
+- `core::AppManager` — singleton registry. `switchApp(name, parent)` / `queueSwitchApp` drive transitions.
+- `core::System` — owns the global LVGL skeleton (status bar, menu/app panels) and drives the main loop via `loop()` → `AppManager::update()`.
+- `core::ScopedInstanceLock` — RAII over the project's own top-level task-coordination mutex. Backed by `core/instance_lock.cpp` (emulator: no-op branch).
+- `core::ScopedSpiLock` / `core::MaybeSpiLock` — RAII over the **vendor's** `instance.lockSPI()/unlockSPI()` (the shared SPI bus on pager/ultra; no-op on watch-s3). Distinct from the instance mutex. Hardening pass already migrated all 113 call sites; new code must use these wrappers, not raw `lockSPI()`.
+- `core/system_hooks.h` — canonical (LVGL-free) header for cross-module entry points (`ui_pause_timers`, `ui_lock`, `ui_is_fake_sleep`, `instance_lock_init`, …). HAL TUs should include this rather than redeclaring `extern bool …` locally.
 
-### NFC
-- `src/app_nfc.h` / `src/app_nfc.cpp` - NFC reader/writer (URL, WiFi config, text, device info). Only available on T-LoRa-Pager and T-Watch-Ultra.
+### HAL split (`src/hal/`)
 
-### UI Layer
-Each feature has a dedicated `src/ui_*.cpp` file with `setup_func_cb` and `exit_func_cb` callbacks for clean lifecycle management:
-- `ui_main.cpp` - Main menu system
-- `ui_radio.cpp` - Radio TX/RX interface (most complex UI module)
-- `ui_nrf24.cpp`, `ui_msgchat.cpp`, `ui_wireless.cpp`, `ui_ble.cpp`, `ui_gps.cpp`, `ui_audio.cpp`, `ui_sensor.cpp`, `ui_nfc.cpp`, `ui_monitor.cpp`, `ui_sys.cpp`, `ui_theme.cpp`, etc.
-- `ui_define.h` - Shared UI types and macros
+Domain sub-headers replace the old monolithic interface: `types.h`, `system.h`, `display.h`, `power.h`, `storage.h`, `audio.h`, `wireless.h`, `radio.h`, `sensors.h`, `peripherals.h`, `board_config.h`, plus feature modules (`hub.h`, `notes_crypto.h`, `notes_path.h`, `nfc_reader.h`, `result.h`, …). `hal_interface.h` is retained as a back-compat umbrella but **does not** re-export `std::string`/`std::vector` anymore — files that need them must declare `using std::string;` locally.
 
-UI code calls only HAL functions, never LilyGoLib directly.
+`hal/radio/{sx1262,sx1280,cc1101,lr1121,nrf2401}.cpp` each implement the `radio_chip::` API from `hal/radio_chip.h`, gated by `ARDUINO_LILYGO_LORA_<chip>`. Radio TX/RX is interrupt-driven through FreeRTOS EventGroups (`LORA_ISR_FLAG`).
 
-### Assets
-- `src/images/` - Source image files
-- `src/src/` - LVGL-compatible C arrays for images and fonts (auto-generated, large files)
+`hal::HalError` + `HalResult<T>` (`hal/result.h`) is the preferred error type for new code. Migrate bool-with-out-param signatures incrementally; see `hub_upload_note` for the pattern.
 
-### Board Definitions
-- `boards/` - Custom PlatformIO board JSON files
-- `variants/` - Board-specific `pins_arduino.h` pin definitions
+### Apps (`src/apps/`)
 
-## Key Patterns
+Every `core::App` implementation lives here. `app_registry.{h,cpp}` exposes `make_*_app()` factories declared with the `APP_FACTORY(fn, cls)` macro and a `register_all()` helper called from both `factory.ino` and `main.cpp`.
 
-- **Thread safety**: All LilyGoLib SPI bus access is protected by `instanceLockTake()` / `instanceLockGive()` mutex calls in the main loop and radio ISRs.
-- **Conditional compilation**: Board-specific code uses `ARDUINO_T_LORA_PAGER`, `ARDUINO_T_WATCH_S3`, `ARDUINO_T_WATCH_S3_ULTRA` defines. Radio module code uses `ARDUINO_LILYGO_LORA_*` defines.
-- **Settings persistence**: User preferences stored via Arduino `Preferences` library (NVS flash).
-- **Partition table**: Uses the partition CSV from LilyGoLib's factory example, not the default.
+Shared UI scaffolding that is *not* an app subclass — `ui_main.cpp`, `ui_theme.cpp`, `ui_tools.cpp`, `ui_power.cpp`, `ui_msg.cpp`, `ui_lock.cpp`, `ui_wifi.cpp`, `ui_time_sync.cpp`, `ui_nfc_test.cpp`, `ui_list_picker.cpp` — stays in `src/` root. `ui_main.cpp` is intentionally only vendor-callback glue at this point.
 
-## Key Dependencies
+**Settings app is split**: `apps/ui_settings.cpp` (page wiring, ~624 lines) plus per-subpage TUs (`settings_connectivity.cpp`, `settings_datetime.cpp`, `settings_display.cpp`, `settings_fonts.cpp`, `settings_hub.cpp`, `settings_info.cpp`, `settings_notes_sync.cpp`, `settings_storage.cpp`, `settings_telegram.cpp`, `settings_weather.cpp`, `settings_home_apps.cpp`, `settings_imu_debug.cpp`). All share `apps/settings_internal.h` — **private**; do not include from outside the split. Each subpage namespace exposes `build_subpage(menu, sub_page)` + `reset_state()` (+ optional `set_sub_page(page)`); `local_param` is the shared NVS working-copy struct.
+
+### UI helpers
+
+Prefer the focused headers under `src/ui/` over `ui_define.h` for new code:
+- `ui/theme.h` — color tokens, `theme_init`
+- `ui/fonts.h` — per-context font getters
+- `ui/widgets.h` — themed `lv_*_create` wrappers
+- `ui/modals.h` — `ui_popup_create`, `ui_loading_t`, `ui_result_show`, prompts (use these instead of hand-rolling overlays)
+- `ui/back_button.h` — shared status-bar back button
+
+### Lilyhub (`server/`)
+
+Go HTTP service intended to run on a LAN box (Pi/ARM). Apps point at it first and fall back to public internet on failure. Owns `weather` (ip-api + open-meteo cache), `notes sync` (GitHub proxy), and `chat` (Groq/Whisper). Hub URL/toggle is owned by `hal::hub_*` (NVS namespace `hub`); never read `weather/hub_url` directly. `POST /api/notes/sync` is the hub-first notes-sync path; device direct GitHub PUT remains as fallback.
+
+## Key patterns and conventions
+
+- **Locks** — top-level task-coordination uses `core::ScopedInstanceLock`; SPI bus uses `core::ScopedSpiLock`/`MaybeSpiLock`. Never call vendor `lockSPI()/unlockSPI()` or raw mutex APIs in new code.
+- **Conditional compilation** — board-specific code uses `ARDUINO_T_LORA_PAGER`, `ARDUINO_T_WATCH_S3`, `ARDUINO_T_WATCH_S3_ULTRA`. Radio code uses `ARDUINO_LILYGO_LORA_*`. Emulator-vs-Arduino branches use `#ifdef ARDUINO`.
+- **Settings persistence** — Arduino `Preferences` (NVS flash). Subpages mutate `local_param` and call `hw_set_user_setting(local_param)` eagerly for crash safety.
+- **Partition table** — `lib/LilyGoLib/examples/factory/partitions.csv`, not the default.
+- **UI calls HAL only** — never reach into LilyGoLib directly from app/UI code.
+- **Unified popups** — use the shared `ui_popup_create` / `ui_loading_t` / `ui_result_show` helpers in `ui_tools.cpp` instead of building modals by hand.
+
+## Key dependencies
 
 | Library | Version | Purpose |
-|---------|---------|---------|
-| LilyGoLib | latest | Main hardware abstraction (from GitHub) |
-| LVGL | 9.4.0 | GUI framework |
-| RadioLib | 7.4.0 | Radio module driver abstraction |
-| XPowersLib | 0.3.1 | Power management IC driver |
+|---|---|---|
+| LilyGoLib | latest (GitHub) | Vendor hardware abstraction |
+| LVGL | 9.4.0 (hw) / 9.2.2 (emu) | GUI framework |
+| RadioLib | 7.4.0 | Radio chip abstraction |
+| XPowersLib | 0.3.1 | PMIC driver |
 | SensorLib | 0.3.3 | IMU/sensor drivers |
-| TinyGPSPlus | 1.0.3 | GPS NMEA parsing |
+| TinyGPSPlus | 1.0.3 | NMEA parsing |
 | NimBLE-Arduino | 2.2.3 | BLE stack |
-| ESP8266Audio | 2.0.0 | Audio playback |
-| ST25R3916-fork | latest | NFC controller (tlora_pager, twatch_ultra only) |
+| ESP8266Audio | 2.0.0 | MP3 / audio playback |
+| ST25R3916-fork | latest | NFC controller (pager + ultra only) |
+| LibSSH-ESP32 | 4.0.4 | SSH client (pager only) |
+| Adafruit TCA8418 | 1.0.2 | Keyboard matrix (pager only) |
