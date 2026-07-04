@@ -93,7 +93,7 @@ void hw_set_radio_tx(radio_tx_params_t &params, bool continuous)
     if (continuous) {
         EventBits_t eventBits = xEventGroupWaitBits(
                                     radioEvent, LORA_ISR_FLAG,
-                                    pdTRUE, pdTRUE, pdTICKS_TO_MS(2));
+                                    pdTRUE, pdTRUE, pdMS_TO_TICKS(2));
         if ((eventBits & LORA_ISR_FLAG) != LORA_ISR_FLAG) {
             params.state = -1;
             return;
@@ -124,7 +124,7 @@ void hw_get_radio_rx(radio_rx_params_t &params)
 #ifdef ARDUINO
     EventBits_t eventBits = xEventGroupWaitBits(
                                 radioEvent, LORA_ISR_FLAG,
-                                pdTRUE, pdTRUE, pdTICKS_TO_MS(2));
+                                pdTRUE, pdTRUE, pdMS_TO_TICKS(2));
     if ((eventBits & LORA_ISR_FLAG) != LORA_ISR_FLAG) {
         params.state = -1;
         return;
@@ -161,6 +161,10 @@ void hw_get_radio_rx(radio_rx_params_t &params)
 bool radio_transmit(const uint8_t *data, size_t length)
 {
 #ifdef ARDUINO
+    // radio.transmit() blocks and drives the shared SPI bus, so it must hold
+    // the bus lock like every other radio SPI access in this file. Currently
+    // unused but exported — don't leave it as an unlocked landmine.
+    core::ScopedSpiLock lock;
     int state = radio.transmit(data, length);
     last_send_millis = millis();
     return (state == RADIOLIB_ERR_NONE);

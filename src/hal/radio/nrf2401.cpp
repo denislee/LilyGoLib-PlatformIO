@@ -144,7 +144,7 @@ void hw_clear_nrf24_flag()
 bool hw_set_nrf24_tx(radio_tx_params_t &params, bool continuous)
 {
 #ifdef ARDUINO
-    EventBits_t  eventBits = xEventGroupWaitBits(radioEvent, NRF24_ISR_FLAG, pdTRUE, pdTRUE, pdTICKS_TO_MS(2));
+    EventBits_t  eventBits = xEventGroupWaitBits(radioEvent, NRF24_ISR_FLAG, pdTRUE, pdTRUE, pdMS_TO_TICKS(2));
     if ((eventBits & NRF24_ISR_FLAG) != NRF24_ISR_FLAG) {
         params.state = -1;
         return false;
@@ -183,7 +183,7 @@ bool hw_set_nrf24_tx(radio_tx_params_t &params, bool continuous)
 void hw_get_nrf24_rx(radio_rx_params_t &params)
 {
 #ifdef ARDUINO
-    EventBits_t  eventBits = xEventGroupWaitBits(radioEvent, NRF24_ISR_FLAG, pdTRUE, pdTRUE, pdTICKS_TO_MS(2));
+    EventBits_t  eventBits = xEventGroupWaitBits(radioEvent, NRF24_ISR_FLAG, pdTRUE, pdTRUE, pdMS_TO_TICKS(2));
     if ((eventBits & NRF24_ISR_FLAG) != NRF24_ISR_FLAG) {
         params.state = -1;
         return;
