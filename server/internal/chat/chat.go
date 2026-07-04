@@ -69,6 +69,7 @@ type session struct {
 type Handler struct {
 	client    *http.Client
 	apiKey    string
+	baseURL   string // upstream base; a field (not the const) so tests can point it at a fake
 	sttLang   string
 	sttPrompt string
 	mu        sync.Mutex
@@ -112,6 +113,7 @@ func New() *Handler {
 	return &Handler{
 		client:    &http.Client{Timeout: clientTimeout},
 		apiKey:    key,
+		baseURL:   groqBase,
 		sttLang:   sttLang,
 		sttPrompt: sttPrompt,
 		sessions:  make(map[string]*session),
@@ -263,7 +265,7 @@ func (h *Handler) transcribe(ctx context.Context, audio []byte) (string, error) 
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		groqBase+"/audio/transcriptions", &buf)
+		h.baseURL+"/audio/transcriptions", &buf)
 	if err != nil {
 		return "", err
 	}
@@ -305,6 +307,12 @@ func (h *Handler) complete(ctx context.Context, deviceID, prompt string) (string
 		s = &session{}
 		h.sessions[deviceID] = s
 	}
+	// Mark the session active before we release the lock for the network call.
+	// A newly created session (updated == zero) — or one whose last activity is
+	// older than the idle cutoff — would otherwise be evictable by a concurrent
+	// reapLocked() while this call is in flight, and the reply plus this turn's
+	// history get silently dropped when we re-lock below.
+	s.updated = now
 	s.msgs = append(s.msgs, message{Role: "user", Content: clip(prompt, maxContent)})
 	if len(s.msgs) > maxHistory {
 		s.msgs = s.msgs[len(s.msgs)-maxHistory:]
@@ -323,7 +331,7 @@ func (h *Handler) complete(ctx context.Context, deviceID, prompt string) (string
 		return "", err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		groqBase+"/chat/completions", bytes.NewReader(body))
+		h.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -365,37 +373,89 @@ func (h *Handler) complete(ctx context.Context, deviceID, prompt string) (string
 	return reply, nil
 }
 
-// do executes the request and returns the body. Non-2xx responses are
-// surfaced as errors so the caller doesn't have to peek at status codes
-// — the error string includes a short prefix of the upstream body to
-// make Groq's auth / rate-limit messages legible in the device log.
+// baseBackoff is the first retry delay; it doubles each attempt (capped). A
+// package var rather than a const so tests can shrink it.
+var baseBackoff = 200 * time.Millisecond
+
+// retryableStatus reports whether an upstream status is worth retrying. 429
+// (rate limit) and 5xx (transient upstream) are; other 4xx (auth, bad model,
+// validation) are permanent for this request, so retrying just burns time.
+func retryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= 500
+}
+
+func backoff(attempt int) time.Duration {
+	shift := max(attempt-2, 0) // first retry (attempt 2) waits baseBackoff
+	return min(baseBackoff<<shift, 2*time.Second)
+}
+
+// do executes the request with a few backed-off retries on transient upstream
+// failures (429/5xx and transport errors), then returns the body. Non-2xx
+// responses are surfaced as errors so the caller doesn't peek at status codes;
+// the error string carries a short prefix of the upstream body so Groq's auth /
+// rate-limit messages stay legible in the device log. One hub-side retry is far
+// cheaper than bouncing the device to its own slow public-internet fallback.
+// Bodies are replayed via req.GetBody, which http.NewRequest populates for the
+// bytes.Reader/Buffer bodies used here.
 func (h *Handler) do(req *http.Request) ([]byte, error) {
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			d := backoff(attempt)
+			log.Printf("chat: upstream %s %s retry %d/%d after %s (%v)",
+				req.Method, req.URL.Path, attempt, maxAttempts, d, lastErr)
+			select {
+			case <-time.After(d):
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+			if req.GetBody != nil {
+				b, err := req.GetBody()
+				if err != nil {
+					return nil, err
+				}
+				req.Body = b
+			}
+		}
+		body, status, err := h.doOnce(req)
+		if err != nil {
+			lastErr = err // transport/read error — transient, retry
+			continue
+		}
+		if retryableStatus(status) && attempt < maxAttempts {
+			lastErr = fmt.Errorf("upstream %d: %s", status, truncate(string(body), 200))
+			continue
+		}
+		if status/100 != 2 {
+			return body, fmt.Errorf("upstream %d: %s", status, truncate(string(body), 200))
+		}
+		return body, nil
+	}
+	return nil, lastErr
+}
+
+// doOnce performs a single request attempt and returns (body, status, err).
+func (h *Handler) doOnce(req *http.Request) ([]byte, int, error) {
 	start := time.Now()
 	resp, err := h.client.Do(req)
 	if err != nil {
 		log.Printf("chat: upstream %s %s transport error after %s: %v",
 			req.Method, req.URL.Path,
 			time.Since(start).Round(time.Millisecond), err)
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if err != nil {
 		log.Printf("chat: upstream %s %s read error: %v",
 			req.Method, req.URL.Path, err)
-		return nil, err
-	}
-	if resp.StatusCode/100 != 2 {
-		log.Printf("chat: upstream %s %s -> %d in %s, body: %s",
-			req.Method, req.URL.Path, resp.StatusCode,
-			time.Since(start).Round(time.Millisecond),
-			truncate(string(body), 400))
-		return body, fmt.Errorf("upstream %d: %s", resp.StatusCode, truncate(string(body), 200))
+		return nil, resp.StatusCode, err
 	}
 	log.Printf("chat: upstream %s %s -> %d in %s (%d bytes)",
 		req.Method, req.URL.Path, resp.StatusCode,
 		time.Since(start).Round(time.Millisecond), len(body))
-	return body, nil
+	return body, resp.StatusCode, nil
 }
 
 // reapLocked drops sessions that have been idle for sessionIdleLimit.
