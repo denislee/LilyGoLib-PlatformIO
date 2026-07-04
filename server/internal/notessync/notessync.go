@@ -180,14 +180,12 @@ func (h *Handler) runSync(ctx context.Context, req *SyncRequest) (*SyncResponse,
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			bs, decErr := base64.StdEncoding.DecodeString(f.ContentB64)
-			if decErr != nil {
-				mu.Lock()
-				out.Errors = append(out.Errors, SyncError{Name: f.Name, Err: "bad base64"})
-				mu.Unlock()
-				return
-			}
-			if putErr := h.putFile(ctx, req, f.Name, bs); putErr != nil {
+			// Forward the device's base64 verbatim per the package contract —
+			// no decode/re-encode — so encrypted notes reach GitHub byte-for-
+			// byte and we skip two full-size allocations per file. GitHub
+			// validates the base64 itself, so a malformed payload surfaces as
+			// the PUT error below rather than a local decode failure.
+			if putErr := h.putFile(ctx, req, f.Name, f.ContentB64); putErr != nil {
 				mu.Lock()
 				out.Errors = append(out.Errors, SyncError{Name: f.Name, Err: putErr.Error()})
 				mu.Unlock()
@@ -254,14 +252,14 @@ func (h *Handler) listRemote(ctx context.Context, req *SyncRequest) ([]string, e
 // putFile creates notes/<name> on the remote. Caller has already confirmed
 // the name is missing on the remote, so no prev-sha is needed; a 422 here
 // means someone raced us and we just surface it.
-func (h *Handler) putFile(ctx context.Context, req *SyncRequest, name string, content []byte) error {
+func (h *Handler) putFile(ctx context.Context, req *SyncRequest, name string, contentB64 string) error {
 	body := struct {
 		Message string `json:"message"`
 		Content string `json:"content"`
 		Branch  string `json:"branch"`
 	}{
 		Message: "sync: add " + name,
-		Content: base64.StdEncoding.EncodeToString(content),
+		Content: contentB64,
 		Branch:  req.Branch,
 	}
 	buf, _ := json.Marshal(body)
