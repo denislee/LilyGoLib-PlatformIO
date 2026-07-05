@@ -489,10 +489,9 @@ static void editor_build_ui(lv_obj_t *parent)
 
     // Pre-derive the note-encryption key now, while the user is just opening
     // the editor, so the save that fires on exit only pays for the AES pass and
-    // not the ~10k-iteration PBKDF2. No-op when notes crypto is off/locked.
-    if (notes_crypto_should_encrypt()) {
-        notes_crypto_prewarm();
-    }
+    // not the ~10k-iteration PBKDF2. Self-guards to a no-op when notes crypto
+    // is off/locked.
+    notes_crypto_prewarm();
 
 #ifdef USING_TOUCHPAD
     quit_btn = create_floating_button([](lv_event_t *e) {

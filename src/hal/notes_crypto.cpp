@@ -10,6 +10,7 @@
 
 #include <cstring>
 #include <cstdio>
+#include <new>
 
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -22,6 +23,9 @@
 #include <mbedtls/md.h>
 #include <mbedtls/pkcs5.h>
 #include <mbedtls/platform_util.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 #endif
 
 /* The canary sits in its own NVS namespace so schema changes to the main
@@ -56,6 +60,31 @@ struct PrewarmSlot {
 };
 PrewarmSlot g_prewarm;
 
+/* g_prewarm is filled by a background derivation task (see notes_crypto_prewarm)
+ * and consumed/cleared by the UI/save thread, so every access is serialised
+ * through this mutex. PrewarmLock is a no-op on the emulator, which has no
+ * background task. */
+#ifdef ARDUINO
+static SemaphoreHandle_t prewarm_mutex()
+{
+    /* C++11 thread-safe static init: created exactly once, matching the
+     * notes_fs_mutex() idiom in storage.cpp. */
+    static SemaphoreHandle_t m = xSemaphoreCreateMutex();
+    return m;
+}
+struct PrewarmLock {
+    PrewarmLock()  { xSemaphoreTake(prewarm_mutex(), portMAX_DELAY); }
+    ~PrewarmLock() { xSemaphoreGive(prewarm_mutex()); }
+    PrewarmLock(const PrewarmLock &) = delete;
+    PrewarmLock &operator=(const PrewarmLock &) = delete;
+};
+/* At most one derivation task in flight; set on the UI thread before spawn,
+ * cleared by the worker as it exits (same discipline as s_prune_task_running). */
+static volatile bool s_prewarm_running = false;
+#else
+struct PrewarmLock { PrewarmLock() {} ~PrewarmLock() {} };
+#endif
+
 static void zeroize(void *buf, size_t n)
 {
 #ifdef ARDUINO
@@ -66,7 +95,8 @@ static void zeroize(void *buf, size_t n)
 #endif
 }
 
-static void prewarm_clear()
+/* Wipe the primed slot. Callers must hold prewarm_mutex(). */
+static void prewarm_clear_locked()
 {
     if (g_prewarm.valid) {
         zeroize(g_prewarm.salt, sizeof(g_prewarm.salt));
@@ -76,6 +106,12 @@ static void prewarm_clear()
     if (!g_prewarm.pw.empty()) zeroize(&g_prewarm.pw[0], g_prewarm.pw.size());
     g_prewarm.pw.clear();
     g_prewarm.valid = false;
+}
+
+static void prewarm_clear()
+{
+    PrewarmLock lk;
+    prewarm_clear_locked();
 }
 
 static bool has_magic(const uint8_t *buf, size_t n)
@@ -175,13 +211,20 @@ static bool encrypt_with_pw(const char *pw,
 
     /* Consume a matching pre-derived triple if one is primed for this exact
      * passphrase; otherwise derive synchronously. Either way the salt is fresh
-     * and used once. */
-    if (g_prewarm.valid && g_prewarm.pw == pw) {
-        memcpy(salt, g_prewarm.salt, NC_SALT_LEN);
-        memcpy(key, g_prewarm.key, NC_KEY_LEN);
-        memcpy(iv, g_prewarm.iv, NC_IV_LEN);
-        prewarm_clear();
-    } else {
+     * and used once. The check/copy/clear runs under the prewarm mutex because
+     * the background derivation task may be publishing into the slot right now. */
+    bool consumed = false;
+    {
+        PrewarmLock lk;
+        if (g_prewarm.valid && g_prewarm.pw == pw) {
+            memcpy(salt, g_prewarm.salt, NC_SALT_LEN);
+            memcpy(key, g_prewarm.key, NC_KEY_LEN);
+            memcpy(iv, g_prewarm.iv, NC_IV_LEN);
+            prewarm_clear_locked();
+            consumed = true;
+        }
+    }
+    if (!consumed) {
         esp_fill_random(salt, NC_SALT_LEN);
         if (!derive_key_iv(pw, salt, key, iv)) return false;
     }
@@ -441,12 +484,19 @@ bool notes_crypto_unlock(const char *pw)
 
 void notes_crypto_lock()
 {
-    prewarm_clear();    /* drop the pre-derived key with the passphrase */
+    /* Mark locked and drop the pre-derived key atomically: a background prewarm
+     * task that is mid-derive checks g_unlocked under this same mutex before
+     * publishing, so it discards its result rather than re-priming a slot the
+     * user just tried to lock. */
+    {
+        PrewarmLock lk;
+        g_unlocked = false;
+        prewarm_clear_locked();
+    }
     if (!g_passphrase.empty()) {
         zeroize(&g_passphrase[0], g_passphrase.size());
     }
     g_passphrase.clear();
-    g_unlocked = false;
 }
 
 bool notes_crypto_encrypt_buffer(const uint8_t *pt, size_t pt_len,
@@ -456,27 +506,75 @@ bool notes_crypto_encrypt_buffer(const uint8_t *pt, size_t pt_len,
     return encrypt_with_pw(g_passphrase.c_str(), pt, pt_len, out);
 }
 
-void notes_crypto_prewarm()
-{
 #ifdef ARDUINO
-    if (!g_unlocked) return;
-    if (g_prewarm.valid) return;    /* already primed */
-
+/* Derive a fresh (salt, key, iv) triple for `pw` and publish it into the slot,
+ * unless the session locked or another primer beat us to it in the meantime.
+ * The ~10k-iteration PBKDF2 is the expensive part and runs before the lock is
+ * taken, so the mutex is held only for the memcpy that publishes the result. */
+static void prewarm_derive_and_publish(const std::string &pw)
+{
     uint8_t salt[NC_SALT_LEN];
     esp_fill_random(salt, NC_SALT_LEN);
     uint8_t key[NC_KEY_LEN];
     uint8_t iv[NC_IV_LEN];
-    if (!derive_key_iv(g_passphrase.c_str(), salt, key, iv)) return;
 
-    memcpy(g_prewarm.salt, salt, NC_SALT_LEN);
-    memcpy(g_prewarm.key, key, NC_KEY_LEN);
-    memcpy(g_prewarm.iv, iv, NC_IV_LEN);
-    g_prewarm.pw = g_passphrase;
-    g_prewarm.valid = true;
-
+    if (derive_key_iv(pw.c_str(), salt, key, iv)) {
+        PrewarmLock lk;
+        /* Only publish while still unlocked and unprimed: a lock() that raced us
+         * has already flipped g_unlocked under this same mutex, so we drop the
+         * derived key rather than leave material behind. */
+        if (g_unlocked && !g_prewarm.valid) {
+            memcpy(g_prewarm.salt, salt, NC_SALT_LEN);
+            memcpy(g_prewarm.key, key, NC_KEY_LEN);
+            memcpy(g_prewarm.iv, iv, NC_IV_LEN);
+            g_prewarm.pw = pw;
+            g_prewarm.valid = true;
+        }
+    }
     zeroize(salt, sizeof(salt));
     zeroize(key, sizeof(key));
     zeroize(iv, sizeof(iv));
+}
+
+/* One-shot worker that runs PBKDF2 off the UI thread. The passphrase arrives as
+ * a private heap copy (the worker never touches g_passphrase) and is zeroized
+ * before the task exits. */
+static void prewarm_task(void *arg)
+{
+    std::string *pw = static_cast<std::string *>(arg);
+    prewarm_derive_and_publish(*pw);
+    if (!pw->empty()) zeroize(&(*pw)[0], pw->size());
+    delete pw;
+    s_prewarm_running = false;
+    vTaskDelete(nullptr);
+}
+#endif
+
+void notes_crypto_prewarm()
+{
+#ifdef ARDUINO
+    if (!g_unlocked) return;
+    {
+        PrewarmLock lk;
+        if (g_prewarm.valid) return;    /* already primed */
+    }
+    if (s_prewarm_running) return;      /* a derivation is already in flight */
+
+    /* Snapshot the passphrase so the worker can never race a concurrent
+     * lock()/rotation of g_passphrase; the worker owns and zeroizes this copy. */
+    std::string *pw = new (std::nothrow) std::string(g_passphrase);
+    if (!pw) return;
+
+    s_prewarm_running = true;
+    /* Derive on a low-priority background task so opening the editor never blocks
+     * on PBKDF2. If FreeRTOS can't spawn it, derive inline as a fallback — that
+     * path pays the old tens-of-ms hitch, but only when task slots are exhausted. */
+    if (xTaskCreate(prewarm_task, "notes_prewarm", 8192, pw, 1, nullptr) != pdPASS) {
+        s_prewarm_running = false;
+        prewarm_derive_and_publish(*pw);
+        if (!pw->empty()) zeroize(&(*pw)[0], pw->size());
+        delete pw;
+    }
 #endif
 }
 

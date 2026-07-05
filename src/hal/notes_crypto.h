@@ -42,14 +42,16 @@ bool notes_crypto_encrypt_buffer(const uint8_t *pt, size_t pt_len,
 bool notes_crypto_decrypt_buffer(const uint8_t *ct, size_t ct_len,
                                  std::string &out);
 
-/* Pre-derive one (salt, key, iv) triple so the next encrypt skips PBKDF2.
- * PBKDF2-HMAC-SHA256 x10000 is tens of ms on the ESP32; running it here — at a
- * latency-insensitive moment such as opening the editor — means the save that
+/* Kick off derivation of one (salt, key, iv) triple so the next encrypt skips
+ * PBKDF2. PBKDF2-HMAC-SHA256 x10000 is tens of ms on the ESP32; priming it at a
+ * latency-insensitive moment such as opening the editor means the save that
  * fires when the user *exits* only pays for the AES-CBC pass, not the key
- * derivation. Cheap no-op if locked or a triple is already primed. The salt is
- * freshly random and consumed exactly once, so on-disk salt uniqueness (and
- * OpenSSL-`enc` compatibility) is preserved. Single-threaded: call from the UI
- * thread only. */
+ * derivation. The derivation runs on a short-lived background task, so this
+ * returns immediately and never blocks the caller on PBKDF2 (it falls back to
+ * an inline derive only if the task can't be spawned). Cheap no-op if locked, a
+ * triple is already primed, or one is already being derived. The salt is freshly
+ * random and consumed exactly once, so on-disk salt uniqueness (and OpenSSL-
+ * `enc` compatibility) is preserved. Call from the UI thread. */
 void notes_crypto_prewarm();
 
 /* First-time setup: refuses if crypto is already enabled. Writes the canary
