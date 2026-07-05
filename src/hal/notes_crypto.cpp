@@ -50,13 +50,21 @@ std::string g_passphrase;   /* Held in RAM while unlocked. */
 struct PrewarmSlot {
     bool valid = false;
     std::string pw;
-    uint8_t salt[8];    /* NC_SALT_LEN */
-    uint8_t key[32];    /* NC_KEY_LEN  */
-    uint8_t iv[16];     /* NC_IV_LEN   */
+    uint8_t salt[NC_SALT_LEN];
+    uint8_t key[NC_KEY_LEN];
+    uint8_t iv[NC_IV_LEN];
 };
 PrewarmSlot g_prewarm;
 
-static void zeroize(void *buf, size_t n);
+static void zeroize(void *buf, size_t n)
+{
+#ifdef ARDUINO
+    mbedtls_platform_zeroize(buf, n);
+#else
+    volatile uint8_t *p = (volatile uint8_t *)buf;
+    while (n--) *p++ = 0;
+#endif
+}
 
 static void prewarm_clear()
 {
@@ -68,16 +76,6 @@ static void prewarm_clear()
     if (!g_prewarm.pw.empty()) zeroize(&g_prewarm.pw[0], g_prewarm.pw.size());
     g_prewarm.pw.clear();
     g_prewarm.valid = false;
-}
-
-static void zeroize(void *buf, size_t n)
-{
-#ifdef ARDUINO
-    mbedtls_platform_zeroize(buf, n);
-#else
-    volatile uint8_t *p = (volatile uint8_t *)buf;
-    while (n--) *p++ = 0;
-#endif
 }
 
 static bool has_magic(const uint8_t *buf, size_t n)
