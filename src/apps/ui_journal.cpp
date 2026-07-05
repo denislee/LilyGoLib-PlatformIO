@@ -5,8 +5,11 @@
  * State reset on onStop (ui_journal_exit):
  *   widgets: menu, quit_btn, parent_obj, pending_journal_parent
  *                                       — destroyed via lv_obj_del then nulled
- * No timers, tasks, or hardware sessions are held here. If you add any,
- * list them above AND extend the exit path.
+ *   timers:  bg_refresh_timer           — the deferred one-shot rescan queued
+ *                                         when the FS changed; cancelled via
+ *                                         cancel_bg_refresh() on exit/rebuild.
+ * No tasks or hardware sessions are held here. If you add any, list them
+ * above AND extend the exit path.
  */
 #include "../ui_define.h"
 #include "app_registry.h"
@@ -363,6 +366,65 @@ static void teardown_menu_for_rerender()
     }
 }
 
+// --- Background refresh -----------------------------------------------------
+// Opening the journal renders the cached list immediately; when the filesystem
+// has changed since the last scan we reconcile in the background instead of
+// blocking the app open on a directory walk of every note (seconds, with
+// hundreds of synced notes). bg_refresh_timer holds the queued one-shot pass.
+static lv_timer_t *bg_refresh_timer = nullptr;
+
+// Cheap FNV-1a over (filename, mtime) so a completed refresh can tell whether
+// anything actually changed before tearing down and re-rendering the page —
+// an unchanged journal must not flicker or steal focus.
+static uint32_t entries_signature(const std::vector<JournalEntry> &v)
+{
+    uint32_t h = 2166136261u;
+    for (const auto &e : v) {
+        for (unsigned char c : e.filename) h = (h ^ c) * 16777619u;
+        for (int s = 0; s < 32; s += 8) h = (h ^ ((e.mtime >> s) & 0xff)) * 16777619u;
+    }
+    h = (h ^ (uint32_t)v.size()) * 16777619u;
+    return h;
+}
+
+// No-op progress sink whose sole purpose is to keep report()'s periodic
+// watchdog yield alive during the background scan (report() only yields when a
+// callback is supplied). Deliberately touches nothing on the UI.
+static void bg_progress_cb(void *, const char *, int, int, const char *) {}
+
+static void cancel_bg_refresh()
+{
+    if (bg_refresh_timer) {
+        lv_timer_del(bg_refresh_timer);
+        bg_refresh_timer = nullptr;
+    }
+}
+
+static void bg_refresh_timer_cb(lv_timer_t *t)
+{
+    bg_refresh_timer = nullptr;
+    lv_timer_del(t);
+    if (menu == NULL || parent_obj == NULL) return;  // app closed before we ran
+
+    uint32_t before = entries_signature(journal_entries);
+    refresh_journal_entries(journal_entries, bg_progress_cb, nullptr);
+    cache_valid = true;
+
+    if (entries_signature(journal_entries) != before) {
+        teardown_menu_for_rerender();
+        journal_build_ui(parent_obj);
+    }
+}
+
+// Queue the reconcile for shortly after this frame paints, so the cached list
+// is already on screen (and interactive) before the scan runs.
+static void schedule_bg_refresh()
+{
+    cancel_bg_refresh();
+    bg_refresh_timer = lv_timer_create(bg_refresh_timer_cb, 120, NULL);
+    if (bg_refresh_timer) lv_timer_set_repeat_count(bg_refresh_timer, 1);
+}
+
 static void do_exit()
 {
     ui_journal_exit(NULL);
@@ -580,31 +642,37 @@ static void journal_build_ui(lv_obj_t *parent)
     enable_keyboard();
     parent_obj = parent;
 
-    bool was_dirty = hw_get_filesystem_dirty();
-    if (was_dirty) {
-        cache_valid = false;
-        hw_set_filesystem_dirty(false);
-    }
+    // This build supersedes any refresh queued by a previous one.
+    cancel_bg_refresh();
 
-    // Cold-boot fast path: if no save/delete has touched the filesystem since
-    // the last refresh (the dirty flag is persisted in NVS) we can trust the
-    // on-disk index and skip the directory scan + per-file decrypt entirely.
-    // Manual refresh ('r' key) clears cache_valid to force a rescan when the
-    // user wants one.
-    if (!cache_valid && journal_entries.empty() && !was_dirty) {
+    bool was_dirty = hw_get_filesystem_dirty();
+    if (was_dirty) hw_set_filesystem_dirty(false);
+
+    // Always get *something* on screen instantly: reuse the in-memory list, or
+    // fall back to the persisted on-disk index. When nothing has changed since
+    // the last scan (dirty flag clear) the index is authoritative and we skip
+    // the rescan entirely — the original cold-boot fast path.
+    if (journal_entries.empty()) {
         std::vector<JournalEntry> snapshot;
         if (load_index_file(snapshot) && !snapshot.empty()) {
             journal_entries = std::move(snapshot);
-            cache_valid = true;
+            if (!was_dirty) cache_valid = true;
         }
     }
+    if (was_dirty) cache_valid = false;
 
-    bool show_loader = !cache_valid || journal_entries.empty();
+    bool have_cache = !journal_entries.empty();
+    bool need_refresh = !cache_valid;
+    // Only block behind the loading popup when there is genuinely nothing to
+    // display yet (true first run). Otherwise render the cache now and reconcile
+    // in the background so the app opens instantly even with a stale index.
+    bool show_loader = need_refresh && !have_cache;
     if (show_loader) loader_show();
     menu = create_menu(parent, back_event_handler);
     if (show_loader) {
         refresh_journal_entries(journal_entries, loader_update, nullptr);
         cache_valid = true;
+        need_refresh = false;
     }
 
     lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
@@ -827,11 +895,16 @@ static void journal_build_ui(lv_obj_t *parent)
     }, NULL);
 #endif
 
+    // Cached list is now on screen; reconcile with the filesystem in the
+    // background if it may be stale.
+    if (need_refresh) schedule_bg_refresh();
+
     loader_hide();
 }
 
 void ui_journal_exit(lv_obj_t *parent)
 {
+    cancel_bg_refresh();
     loader_hide();
     ui_hide_back_button();
     disable_keyboard();
