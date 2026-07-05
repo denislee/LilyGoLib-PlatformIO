@@ -336,7 +336,11 @@ uint32_t LilyGoUltra::begin(uint32_t disable_hw_init)
     }
 
     if (!(disable_hw_init & NO_INIT_FATFS)) {
-        setupMSC(_lock_callback, _unlock_callback, getMSCPreferSD());
+        // Expose the SD card over USB MSC only when the user prefers it *and* a
+        // card is actually present; with no card, fall back to internal flash
+        // (FFat) so the device still mounts as a drive when plugged into a PC.
+        bool msc_use_sd = getMSCPreferSD() && (devices_probe & HW_SD_ONLINE);
+        setupMSC(_lock_callback, _unlock_callback, msc_use_sd);
     }
 
 #ifdef USING_PDM_MICROPHONE
