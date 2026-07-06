@@ -142,19 +142,10 @@ static void reload_notes()
         n.filename  = r.path;
         n.full_path = std::string(NOTES_DIR) + "/" + r.path;
         n.mtime     = r.mtime;
-        // File size — re-open briefly. Could be slow; we cache it.
-        n.data_bytes = 0;
-#ifdef ARDUINO
-        {
-            core::ScopedSpiLock lock;
-            File f = SD.open(n.full_path.c_str());
-            if (f) {
-                size_t sz = f.size();
-                n.data_bytes = (sz >= 44) ? (uint32_t)(sz - 44) : 0;
-                f.close();
-            }
-        }
-#endif
+        // WAV payload size = file size minus the 44-byte header. hw_list_sd_entries
+        // already filled r.size from the directory scan, so there's no need to
+        // re-open each file over the shared SPI bus just to read its length.
+        n.data_bytes = (r.size >= 44) ? (r.size - 44) : 0;
         notes.push_back(n);
     }
     // Sort newest first by mtime, tie-break on filename desc.
