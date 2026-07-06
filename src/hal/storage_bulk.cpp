@@ -14,6 +14,7 @@
 #include "../core/spi_lock.h"
 
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -55,22 +56,19 @@ bool hw_copy_all_notes_to_hub(int *copied, int *failed, std::string *error,
     std::vector<UpItem> items;
     items.reserve(internal_names.size() + sd_names.size());
 
-    std::vector<std::string> seen;
-    seen.reserve(internal_names.size());
+    // Set-backed dedupe: with 200 internal + 200 SD notes the old nested
+    // linear scan was ~40k string compares; a set makes each SD lookup O(log n).
+    std::set<std::string> seen;
     for (auto &n : internal_names) {
         strip_slash(n);
         if (n.empty()) continue;
         items.push_back({n, true});
-        seen.push_back(n);
+        seen.insert(n);
     }
     for (auto &n : sd_names) {
         strip_slash(n);
         if (n.empty()) continue;
-        bool dup = false;
-        for (const auto &s : seen) {
-            if (s == n) { dup = true; break; }
-        }
-        if (dup) continue;
+        if (seen.count(n)) continue;
         items.push_back({n, false});
     }
 

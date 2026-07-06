@@ -14,6 +14,7 @@
 
 #ifdef ARDUINO
 #include <algorithm>
+#include <set>
 #include <LilyGoLib.h>
 #include <SD.h>
 #include <FFat.h>
@@ -1145,18 +1146,13 @@ void hw_get_preferred_txt_files(std::vector<std::string> &list)
             list_files(sd_infos, SD, NOTES_DIR, ".txt");
         }
 
-        // Merge SD into infos, avoiding duplicates (Internal wins)
+        // Merge SD into infos, avoiding duplicates (Internal wins). A set of
+        // the internal names makes each SD lookup O(log n) instead of the old
+        // nested linear scan (~40k compares at 200+200 notes).
+        std::set<std::string> internal_names;
+        for (const auto &ii : infos) internal_names.insert(ii.name);
         for (const auto &sdi : sd_infos) {
-            bool found = false;
-            for (const auto &ii : infos) {
-                if (ii.name == sdi.name) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                infos.push_back(sdi);
-            }
+            if (!internal_names.count(sdi.name)) infos.push_back(sdi);
         }
     }
 
@@ -1259,18 +1255,13 @@ void hw_get_preferred_txt_files_info(std::vector<std::pair<std::string, uint32_t
             list_files(sd_infos, SD, NOTES_DIR, ".txt", cb);
         }
 
-        // Merge SD into infos, avoiding duplicates (Internal wins)
+        // Merge SD into infos, avoiding duplicates (Internal wins). Set-backed
+        // lookup — this runs on every journal reconcile, so the old O(n²) scan
+        // hurt most here.
+        std::set<std::string> internal_names;
+        for (const auto &ii : infos) internal_names.insert(ii.name);
         for (const auto &sdi : sd_infos) {
-            bool found = false;
-            for (const auto &ii : infos) {
-                if (ii.name == sdi.name) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                infos.push_back(sdi);
-            }
+            if (!internal_names.count(sdi.name)) infos.push_back(sdi);
         }
     }
 
