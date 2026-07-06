@@ -403,13 +403,48 @@ static std::string json_text_body(const char *text)
 // reachable (captive portals, ISP outage, DNS down), and the bridge HTTPS
 // timeout is multi-second — so we probe TCP/53 to 1.1.1.1 and cache the
 // verdict. Success is cached longer than failure so a recovering link is
-// retried sooner without spamming the probe on every poll tick.
+// retried sooner without spamming the probe.
+//
+// The probe blocks for up to TG_INET_PING_MS, so it runs on a one-shot
+// background task; internet_available() only ever reads the cached verdict and
+// kicks a refresh when it goes stale. Previously the probe ran inline on the
+// LVGL thread, so a WiFi-up/internet-down link janked the UI ~1.5 s every
+// FAIL_TTL forever. Entry paths that dead-end their UI on a false result keep a
+// short retry timer (TG_INET_RETRY_MS) so they recover once the async probe flips.
 static const uint32_t TG_INET_OK_TTL_MS   = 30000;
 static const uint32_t TG_INET_FAIL_TTL_MS = 5000;
 static const uint32_t TG_INET_PING_MS     = 1500;
+static const uint32_t TG_INET_RETRY_MS    = 1500;
 static uint32_t s_inet_check_ts = 0;
 static bool     s_inet_ok       = false;
+static volatile bool s_inet_probe_running = false;
 
+static void inet_probe_task(void *arg)
+{
+    (void)arg;
+    bool ok = hw_ping_internet("1.1.1.1", 53, TG_INET_PING_MS, nullptr, nullptr);
+    s_inet_ok = ok;
+    s_inet_check_ts = lv_tick_get();
+    s_inet_probe_running = false;
+    vTaskDelete(NULL);
+}
+
+// Spawn a background probe unless one is already in flight. No-op without WiFi.
+static void kick_inet_probe()
+{
+    if (s_inet_probe_running) return;
+    if (!hw_get_wifi_connected()) return;
+    s_inet_probe_running = true;
+    if (xTaskCreate(inet_probe_task, "tg_inet", 3072, nullptr, 1, nullptr) != pdPASS) {
+        // Task slots exhausted — probe inline so the verdict still refreshes.
+        s_inet_ok = hw_ping_internet("1.1.1.1", 53, TG_INET_PING_MS, nullptr, nullptr);
+        s_inet_check_ts = lv_tick_get();
+        s_inet_probe_running = false;
+    }
+}
+
+// Non-blocking: returns the last cached verdict and refreshes it in the
+// background when stale. Safe to call from the LVGL thread on every poll tick.
 static bool internet_available()
 {
     if (!hw_get_wifi_connected()) {
@@ -418,11 +453,8 @@ static bool internet_available()
         return false;
     }
     uint32_t ttl = s_inet_ok ? TG_INET_OK_TTL_MS : TG_INET_FAIL_TTL_MS;
-    if (s_inet_check_ts != 0 && lv_tick_elaps(s_inet_check_ts) < ttl) {
-        return s_inet_ok;
-    }
-    s_inet_ok = hw_ping_internet("1.1.1.1", 53, TG_INET_PING_MS, nullptr, nullptr);
-    s_inet_check_ts = lv_tick_get();
+    bool fresh = (s_inet_check_ts != 0 && lv_tick_elaps(s_inet_check_ts) < ttl);
+    if (!fresh) kick_inet_probe();   // refresh in the background; never blocks here
     return s_inet_ok;
 }
 
@@ -1042,7 +1074,10 @@ static void show_chat_list()
         return;
     }
     if (!internet_available()) {
+        // The verdict may still be pending on the async probe — keep re-checking
+        // so the list loads as soon as it flips, instead of dead-ending here.
         set_status("No internet", UI_COLOR_MUTED);
+        start_timer(TG_INET_RETRY_MS);
         return;
     }
     if (s_bg_task != nullptr) {
@@ -1150,7 +1185,9 @@ static void show_chat(long long id, const char *title)
     s_msgs.clear();
 #ifdef ARDUINO
     if (!internet_available()) {
+        // Keep re-checking while the async probe settles; recover without a re-open.
         set_status("No internet", UI_COLOR_MUTED);
+        start_timer(TG_INET_RETRY_MS);
         return;
     }
     if (s_bg_task != nullptr) {
