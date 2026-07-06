@@ -36,11 +36,6 @@ static EventGroupHandle_t playerEvent       = NULL;
 #define PLAYER_END      _BV(1)
 #define PLAYER_RUNNING  _BV(2)
 
-// Decode buffer for one MP3 frame (~4.6 KB). Static so the player task's
-// stack doesn't have to carry it across xEventGroupWaitBits() — keeps stack
-// pressure predictable during long playback.
-static int16_t s_mp3_outBuf[MAX_NCHAN * MAX_NGRAN * MAX_NSAMP];
-
 // libhelix needs at least one full frame in the buffer to decode. Layer III
 // max frame size is ~1900 bytes; we keep extra headroom for sync search.
 #define MP3_REFILL_BUF       (16 * 1024)
@@ -61,6 +56,18 @@ static bool play_mp3_with_filler(mp3_fill_cb_t fill_cb, void *ctx)
 
     uint8_t *bufStart = (uint8_t *)heap_caps_malloc(MP3_REFILL_BUF, MALLOC_CAP_SPIRAM);
     if (!bufStart) {
+        MP3FreeDecoder(decoder);
+        return false;
+    }
+
+    // One decoded MP3 frame (~4.6 KB). PSRAM like the refill buffer, and
+    // allocated per-session rather than a static so it isn't permanently
+    // resident in internal RAM between playbacks; a stack local would instead
+    // bloat the player task's stack across xEventGroupWaitBits().
+    int16_t *outBuf = (int16_t *)heap_caps_malloc(
+        sizeof(int16_t) * MAX_NCHAN * MAX_NGRAN * MAX_NSAMP, MALLOC_CAP_SPIRAM);
+    if (!outBuf) {
+        free(bufStart);
         MP3FreeDecoder(decoder);
         return false;
     }
@@ -90,6 +97,7 @@ static bool play_mp3_with_filler(mp3_fill_cb_t fill_cb, void *ctx)
     if (bytesAvailable <= 0) {
         MP3FreeDecoder(decoder);
         free(bufStart);
+        free(outBuf);
         return false;
     }
 
@@ -106,7 +114,7 @@ static bool play_mp3_with_filler(mp3_fill_cb_t fill_cb, void *ctx)
 
         if (!eof && bytesAvailable < MP3_MIN_FRAME_BYTES) refill();
 
-        int err = MP3Decode(decoder, &readPtr, &bytesAvailable, s_mp3_outBuf, 0);
+        int err = MP3Decode(decoder, &readPtr, &bytesAvailable, outBuf, 0);
         if (err) {
             log_e("Decode ERROR: %d", err);
             break;
@@ -124,7 +132,7 @@ static bool play_mp3_with_filler(mp3_fill_cb_t fill_cb, void *ctx)
             instance.player.configureTX(frameInfo.samprate, (i2s_data_bit_width_t)frameInfo.bitsPerSample, (i2s_slot_mode_t)frameInfo.nChans);
 #endif
         }
-        instance.player.write((uint8_t *)s_mp3_outBuf,
+        instance.player.write((uint8_t *)outBuf,
                               (size_t)((frameInfo.bitsPerSample / 8) * frameInfo.outputSamps));
 #elif defined(USING_AUDIO_CODEC)
         if (codec_online) {
@@ -132,7 +140,7 @@ static bool play_mp3_with_filler(mp3_fill_cb_t fill_cb, void *ctx)
                 codec_begin = true;
                 instance.codec.open(frameInfo.bitsPerSample, frameInfo.nChans, frameInfo.samprate);
             }
-            int ret = instance.codec.write((uint8_t *)s_mp3_outBuf,
+            int ret = instance.codec.write((uint8_t *)outBuf,
                                            (size_t)((frameInfo.bitsPerSample / 8) * frameInfo.outputSamps));
             if (ret != 0) {
                 log_e("esp_codec_dev_write:0x%X", ret);
@@ -147,6 +155,7 @@ static bool play_mp3_with_filler(mp3_fill_cb_t fill_cb, void *ctx)
 
     MP3FreeDecoder(decoder);
     free(bufStart);
+    free(outBuf);
     xEventGroupClearBits(playerEvent, PLAYER_RUNNING | PLAYER_PLAY | PLAYER_END);
 
 #if defined(USING_PCM_AMPLIFIER)
