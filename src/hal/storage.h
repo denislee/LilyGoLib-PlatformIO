@@ -98,10 +98,6 @@ bool hw_save_preferred_bytes(const char *path, const uint8_t *buf, size_t len,
                              std::string *error = nullptr);
 bool hw_read_preferred_bytes(const char *path, std::vector<uint8_t> &buf);
 
-// Check if internal storage has too many files and migrate the oldest ones to SD.
-// Should be called after saving new files.
-void hw_check_and_migrate_storage();
-
 // When the internal-storage note count reaches 50, move the 35 oldest .txt
 // notes to the SD card (leaving 15 on internal as headroom). No-op below the
 // threshold or when the SD card is unavailable. Excludes tasks.txt.

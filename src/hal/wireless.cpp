@@ -276,17 +276,6 @@ bool hw_wifi_has_saved()
 #endif
 }
 
-bool hw_wifi_get_saved_ssid(std::string &ssid)
-{
-#ifdef ARDUINO
-    std::string pw;
-    return wifi_load_saved(ssid, pw);
-#else
-    (void)ssid;
-    return false;
-#endif
-}
-
 bool hw_wifi_get_saved_password(const std::string &ssid, std::string &password)
 {
 #ifdef ARDUINO
@@ -566,33 +555,6 @@ void hw_set_bt_enable(bool en) {
     }
 }
 
-void hw_enable_ble(const char *devName)
-{
-#if  defined(ARDUINO) && defined(USING_UART_BLE)
-#endif
-}
-
-void hw_deinit_ble()
-{
-#if  defined(ARDUINO) && defined(USING_UART_BLE)
-
-#endif
-}
-
-void hw_disable_ble()
-{
-#if  defined(ARDUINO) && defined(USING_UART_BLE)
-
-#endif
-}
-
-size_t hw_get_ble_message(char *buffer, size_t buffer_size)
-{
-#if  defined(ARDUINO) && defined(USING_UART_BLE)
-#endif
-    return 0;
-}
-
 // --- BLE keyboard ------------------------------------------------------
 
 const char *hw_get_ble_kb_name()
@@ -637,28 +599,6 @@ void hw_set_ble_kb_char(const char *c)
 #ifdef CONFIG_BLE_KEYBOARD
     if (bleKeyboard.isConnected()) {
         bleKeyboard.print(c);
-    }
-#endif
-#endif
-}
-
-void hw_set_ble_kb_key(uint8_t key)
-{
-#if defined(ARDUINO) && defined(USING_BLE_KEYBOARD)
-#ifdef CONFIG_BLE_KEYBOARD
-    if (bleKeyboard.isConnected()) {
-        bleKeyboard.press(key);
-    }
-#endif
-#endif
-}
-
-void hw_set_ble_kb_release()
-{
-#if defined(ARDUINO) && defined(USING_BLE_KEYBOARD)
-#ifdef CONFIG_BLE_KEYBOARD
-    if (bleKeyboard.isConnected()) {
-        bleKeyboard.releaseAll();
     }
 #endif
 #endif

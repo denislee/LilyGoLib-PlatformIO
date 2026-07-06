@@ -70,8 +70,6 @@ void hw_get_heap_info(uint32_t &total, uint32_t &free);
 
 void hw_disable_input_devices();
 void hw_enable_input_devices();
-void hw_set_trackball_callback(void(*callback)(uint8_t dir));
-void hw_set_button_callback(void (*callback)(uint8_t idx, uint8_t state));
 
 // UI helpers exposed from factory/ui_main for HAL-layer callers.
 void ui_show_wifi_process_bar();

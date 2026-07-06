@@ -23,9 +23,6 @@ bool hw_set_mic_start();
 void hw_set_mic_stop();
 void hw_audio_get_fft_data(FFTData *fft_data);
 
-void hw_set_audio_effect_3d(bool enable);
-void hw_set_audio_effect_ab_class(bool enable);
-
 // --- Recording (WAV, 16 kHz / 16-bit / mono) to SD card ---
 #define HW_REC_SAMPLE_RATE 16000u
 #define HW_REC_BYTES_PER_SEC (HW_REC_SAMPLE_RATE * 2u)   // mono, 16-bit

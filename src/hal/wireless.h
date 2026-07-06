@@ -26,7 +26,6 @@ void hw_set_wifi_enable(bool en);
 // Favorites list: every network the user has successfully connected to is
 // stored; the most recent lands at index 0.
 bool hw_wifi_has_saved();
-bool hw_wifi_get_saved_ssid(std::string &ssid);  // most recent
 bool hw_wifi_get_saved_password(const std::string &ssid, std::string &password);
 void hw_wifi_get_saved_list(std::vector<std::string> &ssids);
 void hw_wifi_add_saved(const std::string &ssid, const std::string &password);
@@ -76,18 +75,11 @@ bool hw_ping_internet(const char *host = "1.1.1.1",
 bool hw_get_bt_enable();
 void hw_set_bt_enable(bool en);
 
-void hw_enable_ble(const char *devName);
-void hw_disable_ble();
-size_t hw_get_ble_message(char *buffer, size_t buffer_size);
-void hw_deinit_ble();
-
 // --- BLE keyboard ---
 const char *hw_get_ble_kb_name();
 void hw_set_ble_kb_enable();
 void hw_set_ble_kb_disable();
 void hw_set_ble_kb_char(const char *c);
-void hw_set_ble_kb_key(uint8_t key);
-void hw_set_ble_kb_release();
 bool hw_get_ble_kb_connected();
 std::string hw_get_ble_kb_peer_address();
 void hw_disconnect_ble_kb();
