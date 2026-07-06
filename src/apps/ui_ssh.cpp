@@ -543,6 +543,11 @@ private:
     lv_obj_t*  ctrl_lbl_   = nullptr;
     lv_timer_t* poll_timer_ = nullptr;
 
+    // Byte length of the terminal textarea, tracked incrementally so the hot
+    // append path doesn't copy the whole (up to ~8 KB) buffer every chunk just
+    // to check whether it needs trimming. See append_terminal().
+    size_t     term_len_   = 0;
+
     std::unique_ptr<SshBackend> backend_;
     SshConfig cfg_;
     AnsiFilter ansi_;
@@ -793,6 +798,7 @@ void SshApp::build_ui() {
     lv_textarea_set_one_line(term_, false);
     lv_textarea_set_cursor_click_pos(term_, false);
     lv_textarea_set_text(term_, "");
+    term_len_ = 0;
     lv_obj_add_flag(term_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(term_, lv_color_hex(0x0a0c10), 0);
     lv_obj_set_style_bg_opa(term_, LV_OPA_COVER, 0);
@@ -889,17 +895,21 @@ void SshApp::append_terminal(const std::string& chunk) {
     std::string clean = ansi_.feed(chunk);
     if (clean.empty()) return;
     lv_textarea_add_text(term_, clean.c_str());
+    term_len_ += clean.size();
 
     // Bound the scrollback: a long-lived session would otherwise grow the
     // textarea's buffer without limit and eventually OOM. Keep the last
     // ~kTermMax bytes, trimmed to a line boundary so we don't cut mid-line.
+    // Only pull the (potentially 8 KB) buffer when the tracked length says a
+    // trim is actually due — during bursts this path runs ~10x/s.
     constexpr size_t kTermMax = 8000;
-    std::string cur = lv_textarea_get_text(term_);
-    if (cur.size() > kTermMax) {
+    if (term_len_ > kTermMax) {
+        std::string cur = lv_textarea_get_text(term_);
         size_t cut = cur.size() - kTermMax;
         size_t nl = cur.find('\n', cut);
         cur.erase(0, nl == std::string::npos ? cut : nl + 1);
         lv_textarea_set_text(term_, cur.c_str());
+        term_len_ = cur.size();
     }
     lv_obj_scroll_to_y(term_, LV_COORD_MAX, LV_ANIM_OFF);
 }
