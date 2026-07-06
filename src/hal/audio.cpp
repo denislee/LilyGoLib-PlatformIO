@@ -16,7 +16,6 @@
 #include <mp3dec.h>
 #include "dsps_fft2r.h"
 #include "dsps_wind_hann.h"
-#include "../audio/keyboard_audio.h"
 #endif
 
 #if defined(HAS_SD_CARD_SOCKET)
@@ -166,25 +165,6 @@ static bool play_mp3_with_filler(mp3_fill_cb_t fill_cb, void *ctx)
     return true;
 }
 
-// In-memory cursor for keyboard-tone playback (small flash blob).
-struct mp3_mem_ctx { const uint8_t *src; size_t remaining; };
-static int mp3_fill_mem(uint8_t *dst, size_t maxlen, void *ctx)
-{
-    auto *m = (mp3_mem_ctx *)ctx;
-    if (m->remaining == 0) return 0;
-    size_t n = m->remaining < maxlen ? m->remaining : maxlen;
-    memcpy(dst, m->src, n);
-    m->src += n;
-    m->remaining -= n;
-    return (int)n;
-}
-
-static bool playMP3(uint8_t *src, size_t src_len)
-{
-    mp3_mem_ctx ctx{src, src_len};
-    return play_mp3_with_filler(mp3_fill_mem, &ctx);
-}
-
 // Streams MP3 from an open File. SPI bus is locked around each read on
 // SD-shared buses so the codec/audio path stays uncontended during decode.
 struct mp3_file_ctx { File *f; bool sd_locked; };
@@ -327,9 +307,6 @@ static void playerTask(void *args)
         case APP_EVENT_PLAY:
             log_d("Event: filename:%s source:%d", params.filename, params.source_type);
             hw_sd_play(params.source_type, params.filename);
-            break;
-        case APP_EVENT_PLAY_KEY:
-            playMP3((uint8_t * )keyboard_audio, keyboard_audio_mp3_len);
             break;
         case APP_EVENT_RECOVER:
             break;
