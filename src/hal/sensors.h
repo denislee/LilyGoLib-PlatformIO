@@ -1,6 +1,6 @@
 /**
  * @file      sensors.h
- * @brief     GPS power toggle, IMU, magnetometer, environmental sensors.
+ * @brief     GPS power toggle, IMU.
  */
 #pragma once
 
@@ -42,10 +42,3 @@ struct imu_diag_t {
 };
 
 void hw_get_imu_diag(imu_diag_t &out);
-
-// --- Magnetometer ---
-void hw_mag_enable(bool enable);
-float hw_mag_get_polar();
-
-// --- BME280 (temp/humidity/pressure) ---
-void hw_bme_get_data(float &temp, float &humi, float &press, float &alt);

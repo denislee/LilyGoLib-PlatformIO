@@ -1,6 +1,6 @@
 /**
  * @file      sensors.cpp
- * @brief     GPS power toggle, IMU, magnetometer, BME280.
+ * @brief     GPS power toggle, IMU.
  */
 #include "sensors.h"
 #include "system.h"
@@ -8,11 +8,6 @@
 
 #ifdef ARDUINO
 #include <LilyGoLib.h>
-#else
-#include <cmath>
-#include <cstdlib>
-#include <ctime>
-#include <cstring>
 #endif
 
 // --- GPS ---------------------------------------------------------------
@@ -230,77 +225,3 @@ void hw_unregister_imu_process()
 #endif // SENSOR
 #endif // ARDUINO
 }
-
-// --- Magnetometer ------------------------------------------------------
-
-#ifdef USING_MAG_QMC5883
-void hw_mag_enable(bool enable)
-{
-#ifdef ARDUINO
-    if (enable) {
-        /* Config Magnetometer */
-        instance.mag.configMagnetometer(SensorQSTMagnetic::MODE_CONTINUOUS,
-                                        SensorQSTMagnetic::RANGE_8G,
-                                        SensorQSTMagnetic::DATARATE_100HZ,
-                                        SensorQSTMagnetic::OSR_1,
-                                        SensorQSTMagnetic::DSR_1);
-    } else {
-        instance.mag.setMode(SensorQSTMagnetic::MODE_SUSPEND);
-    }
-#endif // ARDUINO
-}
-
-float hw_mag_get_polar()
-{
-#ifdef ARDUINO
-    Polar polar;
-    if (instance.mag.readPolar(polar)) {
-        return polar.polar;
-    }
-    return 0.0f;
-#else
-    static float sim_angle = 0;
-    sim_angle = fmod(sim_angle + 0.5, 360);
-    return sim_angle;
-#endif
-}
-
-#endif // USING_MAG_QMC5883
-
-// --- BME280 ------------------------------------------------------------
-
-#ifdef USING_BME280
-
-void hw_bme_enable(bool enable)
-{
-#ifdef ARDUINO
-    if (enable) {
-        instance.bme.setSampling(Adafruit_BME280::MODE_NORMAL,
-                                 Adafruit_BME280::SAMPLING_X1,   // temperature
-                                 Adafruit_BME280::SAMPLING_X1, // pressure
-                                 Adafruit_BME280::SAMPLING_X1,   // humidity
-                                 Adafruit_BME280::FILTER_X2 );
-    } else {
-        instance.bme.setSampling(Adafruit_BME280::MODE_SLEEP);
-    }
-#endif
-}
-
-
-void hw_bme_get_data(float &temp, float &humi, float &press, float &alt)
-{
-#ifdef ARDUINO
-    temp = instance.bme.readTemperature();
-    humi = instance.bme.readHumidity();
-    press = instance.bme.readPressure() / 100.0F;
-    alt = instance.bme.readAltitude(1013.25);
-
-#else
-    temp = random(0, 25);
-    humi = random(40, 95);
-    press = random(1000, 1200);
-    alt = random(20, 60);
-#endif
-}
-
-#endif /*USING_BME280*/

@@ -26,10 +26,3 @@ bool hw_nfc_discovery_active();
  * `text` / `len` carry a short preview payload or NULL/0. Pass NULL to clear. */
 typedef void (*nfc_diag_cb_t)(int kind, const char *text, unsigned len);
 void hw_set_nfc_diag_hook(nfc_diag_cb_t cb);
-
-// --- IR remote ---
-#if defined(USING_IR_REMOTE)
-void hw_set_remote_code(uint32_t nec_code);
-#endif
-void hw_ir_function_select(bool enableSend);
-void hw_get_remote_code(uint64_t &result);
