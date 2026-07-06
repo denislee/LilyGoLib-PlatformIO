@@ -306,6 +306,7 @@ void System::setupGlobalUI() {
 #ifdef ARDUINO
                     xTaskCreate([](void *arg) {
                         bool res = hal::hub_is_reachable();
+                        hal::hub_note_reachable(res);   // publish for non-blocking readers
                         bool *reachable_ptr = (bool*)((void**)arg)[0];
                         bool *running_ptr = (bool*)((void**)arg)[1];
                         *reachable_ptr = res;
@@ -320,6 +321,7 @@ void System::setupGlobalUI() {
                     }(), 1, NULL);
 #else
                     hub_reachable = hal::hub_is_reachable();
+                    hal::hub_note_reachable(hub_reachable);
                     hub_probe_running = false;
 #endif
                 }

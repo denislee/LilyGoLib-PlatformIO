@@ -439,7 +439,12 @@ static bool tg_http_request(const std::string &url, const char *method,
                             std::string &out_body, int *out_code, std::string *err)
 {
 #ifdef ARDUINO
-    if (hal::hub_is_enabled() && hal::hub_is_reachable()) {
+    // hub_last_reachable() is a non-blocking read of the status-bar probe's
+    // cached verdict (it already checks hub_is_enabled()); the old
+    // hub_is_reachable() here did a 1.5 s blocking connect() on the LVGL thread
+    // on every poll/send/mark-read. A stale/unknown verdict falls through to the
+    // direct Telegram path below.
+    if (hal::hub_last_reachable()) {
         std::string proxy_url = hal::hub_get_url() + "/api/telegram/proxy";
         
         cJSON *req = cJSON_CreateObject();

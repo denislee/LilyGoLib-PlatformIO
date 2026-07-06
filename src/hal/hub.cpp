@@ -9,6 +9,8 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <mbedtls/base64.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #endif
 
 namespace hal {
@@ -75,6 +77,64 @@ void maybe_migrate_legacy()
     w.end();
     s_checked = true;
 }
+
+// --- RAM cache of the NVS-backed config ---------------------------------
+// NVS is only written through the hub_set_* setters below, so once loaded this
+// cache is authoritative for the process. Getters run on many threads (the
+// status-bar timer, storage tasks, the weather/chat/telegram workers), so
+// access is serialised through a mutex. This collapses the 1-3 NVS opens every
+// hub-touching request used to pay down to a single microsecond-scale lock.
+SemaphoreHandle_t cfg_mutex()
+{
+    // C++11 thread-safe static init, matching the notes_crypto prewarm idiom.
+    static SemaphoreHandle_t m = xSemaphoreCreateMutex();
+    return m;
+}
+struct CfgLock {
+    CfgLock()  { xSemaphoreTake(cfg_mutex(), portMAX_DELAY); }
+    ~CfgLock() { xSemaphoreGive(cfg_mutex()); }
+    CfgLock(const CfgLock &) = delete;
+    CfgLock &operator=(const CfgLock &) = delete;
+};
+bool        s_cfg_loaded  = false;
+bool        s_cfg_enabled = false;
+std::string s_cfg_url;      // trimmed; "" when unset
+
+// Populate the cache from NVS, running the one-shot legacy migration first.
+// Caller holds cfg_mutex().
+void cfg_ensure_locked()
+{
+    if (s_cfg_loaded) return;
+    maybe_migrate_legacy();
+    s_cfg_enabled = false;
+    s_cfg_url.clear();
+    Preferences p;
+    if (p.begin(NS, true)) {
+        s_cfg_enabled = p.getBool(KEY_ENABLED, false);
+        String h = p.getString(KEY_URL, "");
+        p.end();
+        s_cfg_url = trim_url(h.c_str());
+    }
+    s_cfg_loaded = true;
+}
+// Force a reload on the next read. Setters call this after writing NVS instead
+// of poking individual fields, so a set of one field can never leave the other
+// stale/unloaded.
+void cfg_invalidate()
+{
+    CfgLock lk;
+    s_cfg_loaded = false;
+}
+
+// --- Cached reachability verdict ----------------------------------------
+// The status-bar timer TCP-probes the hub every ~10 s on a background task and
+// publishes the result here; hot paths read this cached verdict instead of
+// doing their own blocking connect() on the UI thread. Plain volatiles (no
+// barrier) mirror how the status-bar probe already shares its result — a rare
+// torn read costs at most one request taking the direct fallback path.
+volatile bool     s_reach_known = false;
+volatile bool     s_reach_value = false;
+volatile uint32_t s_reach_ms    = 0;
 #endif
 
 } // namespace
@@ -82,12 +142,9 @@ void maybe_migrate_legacy()
 std::string hub_get_url_raw()
 {
 #ifdef ARDUINO
-    maybe_migrate_legacy();
-    Preferences p;
-    if (!p.begin(NS, true)) return "";
-    String h = p.getString(KEY_URL, "");
-    p.end();
-    return trim_url(h.c_str());
+    CfgLock lk;
+    cfg_ensure_locked();
+    return s_cfg_url;
 #else
     return "";
 #endif
@@ -96,12 +153,9 @@ std::string hub_get_url_raw()
 bool hub_get_enabled_pref()
 {
 #ifdef ARDUINO
-    maybe_migrate_legacy();
-    Preferences p;
-    if (!p.begin(NS, true)) return false;
-    bool e = p.getBool(KEY_ENABLED, false);
-    p.end();
-    return e;
+    CfgLock lk;
+    cfg_ensure_locked();
+    return s_cfg_enabled;
 #else
     return false;
 #endif
@@ -126,6 +180,7 @@ void hub_set_enabled(bool enabled)
     if (!p.begin(NS, false)) return;
     p.putBool(KEY_ENABLED, enabled);
     p.end();
+    cfg_invalidate();
 #else
     (void)enabled;
 #endif
@@ -142,6 +197,7 @@ void hub_set_url(const char *url)
         p.remove(KEY_URL);
     }
     p.end();
+    cfg_invalidate();
 #else
     (void)url;
 #endif
@@ -258,6 +314,30 @@ bool hub_is_reachable(uint32_t timeout_ms)
     return hw_ping_internet(host.c_str(), port, timeout_ms, nullptr, nullptr);
 #else
     (void)timeout_ms;
+    return false;
+#endif
+}
+
+void hub_note_reachable(bool reachable)
+{
+#ifdef ARDUINO
+    s_reach_value = reachable;
+    s_reach_ms    = millis();
+    s_reach_known = true;   // publish last: a reader seeing this sees value/ms too
+#else
+    (void)reachable;
+#endif
+}
+
+bool hub_last_reachable(uint32_t max_age_ms)
+{
+#ifdef ARDUINO
+    if (!hub_is_enabled()) return false;
+    if (!s_reach_known) return false;
+    if (millis() - s_reach_ms > max_age_ms) return false;   // stale ⇒ treat as down
+    return s_reach_value;
+#else
+    (void)max_age_ms;
     return false;
 #endif
 }

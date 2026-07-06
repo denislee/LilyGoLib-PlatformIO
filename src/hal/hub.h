@@ -44,8 +44,22 @@ void hub_set_url(const char *url);
 // timeout, no HTTP request. Returns false when the hub is disabled, WiFi
 // isn't up, the URL can't be parsed, or the connection fails. Callers (e.g.
 // the status-bar timer) are responsible for throttling — this function does
-// not cache.
+// not cache. BLOCKS for up to `timeout_ms`; do not call on the LVGL thread —
+// prefer hub_last_reachable() there.
 bool hub_is_reachable(uint32_t timeout_ms = 1500);
+
+// Non-blocking read of the most recent reachability verdict. The status-bar
+// timer probes the hub every ~10 s on a background task and publishes the
+// result via hub_note_reachable(); UI-thread hot paths (telegram poll/send,
+// etc.) read this cached value instead of doing their own blocking connect().
+// Returns false when the hub is disabled, no probe has completed yet, or the
+// last verdict is older than `max_age_ms` (a stale verdict is treated as down,
+// so callers safely fall back to the direct path).
+bool hub_last_reachable(uint32_t max_age_ms = 30000);
+
+// Publish a fresh reachability verdict into the cache. Called by whoever runs
+// the periodic background probe (today, the status-bar timer). Thread-safe.
+void hub_note_reachable(bool reachable);
 
 // POST raw note bytes to the hub at /api/notes/upload. The hub stores them
 // under its notes dir keyed by `name` (overwrites on second upload). Used to
