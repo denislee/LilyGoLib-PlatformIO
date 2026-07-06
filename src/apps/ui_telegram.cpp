@@ -1552,6 +1552,26 @@ public:
 
 // --- background unread-count poll -----------------------------------------
 
+// Cached copies of the two notification-channel toggles. fire_notifications
+// runs on every unread burst (from the bg-poll task); reading NVS twice each
+// time is pure overhead since the values only change from the settings setters
+// below. -1 = unloaded; seeded lazily, kept in sync by tg_cfg_set_notif_*.
+static int8_t s_notif_toast_cache = -1;
+static int8_t s_notif_vib_cache   = -1;
+
+static bool notif_toast_enabled()
+{
+    if (s_notif_toast_cache < 0)
+        s_notif_toast_cache = load_bool_pref("notif_toast", true) ? 1 : 0;
+    return s_notif_toast_cache != 0;
+}
+static bool notif_vib_enabled()
+{
+    if (s_notif_vib_cache < 0)
+        s_notif_vib_cache = load_bool_pref("notif_vib", true) ? 1 : 0;
+    return s_notif_vib_cache != 0;
+}
+
 // Fires enabled notifiers for `delta` new unread messages via the shared
 // notification bus. The prefs still gate each channel independently — a
 // user who wants a toast without a buzz (or vice versa) keeps that control.
@@ -1559,8 +1579,8 @@ public:
 static void fire_notifications(int delta)
 {
     if (delta <= 0) return;
-    bool toast = load_bool_pref("notif_toast", true);
-    bool vib   = load_bool_pref("notif_vib",   true);
+    bool toast = notif_toast_enabled();
+    bool vib   = notif_vib_enabled();
 
     if (toast) {
         core::notify::Notification n;
@@ -1725,9 +1745,9 @@ bool tg_cfg_token_is_encrypted()
 // the user is notified out of the box — the Settings subpage can turn them
 // off individually.
 bool tg_cfg_get_notif_vibrate() { return load_bool_pref("notif_vib",   true); }
-void tg_cfg_set_notif_vibrate(bool on) { save_bool_pref("notif_vib",   on); }
+void tg_cfg_set_notif_vibrate(bool on) { save_bool_pref("notif_vib",   on); s_notif_vib_cache   = on ? 1 : 0; }
 bool tg_cfg_get_notif_banner()  { return load_bool_pref("notif_toast", true); }
-void tg_cfg_set_notif_banner(bool on)  { save_bool_pref("notif_toast", on); }
+void tg_cfg_set_notif_banner(bool on)  { save_bool_pref("notif_toast", on); s_notif_toast_cache = on ? 1 : 0; }
 
 bool tg_cfg_is_favorite(long long id)
 {
