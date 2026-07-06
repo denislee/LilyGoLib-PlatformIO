@@ -65,11 +65,6 @@ void hw_update_battery_history()
 #endif
 }
 
-void hw_get_battery_history(std::vector<int16_t> &history)
-{
-    history = battery_history;
-}
-
 void battery_history_timer_cb(lv_timer_t *timer)
 {
     hw_update_battery_history();
@@ -164,19 +159,6 @@ void hw_set_charger(bool enable)
         instance.disableCharge();
     }
 #endif
-#endif
-}
-
-uint16_t hw_get_charger_current()
-{
-#ifdef ARDUINO
-#if defined(USING_PPM_MANAGE)
-    return  instance.ppm.getChargerConstantCurr();
-#elif defined(USING_PMU_MANAGE)
-    return  instance.getChargeCurrent();
-#endif
-#else
-    return 0;
 #endif
 }
 
@@ -371,22 +353,7 @@ void hw_get_monitor_params(monitor_params_t &params)
 
 // --- Constants ---------------------------------------------------------
 
-uint8_t hw_get_min_charge_current()
-{
-    return dev_conts_var.min_charge_current;
-}
-
-uint16_t hw_get_max_charge_current()
-{
-    return dev_conts_var.max_charge_current;
-}
-
 uint8_t hw_get_charge_level_nums()
 {
     return dev_conts_var.charge_level_nums;
-}
-
-uint8_t hw_get_charge_steps()
-{
-    return dev_conts_var.charge_steps;
 }
