@@ -21,10 +21,8 @@ public:
     void init();
     void loop();
 
-    lv_obj_t* getMainScreen() { return _mainScreen; }
     lv_obj_t* getAppPanel() { return _appPanel; }
-    lv_obj_t* getMenuPanel() { return _menuPanel; }
-    
+
     void showMenu();
     void hideMenu();
     bool isInMenu() const;

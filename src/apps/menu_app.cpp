@@ -985,11 +985,6 @@ const char *home_apps_label(int idx) {
     return kItems[idx].label;
 }
 
-const char *home_apps_symbol(int idx) {
-    if (idx < 0 || idx >= kItemCount) return "";
-    return kItems[idx].symbol;
-}
-
 bool home_apps_is_visible(int idx) {
     if (idx < 0 || idx >= kItemCount) return false;
     if (!s_vis_loaded) load_vis_cache();

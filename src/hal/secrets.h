@@ -29,9 +29,6 @@ std::string secret_load(const char *ns, const char *key);
 bool secret_store(const char *ns, const char *key, const char *plaintext,
                   std::string *err = nullptr);
 
-/* Remove just this slot. Does not touch siblings in the same namespace. */
-void secret_erase(const char *ns, const char *key);
-
 /* Drop a plaintext predecessor key that pre-dates encryption (e.g. the
  * bare "token" slot that lived next to "token_enc" during migration).
  * Idempotent — safe to call on every boot. */

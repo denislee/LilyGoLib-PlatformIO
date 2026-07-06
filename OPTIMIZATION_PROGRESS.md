@@ -17,7 +17,7 @@ where the stale report would have caused a regression.
 | § | Item | Status |
 |---|---|---|
 | 1.1 | Whole dead files (`ui_power.cpp`, `test_sleep.cpp`, `keyboard_audio.h`) | ✅ done |
-| 1.2 | ~60 never-called `hw_*` functions | ◐ partial — storage/display/power/wireless-BLE/4×system/sensors-peripherals done; **audio, radio, UI, core/apps remain** |
+| 1.2 | ~60 never-called `hw_*` functions | ◐ partial — storage/display/power/wireless-BLE/4×system/sensors-peripherals/core-apps done; **audio, radio, UI remain** |
 | 1.3 | Stale declarations (no definition) | ✅ done (5 removed) |
 | 1.4 | Dead `#ifdef` branches | ◐ partial — `USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER` gone; **rest remain** (incl. `USING_LED_INDICATOR` bug candidate) |
 | 1.5 | Dead types/fields/globals | ☐ not started |
@@ -136,8 +136,10 @@ branch still referencing a renamed parameter). Do not skip it.
   `USING_BME280` block), and the entire IR block (`hw_set_remote_code`,
   `hw_get_remote_code`, `hw_ir_function_select`, `irsend`/`irrecv` + `USING_IR_*`).
   `hw_bme_enable` was also dead (no header decl, no caller) — removed with the block.
-- **core/apps**: `core::notify::dismiss`, `hal::secret_erase`, `apps::home_apps_symbol`,
-  `core::AppManager::getActiveApp`/`getApps`, `core::System::getMainScreen`/`getMenuPanel`.
+- ~~**core/apps**~~ ✅ done — removed `core::notify::dismiss` (+ its now-dead
+  `s_dismissed` state and `pump()` handling), `hal::secret_erase`,
+  `apps::home_apps_symbol`, `core::AppManager::getActiveApp`/`getApps`,
+  `core::System::getMainScreen`/`getMenuPanel`.
 - **UI helpers** (`ui_tools.cpp`, `ui_text_editor.cpp`): `ui_create_option`,
   `create_switch`, `create_label`, `create_radius_button`, `create_back_button`
   (note: `ui_show_back_button` does NOT use `create_back_button`),

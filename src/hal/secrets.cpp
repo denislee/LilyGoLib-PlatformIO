@@ -95,19 +95,6 @@ bool secret_store(const char *ns, const char *key, const char *plaintext,
 #endif
 }
 
-void secret_erase(const char *ns, const char *key)
-{
-#ifdef ARDUINO
-    if (!ns || !key) return;
-    Preferences p;
-    if (!p.begin(ns, false)) return;
-    p.remove(key);
-    p.end();
-#else
-    (void)ns; (void)key;
-#endif
-}
-
 void secret_purge_legacy(const char *ns, const char *legacy_key)
 {
 #ifdef ARDUINO

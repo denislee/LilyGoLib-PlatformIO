@@ -20,10 +20,9 @@ namespace notify {
 
 namespace {
 
-std::mutex              s_mu;              // guards s_queue + s_next_id + s_dismissed
+std::mutex              s_mu;              // guards s_queue + s_next_id
 std::deque<Notification> s_queue;
 uint32_t                s_next_id = 1;
-std::vector<uint32_t>   s_dismissed;       // ids cancelled before pump ran
 
 std::vector<Subscriber> s_subs;            // LVGL-thread only
 
@@ -157,18 +156,6 @@ uint32_t post(Notification n)
     return id;
 }
 
-void dismiss(uint32_t id)
-{
-    if (id == 0) return;
-    std::lock_guard<std::mutex> g(s_mu);
-    // If still queued, drop it pre-render.
-    for (auto it = s_queue.begin(); it != s_queue.end(); ++it) {
-        if (it->id == id) { s_queue.erase(it); return; }
-    }
-    // Else, flag so pump() can tear down the active banner on the LVGL thread.
-    s_dismissed.push_back(id);
-}
-
 void subscribe(Subscriber s)
 {
     s_subs.push_back(std::move(s));
@@ -185,18 +172,13 @@ void pump()
     // racing in right after we return here is simply picked up next tick.
     {
         std::lock_guard<std::mutex> g(s_mu);
-        if (s_queue.empty() && s_dismissed.empty()) return;
+        if (s_queue.empty()) return;
     }
 
     std::deque<Notification> batch;
-    std::vector<uint32_t>    to_dismiss;
     {
         std::lock_guard<std::mutex> g(s_mu);
         batch.swap(s_queue);
-        to_dismiss.swap(s_dismissed);
-    }
-    for (uint32_t id : to_dismiss) {
-        remove_active(id, /*delete_timer=*/true);
     }
     for (auto &n : batch) {
         for (auto &sub : s_subs) sub(n);

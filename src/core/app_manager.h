@@ -43,19 +43,9 @@ public:
     void queueSwitchApp(const std::string& name, lv_obj_t* parent);
 
     /**
-     * @brief Get the currently active app.
-     */
-    std::shared_ptr<App> getActiveApp() const { return _activeApp; }
-
-    /**
      * @brief Periodically call to update the active app.
      */
     void update();
-
-    /**
-     * @brief Get a list of all registered apps.
-     */
-    const std::vector<std::shared_ptr<App>>& getApps() const { return _apps; }
 
 private:
     AppManager() = default;

@@ -44,7 +44,8 @@ struct Notification {
     // Controls banner color. Info = accent teal; Success/Warning/Error use
     // the matching palette.
     Severity severity = Severity::Info;
-    // Auto-dismiss timer in ms. 0 means sticky — caller must `dismiss(id)`.
+    // Auto-dismiss timer in ms. 0 means sticky — stays until evicted by newer
+    // banners (the renderer caps the visible stack).
     uint32_t duration_ms = 3000;
     // Free-form origin tag, e.g. "telegram", "weather". Subscribers may
     // filter on this.
@@ -53,15 +54,12 @@ struct Notification {
     // banner appears. Centralizes the "ding + toast" pattern so posters
     // don't each reach for the haptic themselves.
     bool haptic = false;
-    // Assigned by `post()`. Use to `dismiss()` a sticky banner early.
+    // Assigned by `post()` (also returned as its result); the banner's identity.
     uint32_t id = 0;
 };
 
 // Enqueue a notification. Returns the assigned id (>0). Thread-safe.
 uint32_t post(Notification n);
-
-// Dismiss an active banner early (no-op if already gone).
-void dismiss(uint32_t id);
 
 // Subscribers are invoked on the LVGL thread from `pump()`. Multiple may
 // coexist (e.g. default renderer + a status-bar badge counter).
