@@ -952,6 +952,30 @@ void make_vis_key(const char *appName, char out[16]) {
     snprintf(out, 16, "v_%s", appName ? appName : "");
 }
 
+// One-shot RAM cache of the per-tile visibility flags. home_apps_is_visible()
+// is called ~2x per tile on every menu rebuild; without this each call ran its
+// own NVS begin/getBool/end (up to ~28 opens per rebuild). Filled by a single
+// NVS pass on first use and kept in sync by home_apps_set_visible().
+int8_t s_vis_cache[kItemCount];
+bool   s_vis_loaded = false;
+
+void load_vis_cache() {
+#ifdef ARDUINO
+    Preferences p;
+    bool ok = p.begin(kHomeAppsNs, true);
+    for (int i = 0; i < kItemCount; i++) {
+        if (!ok) { s_vis_cache[i] = 1; continue; }
+        char key[16];
+        make_vis_key(kItems[i].appName, key);
+        s_vis_cache[i] = p.getBool(key, true) ? 1 : 0;
+    }
+    if (ok) p.end();
+#else
+    for (int i = 0; i < kItemCount; i++) s_vis_cache[i] = 1;
+#endif
+    s_vis_loaded = true;
+}
+
 } // anonymous namespace
 
 int home_apps_count() { return kItemCount; }
@@ -968,21 +992,14 @@ const char *home_apps_symbol(int idx) {
 
 bool home_apps_is_visible(int idx) {
     if (idx < 0 || idx >= kItemCount) return false;
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(kHomeAppsNs, true)) return true;
-    char key[16];
-    make_vis_key(kItems[idx].appName, key);
-    bool v = p.getBool(key, true);
-    p.end();
-    return v;
-#else
-    return true;
-#endif
+    if (!s_vis_loaded) load_vis_cache();
+    return s_vis_cache[idx] != 0;
 }
 
 void home_apps_set_visible(int idx, bool on) {
     if (idx < 0 || idx >= kItemCount) return;
+    if (!s_vis_loaded) load_vis_cache();
+    s_vis_cache[idx] = on ? 1 : 0;
 #ifdef ARDUINO
     Preferences p;
     if (!p.begin(kHomeAppsNs, false)) return;
