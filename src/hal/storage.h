@@ -7,22 +7,16 @@
 #include "types.h"
 
 void hw_mount_sd();
-float hw_get_sd_size();
 void hw_get_storage_info(uint64_t &total, uint64_t &used, uint64_t &free);
 void hw_get_local_storage_info(uint64_t &total, uint64_t &used, uint64_t &free);
 
-bool hw_save_file(const char *path, const char *content, std::string *error = nullptr);
-bool hw_save_internal_file(const char *path, const char *content, std::string *error = nullptr);
 bool hw_delete_file(const char *path);
-bool hw_delete_internal_file(const char *path);
 
 // Delete a file or directory (recursive for directories) on the chosen
 // filesystem. Returns true on success.
 bool hw_delete_path(const char *path, bool use_sd);
 bool hw_read_file(const char *path, std::string &content);
 size_t hw_get_file_size(const char *path);
-bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::string &content);
-bool hw_read_internal_file(const char *path, std::string &content);
 
 // Raw byte read from internal FFat, bypassing the notes-crypto decode path.
 // Callers that want to ship the ciphertext as-is (e.g. the GitHub notes
@@ -45,7 +39,6 @@ bool hw_read_sd_bytes_raw(const char *path, std::vector<uint8_t> &buf);
 bool hw_read_sd_stream(const char *path, size_t chunk_bytes,
                        bool (*sink)(void *user, const uint8_t *data, size_t len),
                        void *user);
-void hw_get_txt_files(std::vector<std::string> &list);
 void hw_get_internal_txt_files(std::vector<std::string> &list);
 void hw_get_sd_txt_files(std::vector<std::string> &list);
 
@@ -67,16 +60,8 @@ void hw_list_sd_entries(std::vector<HwDirEntry> &list, const char *filter_ext,
 // root. Intended for the status-bar indicator — does not recurse.
 uint32_t hw_count_internal_files();
 
-// Storage preference: when true, user-facing apps (editor, tasks) route
-// their reads/writes to the SD card. When false (default), they use internal
-// FFat. The SD-preference silently falls back to internal if the card is not
-// mounted.
-bool hw_get_storage_prefer_sd();
-void hw_set_storage_prefer_sd(bool prefer_sd);
-
-// USB MSC preference: when true, the SD card is exposed over USB MSC. 
+// USB MSC preference: when true, the SD card is exposed over USB MSC.
 // When false (default), the internal memory (FFat) is exposed.
-bool hw_get_msc_prefer_sd();
 void hw_set_msc_prefer_sd(bool prefer_sd);
 
 bool hw_is_usb_msc_reading();
@@ -96,7 +81,6 @@ void hw_set_filesystem_dirty(bool dirty);
 bool hw_save_preferred_file(const char *path, const char *content, std::string *error = nullptr,
                             bool allow_prune = true);
 bool hw_read_preferred_file(const char *path, std::string &content);
-void hw_get_preferred_txt_files(std::vector<std::string> &list);
 
 // Partial read: stops after `max_bytes` so callers can build previews cheaply.
 // `truncated` (if non-null) is set to true when the file was longer than max_bytes.

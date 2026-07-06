@@ -99,22 +99,6 @@ static bool decode_after_read(std::string &content)
     return true;
 }
 
-float hw_get_sd_size()
-{
-    float size = 0.0;
-#if defined(ARDUINO)
-
-#if defined(HAS_SD_CARD_SOCKET)
-    size = SD.cardSize() / 1024 / 1024 / 1024.0;
-
-#elif defined(USING_FATFS)
-    size = FFat.totalBytes() / 1024 / 1024;
-#endif
-
-#endif
-    return size;
-}
-
 void hw_get_storage_info(uint64_t &total, uint64_t &used, uint64_t &free)
 {
     total = 0;
@@ -243,98 +227,6 @@ void hw_set_filesystem_dirty(bool dirty)
 #endif
 }
 
-bool hw_save_file(const char *path, const char *content, std::string *error)
-{
-    hw_set_filesystem_dirty(true);
-#ifdef ARDUINO
-    std::vector<uint8_t> payload;
-    if (!encode_for_write(path, content, payload, error)) return false;
-
-    char str[256];
-    normalize_path(path, str, sizeof(str));
-    File f;
-    core::MaybeSpiLock lock;
-    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
-    const char *target = "Internal";
-
-    // If it already exists on Internal, save it there to avoid confusion
-    bool exists_internal = FFat.exists(str);
-
-    log_d("Saving to %s (SD: %s, Internal Exists: %s)",
-          str, is_sd ? "Yes" : "No", exists_internal ? "Yes" : "No");
-
-    if (exists_internal) {
-        f = FFat.open(str, "w");
-    } else if (is_sd) {
-        lock.acquire();
-        f = SD.open(str, "w"); // Use "w" for overwrite
-        target = "SD";
-    } else {
-        f = FFat.open(str, "w"); // Use "w" for overwrite
-    }
-
-    if (!f) {
-        log_e("Failed to open file for writing: %s", str);
-        if (error) {
-            *error = std::string("Cannot open ") + target + " file for writing.";
-        }
-        return false;
-    }
-
-    size_t written = payload.empty() ? 0 : f.write(payload.data(), payload.size());
-    f.close();
-
-    log_d("Saved %u bytes to %s (%s)", (unsigned int)written, str, lock.held() ? "SD" : "Internal");
-    bool ok = (written == payload.size());
-    if (!ok && error) {
-        *error = std::string("Write to ") + target + " failed (storage full?).";
-    }
-    return ok;
-#else
-    (void)error;
-    printf("Save to file: %s, content: %s\n", path, content);
-    return true;
-#endif
-}
-
-bool hw_save_internal_file(const char *path, const char *content, std::string *error)
-{
-    hw_set_filesystem_dirty(true);
-#ifdef ARDUINO
-    std::vector<uint8_t> payload;
-    if (!encode_for_write(path, content, payload, error)) return false;
-
-    char str[256];
-    normalize_path(path, str, sizeof(str));
-
-    log_d("Saving to internal %s", str);
-
-    File f = FFat.open(str, "w");
-
-    if (!f) {
-        log_e("Failed to open internal file for writing: %s", str);
-        if (error) {
-            *error = "Cannot open Internal file for writing.";
-        }
-        return false;
-    }
-
-    size_t written = payload.empty() ? 0 : f.write(payload.data(), payload.size());
-    f.close();
-
-    log_d("Saved %u bytes to internal %s", (unsigned int)written, str);
-    bool ok = (written == payload.size());
-    if (!ok && error) {
-        *error = "Write to Internal failed (storage full?).";
-    }
-    return ok;
-#else
-    (void)error;
-    printf("Save to internal file: %s, content: %s\n", path, content);
-    return true;
-#endif
-}
-
 bool hw_delete_file(const char *path)
 {
     hw_set_filesystem_dirty(true);
@@ -352,19 +244,6 @@ bool hw_delete_file(const char *path)
     return res_sd || res_int;
 #else
     printf("Delete file: %s\n", path);
-    return true;
-#endif
-}
-
-bool hw_delete_internal_file(const char *path)
-{
-    hw_set_filesystem_dirty(true);
-#ifdef ARDUINO
-    char str[256];
-    normalize_path(path, str, sizeof(str));
-    return FFat.remove(str);
-#else
-    printf("Delete internal file: %s\n", path);
     return true;
 #endif
 }
@@ -499,77 +378,6 @@ size_t hw_get_file_size(const char *path)
 #endif
 }
 
-bool hw_read_file_chunk(const char *path, uint32_t offset, uint32_t size, std::string &content)
-{
-#ifdef ARDUINO
-    char str[256];
-    normalize_path(path, str, sizeof(str));
-    File f;
-    core::MaybeSpiLock lock;
-    bool is_sd = (HW_SD_ONLINE & hw_get_device_online());
-
-    if (is_sd) {
-        lock.acquire();
-        f = SD.open(str, FILE_READ);
-        if (!f) lock.release();
-    }
-
-    if (!f) {
-        f = FFat.open(str, FILE_READ);
-    }
-
-    if (!f) {
-        log_e("Failed to open file for reading chunk: %s", str);
-        return false;
-    }
-
-    if (offset > f.size()) {
-        f.close();
-        return false;
-    }
-
-    f.seek(offset);
-    size_t available_size = f.size() - offset;
-    size_t read_size = (size < available_size) ? size : available_size;
-
-    content.resize(read_size);
-    if (read_size > 0) {
-        f.read((uint8_t *)&content[0], read_size);
-    }
-    f.close();
-
-
-    // Attempt to slice content neatly at a space or newline so we don't cut words in half
-    // Only if we haven't reached the end of the file.
-    if (read_size == size && read_size > 0) {
-        int cut_pos = read_size - 1;
-        while (cut_pos > 0 && content[cut_pos] != ' ' && content[cut_pos] != '\n' && content[cut_pos] != '\r') {
-            cut_pos--;
-        }
-        if (cut_pos > (int)(size / 2)) {
-            // valid cut point
-            content.resize(cut_pos);
-        } else {
-            // If we couldn't find a space, at least ensure we don't cut a UTF-8 character
-            cut_pos = read_size - 1;
-            while (cut_pos > 0 && (content[cut_pos] & 0xC0) == 0x80) {
-                cut_pos--;
-            }
-            // cut_pos now points to the first byte of a multi-byte char, or a single-byte char
-            // To be safe, just cut before this multi-byte char if it might be incomplete
-            if (cut_pos > 0 && (content[cut_pos] & 0x80) != 0) {
-                content.resize(cut_pos);
-            }
-        }
-    }
-
-    return true;
-#else
-    content = "Dummy chunk content";
-    return true;
-#endif
-}
-
 bool hw_read_internal_bytes_raw(const char *path, std::vector<uint8_t> &buf)
 {
     buf.clear();
@@ -650,39 +458,6 @@ bool hw_read_sd_stream(const char *path, size_t chunk_bytes,
 #endif
 }
 
-bool hw_read_internal_file(const char *path, std::string &content)
-{
-#ifdef ARDUINO
-    char str[256];
-    normalize_path(path, str, sizeof(str));
-
-    log_d("Reading internal %s", str);
-
-    File f = FFat.open(str, FILE_READ);
-
-    if (!f) {
-        log_e("Failed to open internal file for reading: %s", str);
-        return false;
-    }
-    size_t size = f.size();
-    content.resize(size);
-    if (size > 0) {
-        f.read((uint8_t *)&content[0], size);
-    }
-    f.close();
-    log_d("Read %u bytes from internal %s", (unsigned int)size, str);
-    if (!decode_after_read(content)) {
-        content.clear();
-        return false;
-    }
-    return true;
-#else
-    printf("Read from internal file: %s\n", path);
-    content = "Dummy internal content for simulation";
-    return true;
-#endif
-}
-
 #ifdef ARDUINO
 struct FileInfo {
     std::string name;
@@ -718,35 +493,6 @@ static void list_files(std::vector<FileInfo> &list, fs::FS &fs, const char *dirn
     root.close();
 }
 #endif
-
-void hw_get_txt_files(std::vector<std::string> &list)
-{
-    list.clear();
-#ifdef ARDUINO
-    std::vector<FileInfo> file_infos;
-    if (HW_SD_ONLINE & hw_get_device_online()) {
-        core::ScopedSpiLock lock;
-        list_files(file_infos, SD, NOTES_DIR, ".txt");
-    }
-    list_files(file_infos, FFat, NOTES_DIR, ".txt");
-
-    std::sort(file_infos.begin(), file_infos.end(), [](const FileInfo& a, const FileInfo& b) {
-        if (a.time != b.time) {
-            return a.time > b.time;
-        }
-        // If timestamps are identical or both 0, fall back to sorting by filename
-        // descending (since our filenames start with YYYYMMDD_HHMMSS)
-        return a.name > b.name;
-    });
-
-    for (const auto& fi : file_infos) {
-        list.push_back(NOTES_PREFIX + fi.name);
-    }
-#else
-    list.push_back("notes/test1.txt");
-    list.push_back("notes/test2.txt");
-#endif
-}
 
 void hw_get_internal_txt_files(std::vector<std::string> &list)
 {
@@ -915,28 +661,6 @@ uint32_t hw_count_internal_files()
 #else
     return 4;
 #endif
-}
-
-bool hw_get_storage_prefer_sd()
-{
-    return user_setting.storage_prefer_sd != 0;
-}
-
-void hw_set_storage_prefer_sd(bool prefer_sd)
-{
-    user_setting.storage_prefer_sd = prefer_sd ? 1 : 0;
-#ifdef ARDUINO
-    save_user_setting_nvs();
-    if (prefer_sd) {
-        // Mount SD on demand so the new preference takes effect immediately.
-        hw_mount_sd();
-    }
-#endif
-}
-
-bool hw_get_msc_prefer_sd()
-{
-    return user_setting.msc_prefer_sd != 0;
 }
 
 void hw_set_msc_prefer_sd(bool prefer_sd)
@@ -1167,48 +891,6 @@ bool hw_save_preferred_file(const char *path, const char *content, std::string *
 bool hw_read_preferred_file(const char *path, std::string &content)
 {
     return hw_read_file(path, content);
-}
-
-void hw_get_preferred_txt_files(std::vector<std::string> &list)
-{
-    list.clear();
-#ifdef ARDUINO
-    std::vector<FileInfo> infos;
-
-    // Scan Internal
-    list_files(infos, FFat, NOTES_DIR, ".txt");
-
-    // Scan SD if available
-    if (HW_SD_ONLINE & hw_get_device_online()) {
-        std::vector<FileInfo> sd_infos;
-        {
-            core::ScopedSpiLock lock;
-            list_files(sd_infos, SD, NOTES_DIR, ".txt");
-        }
-
-        // Merge SD into infos, avoiding duplicates (Internal wins). A set of
-        // the internal names makes each SD lookup O(log n) instead of the old
-        // nested linear scan (~40k compares at 200+200 notes).
-        std::set<std::string> internal_names;
-        for (const auto &ii : infos) internal_names.insert(ii.name);
-        for (const auto &sdi : sd_infos) {
-            if (!internal_names.count(sdi.name)) infos.push_back(sdi);
-        }
-    }
-
-    // Sort descending by time/name
-    std::sort(infos.begin(), infos.end(), [](const FileInfo &a, const FileInfo &b) {
-        if (a.time != b.time) return a.time > b.time;
-        return a.name > b.name;
-    });
-
-    for (const auto &fi : infos) {
-        list.push_back(NOTES_PREFIX + fi.name);
-    }
-#else
-    list.push_back("notes/preferred1.txt");
-    list.push_back("notes/preferred2.txt");
-#endif
 }
 
 bool hw_read_preferred_file_snippet(const char *path, std::string &content, size_t max_bytes, bool *truncated)
