@@ -202,6 +202,15 @@ static int32_t   s_input_expanded_h = 0;
 static std::vector<Chat> s_chats;
 static std::vector<Message> s_msgs;
 
+// §2.6: cheap signatures of the last-rendered chat list / message list so a
+// poll whose data is identical skips the full lv_obj_clean + rebuild (and, for
+// the chat list, avoids reseating the &s_chats[i] button user-data). Reset to
+// invalid whenever a page is (re)built so the first render always happens.
+static uint32_t s_chats_sig = 0;
+static bool     s_chats_sig_valid = false;
+static uint32_t s_msgs_sig = 0;
+static bool     s_msgs_sig_valid = false;
+
 // Favorite chat IDs. The chat list in the Telegram app filters to this set;
 // the full list is only visible from Settings → Telegram → Favorites.
 static std::set<long long> s_favorites;
@@ -927,6 +936,38 @@ static void kick_send(const char *text)
     set_status("Sending...", UI_COLOR_ACCENT);
 }
 
+// Cheap FNV-1a over the favorite-filtered chats (id, unread, title) so an
+// identical poll can skip the rebuild. Favorites gate what render_chats shows,
+// so they're part of the signature.
+static uint32_t chats_signature(const std::vector<Chat> &v)
+{
+    uint32_t h = 2166136261u;
+    for (const auto &c : v) {
+        if (s_favorites.find(c.id) == s_favorites.end()) continue;
+        for (int s = 0; s < 64; s += 8) h = (h ^ (uint32_t)((c.id >> s) & 0xff)) * 16777619u;
+        for (int s = 0; s < 32; s += 8) h = (h ^ (((uint32_t)c.unread >> s) & 0xff)) * 16777619u;
+        for (unsigned char ch : c.title) h = (h ^ ch) * 16777619u;
+        h = (h ^ 0xffu) * 16777619u;   // record separator
+    }
+    return h;
+}
+
+// FNV-1a over the message list (id, out, from, text, media) so an unchanged
+// history isn't torn down and re-pinned to the bottom every poll.
+static uint32_t msgs_signature(const std::vector<Message> &v)
+{
+    uint32_t h = 2166136261u;
+    for (const auto &m : v) {
+        for (int s = 0; s < 32; s += 8) h = (h ^ (((uint32_t)m.id >> s) & 0xff)) * 16777619u;
+        h = (h ^ (uint32_t)(m.out ? 1 : 0)) * 16777619u;
+        for (unsigned char ch : m.from) h = (h ^ ch) * 16777619u;
+        for (unsigned char ch : m.text) h = (h ^ ch) * 16777619u;
+        for (unsigned char ch : m.media_type) h = (h ^ ch) * 16777619u;
+        h = (h ^ 0xffu) * 16777619u;   // record separator
+    }
+    return h;
+}
+
 // UI-thread result applier. Runs inside lv_timer_handler() (so it already holds
 // the instance mutex) and owns s_fg_result once it takes it.
 static void tg_drain_tick(lv_timer_t *t)
@@ -942,9 +983,17 @@ static void tg_drain_tick(lv_timer_t *t)
         case FG_FETCH_CHATS:
             if (s_view == V_LIST) {
                 if (res->ok) {
-                    s_chats = std::move(res->chats);
                     s_unread_total = res->unread_total;
-                    render_chats();
+                    // Only reseat s_chats + rebuild when the list actually
+                    // changed. Skipping the move also keeps the live buttons'
+                    // &s_chats[i] user-data valid.
+                    uint32_t sig = chats_signature(res->chats);
+                    if (!s_chats_sig_valid || sig != s_chats_sig) {
+                        s_chats = std::move(res->chats);
+                        s_chats_sig = sig;
+                        s_chats_sig_valid = true;
+                        render_chats();
+                    }
                 }
                 set_status(res->status.c_str(), res->status_color);
             }
@@ -952,11 +1001,17 @@ static void tg_drain_tick(lv_timer_t *t)
         case FG_FETCH_MSGS:
             if (s_view == V_CHAT && res->chat_id == s_current_chat_id) {
                 // Skip the re-render while the user is scrolling history (it
-                // would yank scroll to the bottom), but still record any
-                // mark-read the worker performed so we don't repeat the POST.
+                // would yank scroll to the bottom), and skip it when the
+                // history is byte-identical to what's already on screen. Still
+                // record any mark-read the worker performed either way.
                 if (res->ok && !s_msgs_scroll_mode) {
-                    s_msgs = std::move(res->msgs);
-                    render_msgs();
+                    uint32_t sig = msgs_signature(res->msgs);
+                    if (!s_msgs_sig_valid || sig != s_msgs_sig) {
+                        s_msgs = std::move(res->msgs);
+                        s_msgs_sig = sig;
+                        s_msgs_sig_valid = true;
+                        render_msgs();
+                    }
                 }
                 if (res->marked_to > s_last_marked_msg_id)
                     s_last_marked_msg_id = res->marked_to;
@@ -1191,6 +1246,9 @@ static void common_page_prep()
     s_status_label = nullptr;
     s_input_ta = nullptr;
     s_input_expanded_h = 0;
+    // Fresh (empty) holders → force the next render regardless of signature.
+    s_chats_sig_valid = false;
+    s_msgs_sig_valid = false;
 }
 
 static lv_obj_t *make_header(const char *title)
@@ -1771,8 +1829,13 @@ void tg_cfg_set_favorite(long long id, const char *title, bool on)
     }
     if (changed) save_favorites();
     // If the chat list view is on screen, re-render so the filter is
-    // immediately reflected when the user comes back from settings.
-    if (s_view == V_LIST) render_chats();
+    // immediately reflected when the user comes back from settings. Invalidate
+    // the render signature: the favorite set (which gates the signature) just
+    // changed, so the next poll must re-evaluate rather than skip.
+    if (s_view == V_LIST) {
+        s_chats_sig_valid = false;
+        render_chats();
+    }
 }
 
 bool tg_cfg_fetch_all_chats(std::vector<std::pair<long long, std::string>> &out,
