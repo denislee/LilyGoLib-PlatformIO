@@ -17,16 +17,22 @@
  * the glyph. The Inter font (idx 4) covers Latin-1 (á, é, ã, ç, …) — it's
  * the default for Telegram so Portuguese messages render out of the box.
  *
- * State reset on onStop (telegram_exit):
+ * State reset on onStop:
  *   widgets: s_root, s_list_holder, s_msgs_holder, s_status_label, s_input_ta
  *                                       — nulled (deleted with parent)
- *   timers:  s_timer (UI poll),         — lv_timer_del + null
- *            s_bg_timer (drain ticker)
- *   tasks:   s_bg_task (HTTPS fetcher)  — cooperatively stopped via flag,
- *                                          then joined before the timer null
- * If you add a new cached LVGL pointer or background task, list it above
- * AND extend telegram_exit() — the fetcher writes into shared queues that
- * the UI thread reads, so missing a join here is a use-after-free risk.
+ *   timers:  s_timer (poll scheduler)   — lv_timer_del + null
+ *            s_drain_timer (result drain)— lv_timer_del + null
+ *   tasks:   s_bg_task (HTTPS worker)    — left to self-delete; the epoch bump
+ *                                          makes any late result be discarded
+ *   note:    s_bg_timer is the global background notifier (60 s) created once
+ *            at boot by tg_begin_background_poll(); it is NOT torn down here.
+ *
+ * The foreground poll / send / mark-read run on a one-shot worker (§2.1):
+ * it only writes heap state under the instance mutex, never the LVGL tree, so
+ * it is safe to outlive the app instance — the drain timer applies the result
+ * back on the UI thread. Previously these ran full HTTPS round-trips inline on
+ * the LVGL thread, freezing the UI ~1-2 s per poll and per keystroke-send.
+ * If you add a cached LVGL pointer or a task, list it above AND extend onStop().
  */
 #include "../ui_define.h"
 #include "../hal/wireless.h"
@@ -63,6 +69,7 @@ namespace {
 #define TG_CHAT_POLL_MS   5000
 #define TG_CHAT_LIMIT     30
 #define TG_MSG_LIMIT      20
+#define TG_DRAIN_MS       120     // async-worker result poll (see §2.1 worker)
 
 // --- persisted config ------------------------------------------------------
 
@@ -217,7 +224,50 @@ static lv_timer_t *s_bg_timer = nullptr;
 static int s_last_notified_unread = -1;
 
 #ifdef ARDUINO
+// s_bg_task is the single HTTPS worker slot, shared between the background
+// unread notifier and the foreground poll/send worker so the two never run a
+// TLS session at the same time (each costs several KB of internal heap).
 static TaskHandle_t s_bg_task = nullptr;
+
+// --- foreground async worker state (§2.1) ---------------------------------
+enum FgOp { FG_FETCH_CHATS, FG_FETCH_MSGS, FG_SEND };
+
+// Handed to the worker (heap-owned by the task, freed there). base_url/auth are
+// captured at kick time so the worker never reads s_base_url / s_auth_header,
+// which onStop scrubs and which may be gone before the worker finishes.
+struct FgReq {
+    FgOp        op;
+    std::string base_url;
+    std::string auth;         // "Bearer <token>"
+    long long   chat_id;      // FG_FETCH_MSGS / FG_SEND
+    int         mark_from;    // FG_FETCH_MSGS: snapshot of s_last_marked_msg_id
+    std::string send_text;    // FG_SEND
+    uint32_t    epoch;        // discarded on the far side if it no longer matches
+};
+
+// Handed back to the UI thread (heap-owned, freed in the drain tick).
+struct FgResult {
+    FgOp        op;
+    bool        ok;
+    std::string status;       // status-pill text ("" clears it)
+    lv_color_t  status_color;
+    long long   chat_id;      // echo for the FG_FETCH_MSGS/SEND relevance check
+    std::vector<Chat>    chats;    // FG_FETCH_CHATS
+    int         unread_total;
+    std::vector<Message> msgs;     // FG_FETCH_MSGS
+    int         marked_to;    // FG_FETCH_MSGS: new mark-read high-water (0 = none)
+};
+
+static lv_timer_t   *s_drain_timer = nullptr;
+static volatile bool s_fg_done   = false;
+static FgResult     *s_fg_result = nullptr;   // heap-owned; the drain frees it
+// Bumped by onStop/onStart; a worker whose captured epoch no longer matches
+// discards its result instead of publishing into a torn-down / fresh view.
+static uint32_t      s_fg_epoch  = 0;
+// A send the user fired while the worker was busy with a poll fetch. Queued
+// here so a keystroke-send is never dropped; the drain launches it once free.
+static std::string   s_pending_send;
+static long long     s_pending_send_chat = 0;
 #endif
 
 // --- forward decls --------------------------------------------------------
@@ -509,24 +559,16 @@ static bool tg_http_request(const std::string &url, const char *method,
                            content_type, auth_header, out_body, out_code, err);
 }
 
+// Synchronous GET used only by the one-shot fetch_chat_title() lookup. The
+// polling/send path no longer goes through here — it runs on the async worker
+// (tg_fg_task) with url+auth captured up front, so it never touches these
+// UI-thread config globals off-thread.
 static bool tg_get(const char *path, std::string &out, std::string *err = nullptr)
 {
     if (!require_internet(err)) return false;
     std::string url = make_url(path);
     int code = 0;
     return tg_http_request(url, "GET", nullptr, 0, nullptr,
-                           s_auth_header.c_str(), out, &code, err);
-}
-
-static bool tg_post_json(const char *path, const std::string &body,
-                         std::string &out, std::string *err = nullptr)
-{
-    if (!require_internet(err)) return false;
-    std::string url = make_url(path);
-    int code = 0;
-    return tg_http_request(url, "POST",
-                           body.c_str(), body.size(),
-                           "application/json",
                            s_auth_header.c_str(), out, &code, err);
 }
 #endif
@@ -575,59 +617,6 @@ static void render_chats()
         lv_obj_set_style_pad_all(hint, 6, 0);
     }
 }
-
-#ifdef ARDUINO
-static bool fetch_chats()
-{
-    if (s_bg_task != nullptr) {
-        set_status("Syncing in background...", UI_COLOR_MUTED);
-        return false;
-    }
-    set_status("Loading...", UI_COLOR_ACCENT);
-    lv_refr_now(nullptr);
-
-    std::string body, err;
-    char path[64];
-    snprintf(path, sizeof(path), "/v1/chats?limit=%d", TG_CHAT_LIMIT);
-    if (!tg_get(path, body, &err)) {
-        set_status(err.c_str(), lv_palette_main(LV_PALETTE_RED));
-        return false;
-    }
-    cJSON *arr = cJSON_Parse(body.c_str());
-    if (!arr || !cJSON_IsArray(arr)) {
-        set_status("Parse error", lv_palette_main(LV_PALETTE_RED));
-        if (arr) cJSON_Delete(arr);
-        return false;
-    }
-    s_chats.clear();
-    int n = cJSON_GetArraySize(arr);
-    s_chats.reserve((size_t)n);
-    int unread_sum = 0;
-    for (int i = 0; i < n; i++) {
-        cJSON *it = cJSON_GetArrayItem(arr, i);
-        Chat c;
-        cJSON *jid  = cJSON_GetObjectItemCaseSensitive(it, "id");
-        cJSON *jti  = cJSON_GetObjectItemCaseSensitive(it, "title");
-        cJSON *junr = cJSON_GetObjectItemCaseSensitive(it, "unread");
-        c.id     = (jid  && cJSON_IsNumber(jid))  ? (long long)jid->valuedouble : 0;
-        c.title  = (jti  && cJSON_IsString(jti))  ? jti->valuestring : "(no title)";
-        c.unread = (junr && cJSON_IsNumber(junr)) ? (int)junr->valuedouble : 0;
-        if (c.unread > 0) unread_sum += c.unread;
-        s_chats.push_back(std::move(c));
-    }
-    cJSON_Delete(arr);
-    s_unread_total = unread_sum;
-    render_chats();
-    set_status("", UI_COLOR_MUTED);
-    return true;
-}
-#else
-static bool fetch_chats()
-{
-    set_status("Not supported on emulator.", UI_COLOR_MUTED);
-    return false;
-}
-#endif
 
 // --- chat view (messages + send) ------------------------------------------
 
@@ -704,54 +693,35 @@ static void render_msgs()
 }
 
 #ifdef ARDUINO
-// Tells the bridge the chat has been read up to `up_to_msg_id`. The bridge
-// handler requires the up_to field (see tg-bridge chats.go handleMarkRead)
-// and proxies to Telegram's messages.readHistory. Fire-and-forget: a
-// failure here only means the unread badge lingers on the bridge side, so
-// errors are logged via the status pill but don't abort the chat view.
-static void mark_chat_read(int up_to_msg_id)
-{
-    if (s_current_chat_id == 0 || up_to_msg_id <= 0) return;
-    if (up_to_msg_id <= s_last_marked_msg_id) return;
-    if (s_bg_task != nullptr) return; // skip if bg sync is running
+static void tg_drain_tick(lv_timer_t *t);   // fwd (defined after the kickers)
 
-    char path[48];
-    snprintf(path, sizeof(path), "/v1/chats/%lld/read", s_current_chat_id);
-    char body_buf[48];
-    snprintf(body_buf, sizeof(body_buf), "{\"up_to\":%d}", up_to_msg_id);
-    std::string resp, err;
-    if (tg_post_json(path, std::string(body_buf), resp, &err)) {
-        s_last_marked_msg_id = up_to_msg_id;
+// Parse a /v1/chats array (worker thread) into res->chats + unread_total.
+static void tg_parse_chats(cJSON *arr, FgResult *res)
+{
+    int n = cJSON_GetArraySize(arr);
+    res->chats.reserve((size_t)n);
+    int unread_sum = 0;
+    for (int i = 0; i < n; i++) {
+        cJSON *it = cJSON_GetArrayItem(arr, i);
+        Chat c;
+        cJSON *jid  = cJSON_GetObjectItemCaseSensitive(it, "id");
+        cJSON *jti  = cJSON_GetObjectItemCaseSensitive(it, "title");
+        cJSON *junr = cJSON_GetObjectItemCaseSensitive(it, "unread");
+        c.id     = (jid  && cJSON_IsNumber(jid))  ? (long long)jid->valuedouble : 0;
+        c.title  = (jti  && cJSON_IsString(jti))  ? jti->valuestring : "(no title)";
+        c.unread = (junr && cJSON_IsNumber(junr)) ? (int)junr->valuedouble : 0;
+        if (c.unread > 0) unread_sum += c.unread;
+        res->chats.push_back(std::move(c));
     }
-    // On failure we intentionally leave s_last_marked_msg_id alone so the
-    // next successful fetch retries.
+    res->unread_total = unread_sum;
 }
 
-static bool fetch_messages()
+// Parse a /v1/chats/{id}/messages array (worker thread) into res->msgs.
+// Returns the newest message id seen (for the mark-read decision).
+static int tg_parse_msgs(cJSON *arr, FgResult *res)
 {
-    if (s_current_chat_id == 0) return false;
-    if (s_bg_task != nullptr) {
-        set_status("Syncing in background...", UI_COLOR_MUTED);
-        return false;
-    }
-
-    std::string body, err;
-    char path[80];
-    snprintf(path, sizeof(path), "/v1/chats/%lld/messages?limit=%d",
-             s_current_chat_id, TG_MSG_LIMIT);
-    if (!tg_get(path, body, &err)) {
-        set_status(err.c_str(), lv_palette_main(LV_PALETTE_RED));
-        return false;
-    }
-    cJSON *arr = cJSON_Parse(body.c_str());
-    if (!arr || !cJSON_IsArray(arr)) {
-        set_status("Parse error", lv_palette_main(LV_PALETTE_RED));
-        if (arr) cJSON_Delete(arr);
-        return false;
-    }
-    s_msgs.clear();
     int n = cJSON_GetArraySize(arr);
-    s_msgs.reserve((size_t)n);
+    res->msgs.reserve((size_t)n);
     int newest_id = 0;
     for (int i = 0; i < n; i++) {
         cJSON *it = cJSON_GetArrayItem(arr, i);
@@ -776,40 +746,249 @@ static bool fetch_messages()
             if (jmh && cJSON_IsNumber(jmh)) m.media_h = (int)jmh->valuedouble;
         }
         if (m.id > newest_id) newest_id = m.id;
-        s_msgs.push_back(std::move(m));
+        res->msgs.push_back(std::move(m));
     }
-    cJSON_Delete(arr);
-    render_msgs();
-    set_status("", UI_COLOR_MUTED);
+    return newest_id;
+}
 
-    // Now that the messages are on screen, tell the bridge the user has
-    // seen everything up through the newest id. Skips inside mark_chat_read
-    // when nothing has advanced since the last call.
-    mark_chat_read(newest_id);
+// The HTTPS worker. Runs one request (chats / messages / send), parses into a
+// heap FgResult, and publishes it under the instance mutex for the drain tick.
+// Never touches the LVGL tree (parsing produces raw strings; ascii_safe/render
+// happen on the UI thread), so it is safe to outlive the app.
+static void tg_fg_task(void *arg)
+{
+    FgReq *req = (FgReq *)arg;
+    FgResult *res = new FgResult();
+    res->op           = req->op;
+    res->ok           = false;
+    res->chat_id      = req->chat_id;
+    res->unread_total = 0;
+    res->marked_to    = 0;
+    res->status_color = UI_COLOR_MUTED;
+
+    std::string base = req->base_url;
+    if (!base.empty() && base.back() == '/') base.pop_back();
+
+    if (req->op == FG_FETCH_CHATS) {
+        char path[64];
+        snprintf(path, sizeof(path), "/v1/chats?limit=%d", TG_CHAT_LIMIT);
+        std::string body, err; int code = 0;
+        if (!tg_http_request(base + path, "GET", nullptr, 0, nullptr,
+                             req->auth.c_str(), body, &code, &err)) {
+            res->status = err;
+            res->status_color = lv_palette_main(LV_PALETTE_RED);
+        } else {
+            cJSON *arr = cJSON_Parse(body.c_str());
+            if (!arr || !cJSON_IsArray(arr)) {
+                res->status = "Parse error";
+                res->status_color = lv_palette_main(LV_PALETTE_RED);
+            } else {
+                tg_parse_chats(arr, res);
+                res->ok = true;
+            }
+            if (arr) cJSON_Delete(arr);
+        }
+    } else if (req->op == FG_FETCH_MSGS) {
+        char path[80];
+        snprintf(path, sizeof(path), "/v1/chats/%lld/messages?limit=%d",
+                 req->chat_id, TG_MSG_LIMIT);
+        std::string body, err; int code = 0;
+        if (!tg_http_request(base + path, "GET", nullptr, 0, nullptr,
+                             req->auth.c_str(), body, &code, &err)) {
+            res->status = err;
+            res->status_color = lv_palette_main(LV_PALETTE_RED);
+        } else {
+            cJSON *arr = cJSON_Parse(body.c_str());
+            if (!arr || !cJSON_IsArray(arr)) {
+                res->status = "Parse error";
+                res->status_color = lv_palette_main(LV_PALETTE_RED);
+            } else {
+                int newest_id = tg_parse_msgs(arr, res);
+                res->ok = true;
+                // Fire-and-forget mark-read once the newest id advances past
+                // what the UI last acked (req->mark_from). Done here so the UI
+                // thread never blocks on the extra POST; the new high-water
+                // mark rides back in res->marked_to for the drain to record.
+                if (req->chat_id != 0 && newest_id > 0 &&
+                    newest_id > req->mark_from) {
+                    char rpath[48];
+                    snprintf(rpath, sizeof(rpath), "/v1/chats/%lld/read",
+                             req->chat_id);
+                    char rbody[48];
+                    snprintf(rbody, sizeof(rbody), "{\"up_to\":%d}", newest_id);
+                    std::string rresp, rerr; int rcode = 0;
+                    if (tg_http_request(base + rpath, "POST", rbody,
+                                        strlen(rbody), "application/json",
+                                        req->auth.c_str(), rresp, &rcode,
+                                        &rerr)) {
+                        res->marked_to = newest_id;
+                    }
+                }
+            }
+            if (arr) cJSON_Delete(arr);
+        }
+    } else { // FG_SEND
+        std::string bodyj = json_text_body(req->send_text.c_str());
+        char path[48];
+        snprintf(path, sizeof(path), "/v1/chats/%lld/messages", req->chat_id);
+        std::string resp, err; int code = 0;
+        if (!tg_http_request(base + path, "POST", bodyj.c_str(), bodyj.size(),
+                             "application/json", req->auth.c_str(), resp,
+                             &code, &err)) {
+            res->status = "send: " + err;
+            res->status_color = lv_palette_main(LV_PALETTE_RED);
+        } else {
+            res->ok = true;
+            res->status = "Sent";
+        }
+    }
+
+    // Publish under the instance mutex — the drain tick reads these under the
+    // same lock. Discard if the app moved on (epoch bumped by onStop/onStart)
+    // so a late worker can't flash a result into a torn-down / fresh view.
+    {
+        core::ScopedInstanceLock lock;
+        if (req->epoch == s_fg_epoch) {
+            if (s_fg_result) { delete s_fg_result; s_fg_result = nullptr; }
+            s_fg_result = res;
+            s_fg_done   = true;
+            res = nullptr;
+        }
+        s_bg_task = nullptr;
+    }
+    if (res) delete res;
+    scrub_string(req->auth);
+    delete req;
+    vTaskDelete(NULL);
+}
+
+static void ensure_drain_timer()
+{
+    if (!s_drain_timer)
+        s_drain_timer = lv_timer_create(tg_drain_tick, TG_DRAIN_MS, nullptr);
+}
+
+// Snapshot the config + chat cursor into a heap request for the worker.
+static FgReq *make_req(FgOp op)
+{
+    FgReq *r = new FgReq();
+    r->op        = op;
+    r->base_url  = s_base_url;
+    r->auth      = s_auth_header;   // "Bearer <token>"
+    r->chat_id   = s_current_chat_id;
+    r->mark_from = s_last_marked_msg_id;
+    r->epoch     = s_fg_epoch;
+    return r;
+}
+
+// Spawn the worker for `req` (which it takes ownership of). Returns false —
+// after freeing req — if the single worker slot is busy or the spawn fails.
+static bool kick_worker(FgReq *req)
+{
+    if (s_bg_task != nullptr) { scrub_string(req->auth); delete req; return false; }
+    // 8 KB stack: the mbedtls TLS handshake + cert chain dominates, same as the
+    // weather worker; parsing 30 chats / 20 messages is cheap next to it.
+    if (xTaskCreate(tg_fg_task, "tg_fg", 8192, req, 2, &s_bg_task) != pdPASS) {
+        s_bg_task = nullptr;
+        scrub_string(req->auth);
+        delete req;
+        return false;
+    }
+    ensure_drain_timer();
     return true;
 }
 
-static bool send_text(const char *text)
+static bool kick_fetch_chats()
 {
-    if (s_current_chat_id == 0 || !text || !*text) return false;
+    if (s_chats.empty()) set_status("Loading...", UI_COLOR_ACCENT);
+    return kick_worker(make_req(FG_FETCH_CHATS));
+}
+
+static bool kick_fetch_msgs()
+{
+    if (s_current_chat_id == 0) return false;
+    if (s_msgs.empty()) set_status("Loading...", UI_COLOR_ACCENT);
+    return kick_worker(make_req(FG_FETCH_MSGS));
+}
+
+static void kick_send(const char *text)
+{
+    if (s_current_chat_id == 0 || !text || !*text) return;
     if (s_bg_task != nullptr) {
-        set_status("Please wait, syncing...", UI_COLOR_ACCENT);
-        return false;
+        // Worker busy with a poll fetch — queue the send so the keystroke is
+        // never dropped; the drain launches it as soon as the slot frees.
+        s_pending_send = text;
+        s_pending_send_chat = s_current_chat_id;
+    } else {
+        FgReq *r = make_req(FG_SEND);
+        r->send_text = text;
+        kick_worker(r);
     }
-    std::string body = json_text_body(text);
-    char path[48];
-    snprintf(path, sizeof(path), "/v1/chats/%lld/messages", s_current_chat_id);
-    std::string resp, err;
-    if (!tg_post_json(path, body, resp, &err)) {
-        set_status(("send: " + err).c_str(), lv_palette_main(LV_PALETTE_RED));
-        return false;
+    set_status("Sending...", UI_COLOR_ACCENT);
+}
+
+// UI-thread result applier. Runs inside lv_timer_handler() (so it already holds
+// the instance mutex) and owns s_fg_result once it takes it.
+static void tg_drain_tick(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_fg_done) return;
+    s_fg_done = false;
+    FgResult *res = s_fg_result;
+    s_fg_result = nullptr;
+    if (!res) return;
+
+    switch (res->op) {
+        case FG_FETCH_CHATS:
+            if (s_view == V_LIST) {
+                if (res->ok) {
+                    s_chats = std::move(res->chats);
+                    s_unread_total = res->unread_total;
+                    render_chats();
+                }
+                set_status(res->status.c_str(), res->status_color);
+            }
+            break;
+        case FG_FETCH_MSGS:
+            if (s_view == V_CHAT && res->chat_id == s_current_chat_id) {
+                // Skip the re-render while the user is scrolling history (it
+                // would yank scroll to the bottom), but still record any
+                // mark-read the worker performed so we don't repeat the POST.
+                if (res->ok && !s_msgs_scroll_mode) {
+                    s_msgs = std::move(res->msgs);
+                    render_msgs();
+                }
+                if (res->marked_to > s_last_marked_msg_id)
+                    s_last_marked_msg_id = res->marked_to;
+                set_status(res->status.c_str(), res->status_color);
+            }
+            break;
+        case FG_SEND:
+            if (s_view == V_CHAT && res->chat_id == s_current_chat_id) {
+                set_status(res->status.c_str(), res->status_color);
+                // Pull the just-sent line into view without waiting a poll.
+                if (res->ok) kick_fetch_msgs();
+            }
+            break;
     }
-    set_status("Sent", UI_COLOR_MUTED);
-    return true;
+    delete res;
+
+    // Flush a send that was queued while the worker was busy (same chat only).
+    if (!s_pending_send.empty()) {
+        if (s_bg_task == nullptr && s_view == V_CHAT &&
+            s_pending_send_chat == s_current_chat_id) {
+            FgReq *r = make_req(FG_SEND);
+            r->send_text.swap(s_pending_send);   // moves out & clears the slot
+            s_pending_send_chat = 0;
+            kick_worker(r);
+        } else if (s_view != V_CHAT || s_pending_send_chat != s_current_chat_id) {
+            s_pending_send.clear();               // chat changed → drop the draft
+            s_pending_send_chat = 0;
+        }
+    }
 }
 #else
-static bool fetch_messages() { return false; }
-static bool send_text(const char *) { return false; }
+static void kick_send(const char *) {}
 #endif
 
 // --- polling --------------------------------------------------------------
@@ -823,29 +1002,31 @@ static void poll_tick(lv_timer_t *t)
         set_status("No internet", UI_COLOR_MUTED);
         return;
     }
-    // Pause fetches while the composer (or any textarea) is focused — HTTPS
-    // calls here block the LVGL thread for ~1s and would stall keystrokes.
+    // Don't churn the widget tree while the composer (or any textarea) is
+    // focused: a re-render re-pins scroll and fights the caret. The fetch
+    // itself no longer blocks the LVGL thread (it runs on the worker), but the
+    // re-render on drain still would, so keep the pause.
     if (core::isTextInputFocused()) return;
 
-    if (s_bg_task != nullptr) {
-        lv_timer_set_period(t, 1000);
-        return;
-    }
+    if (s_bg_task != nullptr) return;   // a fetch/send is already in flight
 
+    bool kicked = false;
     switch (s_view) {
-        case V_LIST: 
-            fetch_chats();
-            lv_timer_set_period(t, TG_LIST_POLL_MS);
+        case V_LIST:
+            kicked = kick_fetch_chats();
             break;
         case V_CHAT:
             // Skip while the user is scrolling the history — a refetch
             // re-renders and pins scroll to the bottom, fighting them.
             if (s_msgs_scroll_mode) break;
-            fetch_messages();
-            lv_timer_set_period(t, TG_CHAT_POLL_MS);
+            kicked = kick_fetch_msgs();
             break;
         default: break;
     }
+    // Restore the normal per-view cadence once a fetch actually launches (an
+    // earlier overlap with the notifier may have dropped us to a 1 s retry).
+    if (kicked)
+        lv_timer_set_period(t, s_view == V_CHAT ? TG_CHAT_POLL_MS : TG_LIST_POLL_MS);
 #endif
 }
 
@@ -924,10 +1105,12 @@ static void input_event_cb(lv_event_t *e)
         if (key == LV_KEY_ENTER) {
             const char *txt = lv_textarea_get_text(ta);
             if (txt && *txt) {
-                if (send_text(txt)) {
-                    lv_textarea_set_text(ta, "");
-                    fetch_messages();
-                }
+                // Async send: hand off to the worker and clear the box
+                // optimistically so the next message can be typed right away.
+                // On success the drain kicks a refetch so the sent line
+                // appears; on failure the status pill shows the error.
+                kick_send(txt);
+                lv_textarea_set_text(ta, "");
             }
             lv_event_stop_processing(e);
         } else if (key == LV_KEY_ESC) {
@@ -1080,13 +1263,11 @@ static void show_chat_list()
         start_timer(TG_INET_RETRY_MS);
         return;
     }
-    if (s_bg_task != nullptr) {
-        set_status("Waiting for sync...", UI_COLOR_ACCENT);
-        start_timer(1000);
-    } else {
-        fetch_chats();
-        start_timer(TG_LIST_POLL_MS);
-    }
+    // Kick the first fetch onto the worker. If the slot is momentarily busy
+    // (the notifier just fired), retry fast until it frees; otherwise settle
+    // into the normal poll cadence.
+    bool kicked = kick_fetch_chats();
+    start_timer(kicked ? TG_LIST_POLL_MS : 1000);
 #else
     set_status("Not supported on emulator.", UI_COLOR_MUTED);
 #endif
@@ -1190,13 +1371,8 @@ static void show_chat(long long id, const char *title)
         start_timer(TG_INET_RETRY_MS);
         return;
     }
-    if (s_bg_task != nullptr) {
-        set_status("Waiting for sync...", UI_COLOR_ACCENT);
-        start_timer(1000);
-    } else {
-        fetch_messages();
-        start_timer(TG_CHAT_POLL_MS);
-    }
+    bool kicked = kick_fetch_msgs();
+    start_timer(kicked ? TG_CHAT_POLL_MS : 1000);
 #endif
 }
 
@@ -1310,6 +1486,15 @@ public:
         reload_config();
 
 #ifdef ARDUINO
+        // Drop any result a worker from a previous session published after we
+        // tore down (no drain timer was live to collect it) so it can't flash
+        // into this fresh view. onStop already bumped the epoch, so a still-
+        // running worker will discard rather than publish a new one.
+        s_fg_done = false;
+        if (s_fg_result) { delete s_fg_result; s_fg_result = nullptr; }
+        s_pending_send.clear();
+        s_pending_send_chat = 0;
+
         // If the token is at rest encrypted but the session is locked,
         // trigger the notes unlock modal before showing any app content.
         // ui_passphrase_unlock() fires the callback immediately when crypto
@@ -1334,6 +1519,19 @@ public:
 
     void onStop() override {
         stop_timer();
+#ifdef ARDUINO
+        // §2.1 async teardown: stop draining and abandon any in-flight/pending
+        // result. The worker itself is left to self-delete — it only writes
+        // heap state under the instance mutex, never the LVGL tree, so it is
+        // safe to outlive us; bumping the epoch makes its late result be
+        // discarded instead of published into a freed view.
+        s_fg_epoch++;
+        if (s_drain_timer) { lv_timer_del(s_drain_timer); s_drain_timer = nullptr; }
+        s_fg_done = false;
+        if (s_fg_result) { delete s_fg_result; s_fg_result = nullptr; }
+        s_pending_send.clear();
+        s_pending_send_chat = 0;
+#endif
         ui_hide_back_button();
         s_view = V_NONE;
         s_current_chat_id = 0;
