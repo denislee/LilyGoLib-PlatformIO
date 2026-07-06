@@ -33,6 +33,18 @@ bool hw_read_internal_bytes_raw(const char *path, std::vector<uint8_t> &buf);
 // Raw byte read from the SD card, same semantics as the internal variant.
 // Returns false when the card is not mounted or the file is missing.
 bool hw_read_sd_bytes_raw(const char *path, std::vector<uint8_t> &buf);
+
+// Streams an SD file to `sink` in chunks of `chunk_bytes` (the final chunk may
+// be shorter at EOF). The file is opened once but the SPI bus is released
+// between chunks so the display can flush — use this instead of
+// hw_read_sd_bytes_raw for large files that would otherwise hold the whole
+// payload in RAM or freeze the UI. `sink` returning false aborts the read.
+// When the sink base64-encodes, pass a multiple-of-3 `chunk_bytes` so chunk
+// boundaries don't inject mid-stream padding. Returns false on open/read
+// failure or if the sink aborts.
+bool hw_read_sd_stream(const char *path, size_t chunk_bytes,
+                       bool (*sink)(void *user, const uint8_t *data, size_t len),
+                       void *user);
 void hw_get_txt_files(std::vector<std::string> &list);
 void hw_get_internal_txt_files(std::vector<std::string> &list);
 void hw_get_sd_txt_files(std::vector<std::string> &list);

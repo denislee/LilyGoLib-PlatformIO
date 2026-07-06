@@ -610,6 +610,46 @@ bool hw_read_sd_bytes_raw(const char *path, std::vector<uint8_t> &buf)
 #endif
 }
 
+bool hw_read_sd_stream(const char *path, size_t chunk_bytes,
+                       bool (*sink)(void *user, const uint8_t *data, size_t len),
+                       void *user)
+{
+#ifdef ARDUINO
+    if (!sink || chunk_bytes == 0) return false;
+    if (!(HW_SD_ONLINE & hw_get_device_online())) return false;
+    char str[256];
+    normalize_path(path, str, sizeof(str));
+
+    File f;
+    { core::ScopedSpiLock lock; f = SD.open(str, FILE_READ); }
+    if (!f) return false;
+
+    std::vector<uint8_t> buf(chunk_bytes);
+    bool ok = true;
+    while (true) {
+        // Fill a whole chunk under one lock, then drop the bus so an LVGL
+        // flush (core 1) can interleave before the next chunk.
+        size_t filled = 0;
+        {
+            core::ScopedSpiLock lock;
+            while (filled < chunk_bytes) {
+                int r = f.read(buf.data() + filled, chunk_bytes - filled);
+                if (r <= 0) break;
+                filled += (size_t)r;
+            }
+        }
+        if (filled == 0) break;                 // EOF
+        if (!sink(user, buf.data(), filled)) { ok = false; break; }
+        if (filled < chunk_bytes) break;        // short read → EOF
+    }
+    { core::ScopedSpiLock lock; f.close(); }
+    return ok;
+#else
+    (void)path; (void)chunk_bytes; (void)sink; (void)user;
+    return false;
+#endif
+}
+
 bool hw_read_internal_file(const char *path, std::string &content)
 {
 #ifdef ARDUINO

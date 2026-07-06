@@ -92,6 +92,10 @@ static bool        s_busy      = false;
 struct SendCtx {
     std::string url;
     std::string body;
+    // When non-empty, the worker streams this WAV in as base64 (appended to
+    // `body`, which the UI thread left open after `..."audio_b64":"`). Keeps
+    // the raw bytes + a full base64 copy off the heap at the same time.
+    std::string audio_path;
     std::string transcript;
     std::string reply;
     std::string error;
@@ -415,9 +419,51 @@ static bool chat_post(const std::string &url,
     return true;
 }
 
+// Streaming base64 sink for hw_read_sd_stream: appends the encoded chunk
+// straight onto the request body. `len` is a multiple of 3 for every chunk
+// except the last, so the base64 stitches together without mid-stream padding.
+// Bails (returns false) if the user navigated away mid-encode.
+static bool chat_b64_sink(void *user, const uint8_t *data, size_t len)
+{
+    SendCtx *ctx = (SendCtx *)user;
+    if (ctx->abandoned.load()) return false;
+    std::string enc;
+    if (!b64_encode(data, len, enc)) return false;
+    ctx->body += enc;
+    return true;
+}
+
 static void send_task(void *arg)
 {
     SendCtx *ctx = (SendCtx *)arg;
+
+    // Voice memo: stream the WAV off the SD card as base64 directly into the
+    // body here (the UI thread left it open after `..."audio_b64":"`). Doing
+    // it on the worker in ~3 KB chunks means we never hold the raw bytes and a
+    // full base64 copy at once — the old UI-thread path peaked at ~3.6x the
+    // WAV size before the request even started.
+    if (!ctx->audio_path.empty()) {
+        bool enc_ok = hw_read_sd_stream(ctx->audio_path.c_str(), 3072,
+                                        chat_b64_sink, ctx);
+        ctx->audio_path.clear();
+        if (enc_ok) {
+            ctx->body += "\"}";
+        } else {
+            ctx->error = "audio read failed";
+            ctx->body.clear();
+            ctx->body.shrink_to_fit();
+            ctx->done.store(true, std::memory_order_release);
+            if (ctx->abandoned.load() && !ctx->claimed.exchange(true)) {
+                delete ctx;
+            }
+            s_send_task = nullptr;
+            vTaskDelete(NULL);
+            return;
+        }
+        // Restart the watchdog clock now that the (potentially multi-second)
+        // encode is done, so it bounds only the HTTP call as before.
+        ctx->start_ms = millis();
+    }
 
     Serial.printf("[chat] POST %s body=%u bytes\n",
                   ctx->url.c_str(), (unsigned)ctx->body.size());
@@ -549,7 +595,7 @@ static void poll_timer_cb(lv_timer_t *)
 }
 
 static void kick_off_send(const std::string &user_text,
-                          const std::string &audio_b64)
+                          const std::string &audio_path)
 {
 #ifdef ARDUINO
     std::string hub = hal::hub_get_url();
@@ -566,7 +612,12 @@ static void kick_off_send(const std::string &user_text,
 
     SendCtx *ctx = new SendCtx();
     ctx->url = hub + "/api/chat";
-    ctx->body.reserve(256 + audio_b64.size() + user_text.size() * 2);
+    // Build the JSON envelope up front; the base64 of any voice memo is
+    // streamed in on the worker (see send_task) so it never coexists in RAM
+    // with the raw WAV bytes. Reserve for the eventual base64 (~4/3 of the
+    // file) so the streaming appends don't repeatedly reallocate the body.
+    size_t audio_bytes = audio_path.empty() ? 0 : hw_get_file_size(audio_path.c_str());
+    ctx->body.reserve(256 + (audio_bytes * 4 / 3) + user_text.size() * 2);
     ctx->body += "{\"device_id\":\"";
     ctx->body += json_escape(current_device_id());
     ctx->body += "\"";
@@ -575,13 +626,14 @@ static void kick_off_send(const std::string &user_text,
         ctx->body += json_escape(user_text);
         ctx->body += "\"";
     }
-    if (!audio_b64.empty()) {
-        // base64 alphabet doesn't need JSON-escaping.
+    if (!audio_path.empty()) {
+        // Leave the string open after the opening quote; send_task streams the
+        // base64 in and closes it with `"}`. (base64 needs no JSON escaping.)
         ctx->body += ",\"audio_b64\":\"";
-        ctx->body += audio_b64;
-        ctx->body += "\"";
+        ctx->audio_path = audio_path;
+    } else {
+        ctx->body += "}";
     }
-    ctx->body += "}";
 
     s_ctx = ctx;
 #ifdef ARDUINO
@@ -600,7 +652,7 @@ static void kick_off_send(const std::string &user_text,
         set_busy(false);
     }
 #else
-    (void)user_text; (void)audio_b64;
+    (void)user_text; (void)audio_path;
     log_append("err: ", "chat requires hardware build");
     set_busy(false);
 #endif
@@ -678,7 +730,8 @@ static void mic_btn_cb(lv_event_t *)
         return;
     }
 
-    // Stop, slurp the WAV off the SD card, base64 it, hand to the task.
+    // Stop and hand the WAV path to the worker, which streams it off the SD
+    // card as base64 (see send_task) — no whole-file read on the UI thread.
     if (hw_rec_running()) hw_rec_stop();
     s_recording = false;
     if (s_mic_btn) {
@@ -687,20 +740,14 @@ static void mic_btn_cb(lv_event_t *)
     set_status("transcribing...");
     set_busy(true);
 
-    std::vector<uint8_t> bytes;
-    if (!hw_read_sd_bytes_raw(s_pending_audio_path.c_str(), bytes) ||
-        bytes.size() <= 44) {
+    // Cheap size-only check (one file open, no read) so an empty capture still
+    // fails fast without pulling the bytes in.
+    if (hw_get_file_size(s_pending_audio_path.c_str()) <= 44) {
         log_append("err: ", "no audio captured");
         set_busy(false);
         return;
     }
-    std::string b64;
-    if (!b64_encode(bytes.data(), bytes.size(), b64)) {
-        log_append("err: ", "base64 failed");
-        set_busy(false);
-        return;
-    }
-    kick_off_send(std::string(), b64);
+    kick_off_send(std::string(), s_pending_audio_path);
 #else
     log_append("err: ", "mic only on hardware");
 #endif
