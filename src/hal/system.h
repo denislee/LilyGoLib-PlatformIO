@@ -17,7 +17,6 @@ const char *hw_get_devices_name(int index);
 const char *hw_get_variant_name();
 bool hw_get_mac(uint8_t *mac);
 uint32_t hw_get_device_online();
-const char *hw_get_device_power_tips_string();
 const char *hw_get_firmware_hash_string();
 const char *hw_get_chip_id_string();
 void hw_get_arduino_version(std::string &param);
