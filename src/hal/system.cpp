@@ -422,16 +422,6 @@ const char *hw_get_devices_name(int index)
     return hw_devices[index];
 }
 
-const char *hw_get_variant_name()
-{
-#ifdef ARDUINO
-    return instance.getName();
-#else
-    return "LilyGo T-LoRa-Pager (2025)";
-#endif
-}
-
-
 bool hw_get_mac(uint8_t *mac)
 {
 #ifdef ARDUINO
@@ -690,27 +680,6 @@ void hw_low_power_loop()
 #endif
 }
 
-#if defined(ARDUINO) && defined(ARDUINO_T_LORA_PAGER)
-extern "C" void lilygo_request_fake_sleep_toggle();
-#endif
-
-void hw_fake_sleep_toggle()
-{
-#if defined(ARDUINO) && defined(ARDUINO_T_LORA_PAGER)
-    notes_crypto_lock();
-    lilygo_request_fake_sleep_toggle();
-#else
-    hw_low_power_loop();
-#endif
-}
-
-void hw_set_cpu_freq(uint32_t mhz)
-{
-#ifdef ARDUINO
-    setCpuFrequencyMhz(mhz);
-#endif
-}
-
 void hw_disable_input_devices()
 {
 #if defined(ARDUINO) && defined(USING_INPUT_DEV_ROTARY)
@@ -730,25 +699,6 @@ void hw_enable_input_devices()
 #if defined(ARDUINO)
 #include <Esp.h>
 #endif
-void hw_print_mem_info()
-{
-#if defined(ARDUINO)
-    printf("INTERNAL Memory Info:\n");
-    printf("------------------------------------------\n");
-    printf("  Total Size        :   %u B ( %.1f KB)\n", ESP.getHeapSize(), ESP.getHeapSize() / 1024.0);
-    printf("  Free Bytes        :   %u B ( %.1f KB)\n", ESP.getFreeHeap(), ESP.getFreeHeap() / 1024.0);
-    printf("  Minimum Free Bytes:   %u B ( %.1f KB)\n", ESP.getMinFreeHeap(), ESP.getMinFreeHeap() / 1024.0);
-    printf("  Largest Free Block:   %u B ( %.1f KB)\n", ESP.getMaxAllocHeap(), ESP.getMaxAllocHeap() / 1024.0);
-    printf("------------------------------------------\n");
-    printf("SPIRAM Memory Info:\n");
-    printf("------------------------------------------\n");
-    printf("  Total Size        :  %u B (%.1f KB)\n", ESP.getPsramSize(), ESP.getPsramSize() / 1024.0);
-    printf("  Free Bytes        :  %u B (%.1f KB)\n", ESP.getFreePsram(), ESP.getFreePsram() / 1024.0);
-    printf("  Minimum Free Bytes:  %u B (%.1f KB)\n", ESP.getMinFreePsram(), ESP.getMinFreePsram() / 1024.0);
-    printf("  Largest Free Block:  %u B (%.1f KB)\n", ESP.getMaxAllocPsram(), ESP.getMaxAllocPsram() / 1024.0);
-    printf("------------------------------------------\n");
-#endif
-}
 
 void hw_get_heap_info(uint32_t &total, uint32_t &free)
 {

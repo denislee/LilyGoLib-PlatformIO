@@ -14,7 +14,6 @@ void hw_connectivity_init();
 
 uint16_t hw_get_devices_nums();
 const char *hw_get_devices_name(int index);
-const char *hw_get_variant_name();
 bool hw_get_mac(uint8_t *mac);
 uint32_t hw_get_device_online();
 const char *hw_get_firmware_hash_string();
@@ -51,12 +50,6 @@ void hw_light_sleep();
 void hw_power_down_all();
 void hw_power_up_all();
 void hw_low_power_loop();
-// Fake-sleep toggle: same path as the T-LoRa-Pager scroll-wheel long-press
-// (sleepDisplay + ui_pause_timers, CPU keeps running). On boards without a
-// rotary encoder this falls through to hw_low_power_loop().
-void hw_fake_sleep_toggle();
-void hw_set_cpu_freq(uint32_t mhz);
-
 void hw_feedback();
 bool hw_get_haptic_enable();
 void hw_set_haptic_enable(bool en);
@@ -65,7 +58,6 @@ void hw_get_user_setting(user_setting_params_t &param);
 void hw_load_setting();
 void hw_set_user_setting(user_setting_params_t &param);
 
-void hw_print_mem_info();
 void hw_get_heap_info(uint32_t &total, uint32_t &free);
 
 void hw_disable_input_devices();
