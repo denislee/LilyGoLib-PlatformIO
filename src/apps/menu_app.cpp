@@ -16,13 +16,17 @@
 #include "menu_app.h"
 #include "menu_glance.h"
 #include "../core/system.h"
+#include "../core/scoped_lock.h"
 #include "../ui_define.h"
 #include "../hal/wireless.h"
 #include "../hal/hub.h"
 #include "app_registry.h"
 #include <vector>
+#include <string>
 #ifdef ARDUINO
 #include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #endif
 
 LV_FONT_DECLARE(lv_font_montserrat_12);
@@ -194,30 +198,13 @@ static void settings_click_cb(lv_event_t* e) {
 
 // ---- Internet check pill -------------------------------------------------
 // Quick TCP probe to 1.1.1.1:53 (mirrors Settings → Connectivity → Test
-// Internet). Pill briefly tints accent while probing — ping blocks the LV
-// thread for up to 3 s so the colour change has to be flushed with
-// lv_refr_now() to be visible — then a result popup reports rtt or error.
+// Internet). The probe blocks for up to 3 s, so it runs on a one-shot task
+// behind a modal spinner; a drain timer shows the rtt/error popup when it
+// completes. The home screen stays live throughout instead of freezing.
 
-// Runs a TCP probe to 1.1.1.1:53 and shows a result popup. Optional `btn`
-// is tinted accent while the probe is in flight (ping blocks the LV thread
-// for up to 3 s, so we lv_refr_now() to flush the colour change first).
-static void run_internet_check(lv_obj_t* btn) {
-    if (!hw_get_wifi_connected()) {
-        ui_result_show("Internet", "Wi-Fi is not connected.", nullptr, 0);
-        return;
-    }
-
-    if (btn) {
-        apply_toggle_style(btn, true);
-        lv_refr_now(NULL);
-    }
-
-    uint32_t rtt_ms = 0;
-    std::string err;
-    bool ok = hw_ping_internet("1.1.1.1", 53, 3000, &rtt_ms, &err);
-
-    if (btn) apply_toggle_style(btn, false);
-
+// Render the probe outcome. Shared by the async drain and the synchronous
+// fallbacks so the popup looks identical however the probe was run.
+static void show_inet_result(bool ok, uint32_t rtt_ms, const std::string &err) {
     if (ok) {
         char rtt_buf[16];
         snprintf(rtt_buf, sizeof(rtt_buf), "%u ms", (unsigned)rtt_ms);
@@ -232,6 +219,92 @@ static void run_internet_check(lv_obj_t* btn) {
                        err.empty() ? "Failed" : err.c_str(),
                        nullptr, 0);
     }
+}
+
+#ifdef ARDUINO
+static ui_loading_t  s_inet_loading;
+static lv_timer_t*   s_inet_timer   = nullptr;
+static volatile bool s_inet_running = false;
+static volatile bool s_inet_done    = false;
+static bool          s_inet_ok      = false;   // \.
+static uint32_t      s_inet_rtt     = 0;        //  > guarded by the instance lock
+static std::string   s_inet_err;                // /
+
+// Worker: the 3 s TCP probe off the LVGL thread. Publishes into the shared
+// statics under the instance lock, then clears the running flag and exits.
+static void inet_check_task(void *arg) {
+    (void)arg;
+    uint32_t rtt = 0;
+    std::string err;
+    bool ok = hw_ping_internet("1.1.1.1", 53, 3000, &rtt, &err);
+    {
+        core::ScopedInstanceLock lock;
+        s_inet_ok   = ok;
+        s_inet_rtt  = rtt;
+        s_inet_err  = err;
+        s_inet_done = true;
+    }
+    s_inet_running = false;
+    vTaskDelete(NULL);
+}
+
+// Tear down the in-flight check's UI (drain timer + spinner). A worker still
+// running just finishes into the statics harmlessly — nothing here is touched
+// from the task. Called by the drain on completion and by MenuApp::onStop().
+static void inet_check_teardown() {
+    if (s_inet_timer) { lv_timer_del(s_inet_timer); s_inet_timer = nullptr; }
+    ui_loading_close(&s_inet_loading);
+}
+
+// LVGL timer: polls for the worker's result, then closes the spinner and shows
+// the popup. Runs inside lv_timer_handler(), which already holds the instance
+// lock the worker publishes under — so read the statics directly. Re-taking the
+// (non-recursive) instance lock here would deadlock; the held lock also means
+// the worker can't be mid-write while this reads (it blocks on the same mutex).
+static void inet_check_drain(lv_timer_t *t) {
+    (void)t;
+    if (!s_inet_done) return;
+    s_inet_done = false;
+
+    bool ok = s_inet_ok;
+    uint32_t rtt = s_inet_rtt;
+    std::string err = s_inet_err;
+    inet_check_teardown();
+    show_inet_result(ok, rtt, err);
+}
+#endif
+
+static void run_internet_check(lv_obj_t* btn) {
+    (void)btn;
+    if (!hw_get_wifi_connected()) {
+        ui_result_show("Internet", "Wi-Fi is not connected.", nullptr, 0);
+        return;
+    }
+#ifdef ARDUINO
+    if (s_inet_running || s_inet_timer) return;   // one check at a time
+
+    ui_loading_open(&s_inet_loading, "Internet", "Checking 1.1.1.1...");
+    s_inet_done    = false;
+    s_inet_running = true;
+    if (xTaskCreate(inet_check_task, "inet_chk", 4096, nullptr, 1, nullptr) != pdPASS) {
+        // Task slots exhausted — fall back to a synchronous probe so the pill
+        // still works (this path pays the old up-to-3 s UI freeze).
+        s_inet_running = false;
+        ui_loading_close(&s_inet_loading);
+        uint32_t rtt_ms = 0;
+        std::string err;
+        bool ok = hw_ping_internet("1.1.1.1", 53, 3000, &rtt_ms, &err);
+        show_inet_result(ok, rtt_ms, err);
+        return;
+    }
+    s_inet_timer = lv_timer_create(inet_check_drain, 100, nullptr);
+#else
+    // Emulator: no FreeRTOS task; probe inline.
+    uint32_t rtt_ms = 0;
+    std::string err;
+    bool ok = hw_ping_internet("1.1.1.1", 53, 3000, &rtt_ms, &err);
+    show_inet_result(ok, rtt_ms, err);
+#endif
 }
 
 static void internet_check_click_cb(lv_event_t* e) {
@@ -497,6 +570,9 @@ void MenuApp::onStop() {
         lv_timer_del(s_media_visibility_timer);
         s_media_visibility_timer = nullptr;
     }
+#ifdef ARDUINO
+    inet_check_teardown();   // cancel any in-flight internet-check UI (worker self-finishes)
+#endif
     s_badge_labels.clear();
     s_badge_fns.clear();
     s_media_buttons.clear();
