@@ -114,6 +114,92 @@ static void prewarm_clear()
     prewarm_clear_locked();
 }
 
+/* ---- Read-side key cache ----
+ * PBKDF2 (10k iterations) is tens of ms per derivation. Encrypt always uses a
+ * fresh random salt, so only the *decrypt* path can recur on a given salt: the
+ * journal previews a note by decrypting the whole file, then the user opens the
+ * same note, then maybe reopens it — each decrypts the identical on-disk
+ * ciphertext and would otherwise re-derive the same key. Cache the derived
+ * (key, iv) keyed on the 8-byte salt so repeat decrypts of an unchanged file
+ * skip PBKDF2.
+ *
+ * The cache holds live key material, so it is treated exactly like the cached
+ * passphrase: entries are only ever stored for the current session key, the
+ * whole cache is zeroized in notes_crypto_lock(), and it is flushed on every
+ * passphrase change. Because every entry therefore belongs to the one current
+ * passphrase, keying on salt alone is sufficient. Shares prewarm_mutex() because
+ * decrypt runs on both the UI thread and the journal's background rescan task.
+ * MRU is kept at index 0; valid entries stay packed at the front. */
+#ifdef ARDUINO
+struct KeyCacheEntry {
+    bool valid = false;
+    uint8_t salt[NC_SALT_LEN];
+    uint8_t key[NC_KEY_LEN];
+    uint8_t iv[NC_IV_LEN];
+};
+constexpr int NC_KEYCACHE_N = 6;
+KeyCacheEntry g_keycache[NC_KEYCACHE_N];
+
+/* Callers must hold prewarm_mutex(). Returns the cached derivation for `salt`
+ * and promotes it to MRU. */
+static bool keycache_lookup_locked(const uint8_t salt[NC_SALT_LEN],
+                                   uint8_t key_out[NC_KEY_LEN],
+                                   uint8_t iv_out[NC_IV_LEN])
+{
+    for (int i = 0; i < NC_KEYCACHE_N; i++) {
+        if (!g_keycache[i].valid) continue;
+        if (memcmp(g_keycache[i].salt, salt, NC_SALT_LEN) != 0) continue;
+        memcpy(key_out, g_keycache[i].key, NC_KEY_LEN);
+        memcpy(iv_out,  g_keycache[i].iv,  NC_IV_LEN);
+        if (i != 0) {   /* promote to front (block-shift the more-recent entries) */
+            KeyCacheEntry hit = g_keycache[i];
+            for (int j = i; j > 0; j--) g_keycache[j] = g_keycache[j - 1];
+            g_keycache[0] = hit;
+        }
+        return true;
+    }
+    return false;
+}
+
+/* Callers must hold prewarm_mutex(). Inserts (salt, key, iv) at MRU, evicting
+ * and zeroizing the LRU entry when full. No-op if the salt is already cached. */
+static void keycache_store_locked(const uint8_t salt[NC_SALT_LEN],
+                                  const uint8_t key[NC_KEY_LEN],
+                                  const uint8_t iv[NC_IV_LEN])
+{
+    for (int i = 0; i < NC_KEYCACHE_N; i++) {
+        if (g_keycache[i].valid &&
+            memcmp(g_keycache[i].salt, salt, NC_SALT_LEN) == 0) return;
+    }
+    /* Drop the key material about to fall off the end, then shift down. */
+    zeroize(g_keycache[NC_KEYCACHE_N - 1].key, NC_KEY_LEN);
+    zeroize(g_keycache[NC_KEYCACHE_N - 1].iv,  NC_IV_LEN);
+    for (int j = NC_KEYCACHE_N - 1; j > 0; j--) g_keycache[j] = g_keycache[j - 1];
+    g_keycache[0].valid = true;
+    memcpy(g_keycache[0].salt, salt, NC_SALT_LEN);
+    memcpy(g_keycache[0].key,  key,  NC_KEY_LEN);
+    memcpy(g_keycache[0].iv,   iv,   NC_IV_LEN);
+}
+
+/* Callers must hold prewarm_mutex(). */
+static void keycache_flush_locked()
+{
+    for (int i = 0; i < NC_KEYCACHE_N; i++) {
+        if (!g_keycache[i].valid) continue;
+        zeroize(g_keycache[i].key, NC_KEY_LEN);
+        zeroize(g_keycache[i].iv,  NC_IV_LEN);
+        g_keycache[i].valid = false;
+    }
+}
+static void keycache_flush()
+{
+    PrewarmLock lk;
+    keycache_flush_locked();
+}
+#else
+static void keycache_flush() {}
+#endif
+
 static bool has_magic(const uint8_t *buf, size_t n)
 {
     return content_has_salted_magic((const char *)buf, n);
@@ -282,7 +368,24 @@ static bool decrypt_with_pw(const char *pw,
 
     uint8_t key[NC_KEY_LEN];
     uint8_t iv[NC_IV_LEN];
-    if (!derive_key_iv(pw, salt, key, iv)) return false;
+
+    /* Reuse a cached (key, iv) for this salt when decrypting under the live
+     * session key. Only cache while `pw` is the current session passphrase: the
+     * canary probe in notes_crypto_unlock() decrypts a fixed salt under arbitrary
+     * candidate passphrases, which must never poison the salt-keyed cache. */
+    bool cacheable = g_unlocked && (g_passphrase == pw);
+    bool have_key = false;
+    if (cacheable) {
+        PrewarmLock lk;
+        have_key = keycache_lookup_locked(salt, key, iv);
+    }
+    if (!have_key) {
+        if (!derive_key_iv(pw, salt, key, iv)) return false;
+        if (cacheable) {
+            PrewarmLock lk;
+            keycache_store_locked(salt, key, iv);
+        }
+    }
 
     std::vector<uint8_t> plain(body_len);
     mbedtls_aes_context ctx;
@@ -477,6 +580,7 @@ bool notes_crypto_unlock(const char *pw)
     if (dec != NC_CANARY_PT) return false;
 
     prewarm_clear();
+    keycache_flush();       /* stale entries from any prior session */
     g_passphrase = pw;
     g_unlocked = true;
     return true;
@@ -492,6 +596,9 @@ void notes_crypto_lock()
         PrewarmLock lk;
         g_unlocked = false;
         prewarm_clear_locked();
+#ifdef ARDUINO
+        keycache_flush_locked();    /* drop every derived key with the passphrase */
+#endif
     }
     if (!g_passphrase.empty()) {
         zeroize(&g_passphrase[0], g_passphrase.size());
@@ -599,6 +706,7 @@ bool notes_crypto_set_passphrase(const char *new_pw)
     if (!write_canary(canary_ct)) return false;
 
     prewarm_clear();
+    keycache_flush();
     g_passphrase = new_pw;
     g_unlocked = true;
     return true;
@@ -720,6 +828,7 @@ bool notes_crypto_change_passphrase(const char *old_pw, const char *new_pw,
 
     zeroize(&old_pass[0], old_pass.size());
     g_passphrase = new_pass;
+    keycache_flush();   /* the rewrite loop cached derivations under the old key */
     zeroize(&new_pass[0], new_pass.size());
     g_unlocked = true;
     if (cb) cb(total, total, "Done");
