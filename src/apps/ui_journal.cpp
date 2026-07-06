@@ -34,7 +34,14 @@ struct JournalEntry {
 constexpr const char *kIndexPath = "/journal_idx.bin";
 constexpr uint32_t kIndexMagic = 0x4A524E4Cu; // 'JRNL' little-endian
 constexpr uint8_t  kIndexVersion = 1;
-constexpr size_t   kSnippetBytes = 4096;
+/* Per-note preview cached in the (static, always-resident) journal index and
+ * shown in the ~125 px scrollable box on the list. The whole index lives in
+ * internal heap, so this directly gates how much RAM 100+ notes pin away from
+ * WiFi/TLS. 1.5 KB is still several screenfuls in that box; the full note opens
+ * in the editor on tap. The on-disk index is length-prefixed, so shrinking this
+ * needs no migration — longer snippets from an older index stay valid until
+ * their note is next re-scanned. */
+constexpr size_t   kSnippetBytes = 1536;
 #define JOURNAL_PAGE_SIZE 5
 
 void write_u16le(std::vector<uint8_t> &out, uint16_t v)
@@ -820,10 +827,11 @@ static void journal_build_ui(lv_obj_t *parent)
             lv_obj_set_style_border_width(line, 0, 0);
             lv_obj_set_style_pad_all(line, 0, 0); 
 
-            std::string preview = entry.snippet;
             lv_obj_t *label = lv_label_create(scroll_area);
             lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-            lv_label_set_text(label, preview.c_str());
+            /* set_text copies into the label's own buffer; feed it the cached
+             * snippet directly rather than taking a second heap copy per entry. */
+            lv_label_set_text(label, entry.snippet.c_str());
             lv_obj_set_width(label, lv_pct(100));
             lv_obj_set_style_text_font(label, font, 0);
             lv_obj_set_style_text_color(label, lv_color_white(), 0);
