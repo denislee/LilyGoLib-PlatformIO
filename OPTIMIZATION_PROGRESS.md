@@ -17,7 +17,7 @@ where the stale report would have caused a regression.
 | § | Item | Status |
 |---|---|---|
 | 1.1 | Whole dead files (`ui_power.cpp`, `test_sleep.cpp`, `keyboard_audio.h`) | ✅ done |
-| 1.2 | ~60 never-called `hw_*` functions | ◐ partial — storage/display/power/wireless-BLE/4×system/sensors-peripherals/core-apps done; **audio, radio, UI remain** |
+| 1.2 | ~60 never-called `hw_*` functions | ◐ partial — storage/display/power/wireless-BLE/4×system/sensors-peripherals/core-apps/UI-helpers+system-UI-chain done; **audio, radio remain** (both HIGH-risk) |
 | 1.3 | Stale declarations (no definition) | ✅ done (5 removed) |
 | 1.4 | Dead `#ifdef` branches | ◐ partial — `USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER` gone; **rest remain** (incl. `USING_LED_INDICATOR` bug candidate) |
 | 1.5 | Dead types/fields/globals | ☐ not started |
@@ -140,14 +140,22 @@ branch still referencing a renamed parameter). Do not skip it.
   `s_dismissed` state and `pump()` handling), `hal::secret_erase`,
   `apps::home_apps_symbol`, `core::AppManager::getActiveApp`/`getApps`,
   `core::System::getMainScreen`/`getMenuPanel`.
-- **UI helpers** (`ui_tools.cpp`, `ui_text_editor.cpp`): `ui_create_option`,
-  `create_switch`, `create_label`, `create_radius_button`, `create_back_button`
-  (note: `ui_show_back_button` does NOT use `create_back_button`),
-  `ui_text_editor_new_document`.
-- **system UI chain**: `ui_show_wifi_process_bar` (`ui_msg.cpp`) → its sole callee
-  `ui_create_process_bar` (`ui_tools.cpp`) — a dead chain; plus `isinMenu`
-  (declared twice, drags `core::System::isInMenu()`), and the `ui_lock`/`ui_unlock`
-  compat aliases in `ui_main.cpp`.
+- ~~**UI helpers**~~ ✅ done — removed `ui_create_option`, `create_switch`,
+  `create_label`, `create_radius_button`, `create_back_button`,
+  `ui_text_editor_new_document` (+ their decls in `ui/widgets.h`, `ui/back_button.h`,
+  `ui_define.h`). `create_text`/`child_focus_cb` kept (shared with live builders).
+- ~~**system UI chain**~~ ✅ done — removed the `ui_show_wifi_process_bar` →
+  `ui_create_process_bar` chain (`ui_msg.cpp` + `ui_tools.cpp`), which cascaded into
+  the now-orphaned `enable_input_devices`/`disable_input_devices` (`ui_tools.cpp`) and
+  their sole callees `hw_enable_input_devices`/`hw_disable_input_devices`
+  (`hal/system.cpp`/`.h`). Also removed `isinMenu` (both decls) which dragged
+  `core::System::isInMenu()`. `ui_msg_pop_up` kept (many live callers).
+  - ⚠️ **REPORT CORRECTION**: the report/§1.2 listed the `ui_lock`/`ui_unlock`
+    "compat aliases" (`ui_main.cpp`) as dead — **they are NOT**. Compiled vendor
+    `lib/LilyGoLib/src/LilyGo_LoRa_Pager.cpp` declares them `extern` and calls them
+    (lines ~1309–1319) from the radio/power SPI-guard path. Removing them is a link
+    error. **Kept.** (The `isinMenu` in `lib/.../examples/` is the vendor's stale,
+    non-compiled tree — ignore it.)
 
 ### HIGH risk — do as a DEDICATED pass, ideally with a hardware smoke-test
 - **audio FFT subsystem** (`audio.cpp`, `types.h`): `hw_set_mic_start`/`hw_set_mic_stop`/

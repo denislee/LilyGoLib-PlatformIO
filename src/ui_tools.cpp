@@ -23,105 +23,6 @@ const char *ui_battery_icon(int percent, bool is_charging)
 }
 
 
-lv_obj_t *ui_create_process_bar(lv_obj_t *parent, const char *title)
-{
-#if LVGL_VERSION_MAJOR == 8
-    static lv_style_t style_bg;
-    static lv_style_t style_indic;
-
-    lv_style_init(&style_bg);
-    lv_style_set_border_color(&style_bg, lv_color_black());
-    lv_style_set_border_width(&style_bg, 2);
-    lv_style_set_pad_all(&style_bg, 6);
-    lv_style_set_radius(&style_bg, 6);
-    lv_style_set_anim_time(&style_bg, 1000);
-    lv_style_init(&style_indic);
-    lv_style_set_bg_opa(&style_indic, LV_OPA_COVER);
-    lv_style_set_bg_color(&style_indic, lv_color_black());
-    lv_style_set_radius(&style_indic, 3);
-
-
-    static lv_style_t style;
-    lv_style_init(&style);
-    lv_style_set_radius(&style, 5);
-
-    /*Make a gradient*/
-    lv_style_set_bg_opa(&style, LV_OPA_COVER);
-    static lv_grad_dsc_t grad;
-    grad.dir = LV_GRAD_DIR_VER;
-    grad.stops_count = 2;
-    grad.stops[0].color = lv_palette_lighten(LV_PALETTE_GREY, 1);
-    grad.stops[1].color = lv_palette_lighten(LV_PALETTE_GREY, 20);
-
-    /*Shift the gradient to the bottom*/
-    grad.stops[0].frac  = 128;
-    grad.stops[1].frac  = 192;
-
-    lv_style_set_bg_grad(&style, &grad);
-#endif
-
-    /*Create an object with the new style*/
-    lv_obj_t *cont = lv_obj_create(parent);
-    lv_obj_set_size(cont, lv_pct(100), lv_pct(100));
-#if LVGL_VERSION_MAJOR == 8
-    lv_obj_add_style(cont, &style, 0);
-#endif
-    lv_obj_center(cont);
-
-    lv_obj_t *bar = lv_bar_create(cont);
-#if LVGL_VERSION_MAJOR == 8
-    lv_obj_remove_style_all(bar);
-    lv_obj_add_style(bar, &style_bg, 0);
-    lv_obj_add_style(bar, &style_indic, LV_PART_INDICATOR);
-#endif
-    lv_obj_set_size(bar, 200, 20);
-    lv_obj_center(bar);
-    lv_obj_set_user_data(bar, cont);
-    lv_bar_set_value(bar, 0, LV_ANIM_ON);
-
-    lv_obj_t *label = lv_label_create(cont);
-    lv_label_set_text(label, title);
-#if LVGL_VERSION_MAJOR == 8
-    lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
-#endif
-    lv_obj_align_to(label, bar, LV_ALIGN_OUT_BOTTOM_MID, 0, 20);
-
-    return bar;
-}
-
-lv_obj_t *ui_create_option(lv_obj_t *parent, const char *title, const char *symbol_txt, lv_obj_t *(*widget_create)(lv_obj_t *parent), lv_event_cb_t btn_event_cb)
-{
-    lv_obj_t *cont;
-    lv_obj_t *label;
-    lv_obj_t *obj;
-    lv_obj_t *btn;
-    cont = lv_menu_cont_create(parent);
-
-    label = lv_label_create(cont);
-    lv_obj_set_width(label, lv_pct(25));
-
-    lv_label_set_text(label, title);
-    obj = widget_create(cont);
-    if (symbol_txt) {
-        lv_obj_set_size(obj, lv_pct(55), 40);
-    } else {
-        lv_obj_set_size(obj, lv_pct(65), 40);
-    }
-    lv_obj_set_style_outline_color(obj, lv_color_white(), LV_STATE_FOCUS_KEY);
-
-    if (symbol_txt) {
-        btn = lv_btn_create(cont);
-        if (btn_event_cb) {
-            lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, NULL);
-        }
-        lv_obj_set_size(btn, lv_pct(12), 40);
-        label = lv_label_create(btn);
-        lv_obj_center(label);
-        lv_label_set_text(label, symbol_txt);
-    }
-    return cont;
-}
-
 void destroy_msgbox(lv_obj_t *msgbox)
 {
 #if LVGL_VERSION_MAJOR == 9
@@ -653,25 +554,6 @@ lv_obj_t *create_slider(lv_obj_t *parent, const char *icon, const char *txt, int
     return slider;
 }
 
-lv_obj_t *create_switch(lv_obj_t *parent, const char *icon, const char *txt, bool chk, lv_event_cb_t cb)
-{
-    lv_obj_t *obj = create_text(parent, icon, txt, LV_MENU_ITEM_BUILDER_VARIANT_1);
-
-    lv_obj_t *sw = lv_switch_create(obj);
-    lv_obj_set_style_outline_width(sw, 0, 0);
-    lv_obj_set_style_outline_width(sw, 0, LV_STATE_FOCUS_KEY);
-    lv_obj_set_style_border_width(sw, 0, 0);
-    lv_obj_set_style_border_width(sw, 0, LV_STATE_FOCUS_KEY);
-    lv_obj_set_style_border_width(sw, 0, LV_STATE_FOCUSED);
-    lv_obj_add_state(sw, chk ? LV_STATE_CHECKED : LV_STATE_DEFAULT);
-    
-    lv_obj_add_event_cb(sw, child_focus_cb, LV_EVENT_FOCUSED, NULL);
-    lv_obj_add_event_cb(sw, child_focus_cb, LV_EVENT_DEFOCUSED, NULL);
-
-    lv_obj_add_event_cb(sw, cb, LV_EVENT_VALUE_CHANGED, NULL);
-    return sw;
-}
-
 lv_obj_t *create_button(lv_obj_t *parent, const char *icon, const char *txt, lv_event_cb_t cb)
 {
     lv_obj_t *obj = create_text(parent, icon, txt, LV_MENU_ITEM_BUILDER_VARIANT_1);
@@ -697,17 +579,6 @@ lv_obj_t *create_button(lv_obj_t *parent, const char *icon, const char *txt, lv_
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
     }
     return btn;
-}
-
-lv_obj_t *create_label(lv_obj_t *parent, const char *icon, const char *txt, const char *default_text)
-{
-    lv_obj_t *obj = create_text(parent, icon, txt, LV_MENU_ITEM_BUILDER_VARIANT_1);
-    if (default_text) {
-        lv_obj_t *label = lv_label_create(obj);
-        lv_label_set_text(label, default_text);
-        return label;
-    }
-    return obj;
 }
 
 lv_obj_t *create_dropdown(lv_obj_t *parent, const char *icon, const char *txt, const char *options, uint8_t default_sel, lv_event_cb_t cb)
@@ -749,40 +620,6 @@ lv_obj_t *create_floating_button(lv_event_cb_t event_cb, void* user_data)
 }
 
 
-lv_obj_t *create_radius_button(lv_obj_t *parent, const void *image, lv_event_cb_t event_cb, void* user_data)
-{
-    lv_obj_t *float_btn = lv_btn_create(parent);
-    lv_obj_set_size(float_btn, FLOAT_BUTTON_WIDTH, FLOAT_BUTTON_HEIGHT);
-    lv_obj_add_flag(float_btn, LV_OBJ_FLAG_FLOATING);
-    // lv_obj_align(float_btn, LV_ALIGN_BOTTOM_MID, 0, -30);
-    lv_obj_add_event_cb(float_btn, event_cb, LV_EVENT_CLICKED, user_data);
-    lv_obj_set_style_radius(float_btn, LV_RADIUS_CIRCLE, 0);
-    if (image) {
-        lv_obj_set_style_bg_image_src(float_btn, image, 0);
-    }
-    lv_obj_set_style_text_font(float_btn, lv_theme_get_font_large(float_btn), 0);
-    return float_btn;
-}
-
-lv_obj_t *create_back_button(lv_obj_t *parent, lv_event_cb_t cb)
-{
-    lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_size(btn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_radius(btn, 0, 0);
-    lv_obj_set_style_pad_all(btn, 0, 0);
-    lv_obj_set_style_border_width(btn, 0, 0);
-    lv_obj_set_style_outline_width(btn, 0, 0);
-    lv_obj_set_style_shadow_width(btn, 0, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-
-    lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
-
-    if (cb) lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
-    return btn;
-}
-
 lv_obj_t *create_menu(lv_obj_t *parent, lv_event_cb_t event_cb)
 {
     lv_obj_t *menu = lv_menu_create(parent);
@@ -823,24 +660,6 @@ lv_indev_t *lv_get_keyboard_indev()
     return NULL;
 }
 #endif
-
-void disable_input_devices()
-{
-    hw_disable_input_devices();
-    lv_indev_enable(lv_get_encoder_indev(), false);
-    if (hw_has_keyboard()) {
-        lv_indev_enable(lv_get_keyboard_indev(), false);
-    }
-}
-
-void enable_input_devices()
-{
-    hw_enable_input_devices();
-    lv_indev_enable(lv_get_encoder_indev(), true);
-    if (hw_has_keyboard()) {
-        lv_indev_enable(lv_get_keyboard_indev(), true);
-    }
-}
 
 // App-level keyboard toggling now only attaches/detaches the LVGL input
 // device — the I2C keyboard hardware itself is initialized once at boot

@@ -512,24 +512,6 @@ void ui_text_editor_open_file(const char *path)
     }
 }
 
-void ui_text_editor_new_document()
-{
-    if (text_area == NULL) return;
-    save_content(true);
-    lv_textarea_set_text(text_area, "");
-    current_file_path = "";
-    content_dirty = false;
-    
-    lv_group_t *g = lv_obj_get_group(text_area);
-    if (g) {
-        lv_group_focus_obj(text_area);
-        lv_group_set_editing(g, true);
-        editor_auto_edit = false;
-    }
-
-    update_word_count();
-}
-
 void ui_text_editor_exit(lv_obj_t *parent)
 {
     // Persist the buffer on every teardown path, not just do_exit(): the

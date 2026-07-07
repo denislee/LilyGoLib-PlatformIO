@@ -53,6 +53,5 @@ void ui_request_editor_switch();
 extern bool editor_auto_edit;
 
 // Menu panel visibility. Thin wrappers over core::System.
-bool isinMenu();
 void menu_show();
 void menu_hidden();

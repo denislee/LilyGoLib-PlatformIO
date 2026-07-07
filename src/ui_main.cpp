@@ -75,11 +75,6 @@ bool ui_is_fake_sleep()
 void ui_lock()   { instanceLockTake(); }
 void ui_unlock() { instanceLockGive(); }
 
-bool isinMenu()
-{
-    return core::System::getInstance().isInMenu();
-}
-
 void menu_show()
 {
     core::System::getInstance().showMenu();

@@ -45,14 +45,10 @@ lv_indev_t *lv_get_keyboard_indev();
 /* menu_show / menu_hidden declared in core/system_hooks.h (via include above). */
 void set_default_group(lv_group_t *group);
 
-void disable_input_devices();
-void enable_input_devices();
-
 void disable_keyboard();
 void enable_keyboard();
 
 void ui_text_editor_open_file(const char *path);
-void ui_text_editor_new_document();
 
 /* Editor / fake-sleep / instance-lock hooks are declared in
  * core/system_hooks.h (included at top of this file). */

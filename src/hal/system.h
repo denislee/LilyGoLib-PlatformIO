@@ -60,10 +60,5 @@ void hw_set_user_setting(user_setting_params_t &param);
 
 void hw_get_heap_info(uint32_t &total, uint32_t &free);
 
-void hw_disable_input_devices();
-void hw_enable_input_devices();
-
-// UI helpers exposed from factory/ui_main for HAL-layer callers.
-void ui_show_wifi_process_bar();
+// UI helper exposed from factory/ui_main for HAL-layer callers.
 void ui_msg_pop_up(const char *title_txt, const char *msg_txt);
-bool isinMenu();

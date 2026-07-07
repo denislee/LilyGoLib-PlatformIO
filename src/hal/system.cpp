@@ -680,22 +680,6 @@ void hw_low_power_loop()
 #endif
 }
 
-void hw_disable_input_devices()
-{
-#if defined(ARDUINO) && defined(USING_INPUT_DEV_ROTARY)
-    instance.disableRotary();
-#endif
-}
-
-
-void hw_enable_input_devices()
-{
-#if defined(ARDUINO) && defined(USING_INPUT_DEV_ROTARY)
-    instance.enableRotary();
-#endif
-}
-
-
 #if defined(ARDUINO)
 #include <Esp.h>
 #endif

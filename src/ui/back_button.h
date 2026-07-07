@@ -12,8 +12,6 @@
 
 #include <lvgl.h>
 
-lv_obj_t *create_back_button(lv_obj_t *parent, lv_event_cb_t cb);
-
 lv_obj_t *ui_show_back_button(lv_event_cb_t cb);
 void ui_hide_back_button(void);
 lv_event_cb_t ui_get_back_button_cb(void);

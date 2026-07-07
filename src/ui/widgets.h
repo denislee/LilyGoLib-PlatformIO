@@ -23,17 +23,12 @@ enum class lv_menu_builder_variant_t : uint8_t {
 constexpr lv_menu_builder_variant_t LV_MENU_ITEM_BUILDER_VARIANT_1 = lv_menu_builder_variant_t::V1;
 constexpr lv_menu_builder_variant_t LV_MENU_ITEM_BUILDER_VARIANT_2 = lv_menu_builder_variant_t::V2;
 
-lv_obj_t *ui_create_option(lv_obj_t *parent, const char *title, const char *symbol_txt, lv_obj_t *(*widget_create)(lv_obj_t *parent), lv_event_cb_t btn_event_cb);
 lv_obj_t *create_text(lv_obj_t *parent, const char *icon, const char *txt,
                       lv_menu_builder_variant_t builder_variant);
 lv_obj_t *create_slider(lv_obj_t *parent, const char *icon, const char *txt, int32_t min, int32_t max,
                         int32_t val, lv_event_cb_t cb, lv_event_code_t filter);
-lv_obj_t *create_switch(lv_obj_t *parent, const char *icon, const char *txt, bool chk, lv_event_cb_t cb);
 lv_obj_t *create_button(lv_obj_t *parent, const char *icon, const char *txt, lv_event_cb_t cb);
-lv_obj_t *create_label(lv_obj_t *parent, const char *icon, const char *txt, const char *default_text);
 lv_obj_t *create_dropdown(lv_obj_t *parent, const char *icon, const char *txt, const char *options, uint8_t default_sel, lv_event_cb_t cb);
-
-lv_obj_t *ui_create_process_bar(lv_obj_t *parent, const char *title);
 
 /* Pick the LVGL battery glyph that best represents the current cell state.
  * Returns LV_SYMBOL_CHARGE while charging; otherwise quantizes percent into
@@ -42,4 +37,3 @@ const char *ui_battery_icon(int percent, bool is_charging);
 
 lv_obj_t *create_floating_button(lv_event_cb_t event_cb, void *user_data);
 lv_obj_t *create_menu(lv_obj_t *parent, lv_event_cb_t event_cb);
-lv_obj_t *create_radius_button(lv_obj_t *parent, const void *image, lv_event_cb_t event_cb, void *user_data);

@@ -469,11 +469,6 @@ void System::hideMenu() {
     lv_tileview_set_tile_by_index(_mainScreen, 0, 1, LV_ANIM_OFF);
 }
 
-bool System::isInMenu() const {
-    if (!_mainScreen) return true;
-    return (lv_tileview_get_tile_act(_mainScreen) == _menuPanel);
-}
-
 void System::loop() {
     AppManager::getInstance().update();
     // Drain pending notifications on the LVGL thread. `post()` is safe to

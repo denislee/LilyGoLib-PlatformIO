@@ -25,7 +25,6 @@ public:
 
     void showMenu();
     void hideMenu();
-    bool isInMenu() const;
 
     lv_obj_t* showBackButton(lv_event_cb_t cb);
     void hideBackButton();
