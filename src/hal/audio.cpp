@@ -21,10 +21,16 @@
 static TaskHandle_t       playerTaskHandler = NULL;
 static QueueHandle_t      playerQueue       = NULL;
 static EventGroupHandle_t playerEvent       = NULL;
+// Signalled by the recorder task when it has fully closed the WAV file, so
+// hw_rec_stop() can block on it instead of busy-polling recorder_running.
+static SemaphoreHandle_t  recorderDoneSem   = NULL;
 
 #define PLAYER_PLAY     _BV(0)
 #define PLAYER_END      _BV(1)
 #define PLAYER_RUNNING  _BV(2)
+// Set by the player when it clears PLAYER_RUNNING on exit, so callers can
+// block for the stop to complete rather than polling hw_player_running().
+#define PLAYER_STOPPED  _BV(3)
 
 // libhelix needs at least one full frame in the buffer to decode. Layer III
 // max frame size is ~1900 bytes; we keep extra headroom for sync search.
@@ -147,6 +153,7 @@ static bool play_mp3_with_filler(mp3_fill_cb_t fill_cb, void *ctx)
     free(bufStart);
     free(outBuf);
     xEventGroupClearBits(playerEvent, PLAYER_RUNNING | PLAYER_PLAY | PLAYER_END);
+    xEventGroupSetBits(playerEvent, PLAYER_STOPPED);
 
 #if defined(USING_PCM_AMPLIFIER)
     if (codec_begin) instance.powerControl(POWER_SPEAK, false);
@@ -262,6 +269,7 @@ static void playWAV_sd(const char *filename)
         instance.codec.close();
         close_with_lock();
         xEventGroupClearBits(playerEvent, PLAYER_RUNNING | PLAYER_PLAY | PLAYER_END);
+        xEventGroupSetBits(playerEvent, PLAYER_STOPPED);
         return;
     }
 
@@ -284,6 +292,7 @@ static void playWAV_sd(const char *filename)
     instance.codec.close();
     close_with_lock();
     xEventGroupClearBits(playerEvent, PLAYER_RUNNING | PLAYER_PLAY | PLAYER_END);
+    xEventGroupSetBits(playerEvent, PLAYER_STOPPED);
 }
 #endif /*USING_AUDIO_CODEC*/
 
@@ -315,6 +324,7 @@ void hw_audio_init()
 #ifdef ARDUINO
     playerQueue = xQueueCreate(2, sizeof(audio_params_t));
     playerEvent = xEventGroupCreate();
+    recorderDoneSem = xSemaphoreCreateBinary();
     xTaskCreate(playerTask, "app/play", 8 * 1024, NULL, 12, &playerTaskHandler);
 #endif
 }
@@ -402,6 +412,7 @@ static void recorderTask(void *args)
         }
         recorder_running = false;
         recorderTaskHandler = NULL;
+        if (recorderDoneSem) xSemaphoreGive(recorderDoneSem);
         vTaskDelete(NULL);
         return;
     }
@@ -474,6 +485,7 @@ static void recorderTask(void *args)
     free(mono_buf);
     recorder_running = false;
     recorderTaskHandler = NULL;
+    if (recorderDoneSem) xSemaphoreGive(recorderDoneSem);
     vTaskDelete(NULL);
 }
 #endif /*ARDUINO*/
@@ -515,6 +527,10 @@ bool hw_rec_start(const char *sd_path)
     recorder_start_ms  = millis();
     recorder_running   = true;
 
+    // Clear any completion token left by a self-terminated prior recording so
+    // hw_rec_stop() waits for *this* session, not a stale one.
+    if (recorderDoneSem) xSemaphoreTake(recorderDoneSem, 0);
+
     if (xTaskCreate(recorderTask, "app/rec", 8 * 1024, NULL, 12,
                     &recorderTaskHandler) != pdPASS) {
         log_e("recorder: task create failed");
@@ -543,8 +559,17 @@ void hw_rec_stop()
 #ifdef ARDUINO
     if (!recorder_running) return;
     recorder_stop_req = true;
-    while (recorder_running) {
-        delay(5);
+    // Block (not busy-poll) until the recorder task has flushed its final SD
+    // write, rewritten the WAV header and closed the file. Bounded so a stalled
+    // SD write can't freeze the UI thread indefinitely; on timeout we fall back
+    // to the old poll to preserve the synchronous "file is closed on return"
+    // contract callers (finalize_recording) rely on.
+    if (recorderDoneSem) {
+        if (xSemaphoreTake(recorderDoneSem, pdMS_TO_TICKS(5000)) != pdTRUE) {
+            while (recorder_running) delay(5);
+        }
+    } else {
+        while (recorder_running) delay(5);
     }
 #endif
 }
@@ -623,13 +648,14 @@ void hw_set_sd_music_play(audio_source_type_t source_type, const char *filename)
     };
     printf("hw_set_sd_music_play : %s source_type:%d\n", filename, source_type);
 #ifdef ARDUINO
-    xEventGroupClearBits(playerEvent, PLAYER_PLAY | PLAYER_END);
+    xEventGroupClearBits(playerEvent, PLAYER_PLAY | PLAYER_END | PLAYER_STOPPED);
     if (hw_player_running()) {
         xEventGroupSetBits(playerEvent, PLAYER_END);
         Serial.println("Wait hw_player_running stop...");
-        while (hw_player_running()) {
-            delay(2);
-        }
+        // Block on PLAYER_STOPPED rather than busy-polling; bounded so a wedged
+        // player task can't freeze the UI thread.
+        xEventGroupWaitBits(playerEvent, PLAYER_STOPPED, pdFALSE, pdTRUE,
+                            pdMS_TO_TICKS(2000));
         Serial.println("hw_player_running stopped.");
     }
     xEventGroupSetBits(playerEvent, PLAYER_PLAY);
@@ -641,12 +667,11 @@ void hw_set_sd_music_play(audio_source_type_t source_type, const char *filename)
 void hw_set_play_stop()
 {
 #ifdef ARDUINO
-    xEventGroupClearBits(playerEvent, PLAYER_PLAY | PLAYER_END);
+    xEventGroupClearBits(playerEvent, PLAYER_PLAY | PLAYER_END | PLAYER_STOPPED);
     if (hw_player_running()) {
         xEventGroupSetBits(playerEvent, PLAYER_END);
-        while (hw_player_running()) {
-            delay(2);
-        }
+        xEventGroupWaitBits(playerEvent, PLAYER_STOPPED, pdFALSE, pdTRUE,
+                            pdMS_TO_TICKS(2000));
     }
 #endif
 }
