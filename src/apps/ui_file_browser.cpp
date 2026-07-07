@@ -18,6 +18,7 @@
 #include "../hal/system.h"
 #include "../hal/storage.h"
 #include "../hal/notes_crypto.h"
+#include "../hal/notes_path.h"
 #include <vector>
 #include <string>
 #include <algorithm>

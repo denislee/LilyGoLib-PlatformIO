@@ -17,11 +17,7 @@ LV_FONT_DECLARE(lv_font_montserrat_28);
 LV_FONT_DECLARE(lv_font_montserrat_40);
 
 // Definition of global UI objects
-lv_obj_t *main_screen = nullptr;
-lv_obj_t *menu_panel = nullptr;
-lv_obj_t *app_panel = nullptr;
 lv_group_t *menu_g = nullptr;
-lv_group_t *app_g = nullptr;
 
 namespace core {
 
@@ -53,9 +49,8 @@ void System::setupGlobalUI() {
     _appGroup = lv_group_create();
     lv_group_set_wrap(_appGroup, false);
     
-    // Set legacy globals
+    // Set legacy global
     menu_g = _menuGroup;
-    app_g = _appGroup;
 
     // Set default group to menu group initially
     lv_group_set_default(_menuGroup);
@@ -69,7 +64,6 @@ void System::setupGlobalUI() {
 
     // Create Main Screen (TileView)
     _mainScreen = lv_tileview_create(lv_screen_active());
-    main_screen = _mainScreen; // Set global pointer
     lv_obj_set_size(_mainScreen, LV_PCT(100), v_res - bar_h);
     lv_obj_align(_mainScreen, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(_mainScreen, lv_color_black(), 0);
@@ -78,10 +72,6 @@ void System::setupGlobalUI() {
 
     _menuPanel = lv_tileview_add_tile(_mainScreen, 0, 0, LV_DIR_NONE);
     _appPanel = lv_tileview_add_tile(_mainScreen, 0, 1, LV_DIR_NONE);
-    
-    // Set legacy globals
-    menu_panel = _menuPanel;
-    app_panel = _appPanel;
 
     // Create Status Bar
     _statusBar = lv_obj_create(lv_screen_active());

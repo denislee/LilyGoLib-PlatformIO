@@ -217,7 +217,6 @@ void hw_get_wifi_scan_result(std::vector<wifi_scan_params_t> &list)
         param.ssid = ssid.c_str();
         param.rssi = rssi;
         param.channel = channel;
-        memcpy(param.bssid, BSSID, 6);
         list.push_back(param);
     }
 #else

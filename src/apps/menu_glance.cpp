@@ -9,6 +9,7 @@
 #include "menu_glance.h"
 
 #include "../ui_define.h"
+#include "app_registry.h"
 #include "../hal/wireless.h"
 #include "../hal/hub.h"
 
@@ -18,9 +19,8 @@ LV_FONT_DECLARE(lv_font_montserrat_18);
 
 namespace apps {
 
-/* tg_get_unread_count() is defined in ui_telegram.cpp. Forward-decl to
- * avoid pulling that 1.5k-line TU's includes here. */
-int tg_get_unread_count();
+/* tg_get_unread_count() is declared in app_registry.h (defined in
+ * ui_telegram.cpp). */
 
 namespace menu {
 namespace {

@@ -18,8 +18,6 @@
 #include <LilyGoLib.h>
 /* WiFi.h arrives transitively via hal/types.h on both platforms.
  * esp_mac.h was unused here — moved to hal/system.cpp where it belongs. */
-#else
-#define RTC_DATA_ATTR
 #endif
 #include <lvgl.h>
 #include <stdio.h>
@@ -34,11 +32,7 @@
 #include "ui/back_button.h"
 
 /* Cross-module globals + hooks that don't belong in a feature header. */
-extern lv_obj_t *main_screen;
-extern lv_obj_t *menu_panel;
-extern lv_obj_t *app_panel;
 extern lv_group_t *menu_g;
-extern lv_group_t *app_g;
 
 lv_indev_t *lv_get_encoder_indev();
 lv_indev_t *lv_get_keyboard_indev();

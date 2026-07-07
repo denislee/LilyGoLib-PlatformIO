@@ -24,10 +24,8 @@ bool notes_crypto_is_unlocked();
  * when this returns false. */
 bool notes_crypto_should_encrypt();
 
-/* Does this path fall under the encryption policy? Top-level *.txt files
- * (except `tasks.txt`) and the journal index. Anything in a subdirectory
- * stays plaintext. */
-bool notes_crypto_path_is_protected(const char *path);
+/* notes_crypto_path_is_protected() — the encryption-policy predicate — is
+ * declared in notes_path.h (its definition lives in notes_path.cpp). */
 
 /* Verify `pw` against the stored canary. On success, caches the passphrase
  * for the session. */

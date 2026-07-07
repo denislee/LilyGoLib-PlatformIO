@@ -29,12 +29,6 @@ typedef enum {
     MEDIA_PREVIOUS
 } media_key_value_t;
 
-typedef enum {
-    KEYBOARD_TYPE_NONE,
-    KEYBOARD_TYPE_1,
-    KEYBOARD_TYPE_2,
-} keyboard_type_t;
-
 /* Radio frequency constants */
 #define RADIO_DEFAULT_FREQUENCY  868.0
 
@@ -138,7 +132,6 @@ typedef struct {
 } radio_params_t;
 
 typedef struct {
-    uint8_t bssid[6];
     uint8_t authmode;
     int8_t  rssi;
     int32_t channel;
@@ -254,12 +247,4 @@ typedef struct {
     float heading;
     uint8_t orientation;
 } imu_params_t;
-
-typedef enum {
-    HW_TRACKBALL_DIR_NONE,
-    HW_TRACKBALL_DIR_UP,
-    HW_TRACKBALL_DIR_DOWN,
-    HW_TRACKBALL_DIR_LEFT,
-    HW_TRACKBALL_DIR_RIGHT
-} hw_trackball_dir;
 

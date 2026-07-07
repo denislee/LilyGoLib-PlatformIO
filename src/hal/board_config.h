@@ -28,8 +28,6 @@
  * pull in this header). */
 
 #define MAIN_FONT   &lv_font_montserrat_20
-#define NFC_TIPS_STRING "Place the NFC card close to the center of the arrow on the back. It will vibrate when the card is detected; otherwise, it will not display anything if it cannot be resolved."
-#define DEVICE_KEYBOARD_TYPE    KEYBOARD_TYPE_1
 
 #elif defined(ARDUINO_T_WATCH_S3_ULTRA)
 
@@ -48,7 +46,6 @@
 #define HAS_USB_RF_SWITCH
 #endif
 
-#define NFC_TIPS_STRING "Hold the NFC card close to the front of the screen. It will vibrate when the card is detected; otherwise, it will not display anything if it cannot be resolved."
 #define MAIN_FONT   &lv_font_montserrat_22
 
 #elif defined(ARDUINO_T_WATCH_S3)
@@ -62,7 +59,6 @@
 #define USING_BLE_KEYBOARD
 #endif
 
-#define NFC_TIPS_STRING "No NFC devices"
 #define MAIN_FONT   &lv_font_montserrat_16
 
 #endif
