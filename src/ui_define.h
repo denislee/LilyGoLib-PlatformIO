@@ -47,7 +47,8 @@ void ui_text_editor_open_file(const char *path);
 /* Editor / fake-sleep / instance-lock hooks are declared in
  * core/system_hooks.h (included at top of this file). */
 
-#if LVGL_VERSION_MAJOR == 9
+/* LVGL v8->v9 rename shims. This tree builds only against LVGL 9.x, so the
+ * old-name aliases below let pre-existing code keep compiling unchanged. */
 #define LV_MENU_ROOT_BACK_BTN_ENABLED   LV_MENU_ROOT_BACK_BUTTON_ENABLED
 #define lv_menu_back_btn_is_root        lv_menu_back_button_is_root
 #define lv_menu_set_mode_root_back_btn  lv_menu_set_mode_root_back_button
@@ -55,14 +56,6 @@ void ui_text_editor_open_file(const char *path);
 #define lv_mem_free                     lv_free
 #define LV_IMG_CF_ALPHA_8BIT            LV_COLOR_FORMAT_L8
 #define lv_point_t                      lv_point_precise_t
-#else
-#define lv_timer_get_user_data(x)       (x->user_data)
-#define lv_indev_get_type(x)            (x->driver->type)
-#endif
-
-#if LVGL_VERSION_MAJOR == 8
-
-#endif
 
 #ifndef M_PI
 #define M_PI		3.14159265358979323846
