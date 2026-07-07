@@ -29,6 +29,7 @@
 #include "../hal/storage.h"
 #include "../hal/audio.h"
 #include "../hal/system.h"
+#include "../hal/str_encode.h"
 #include "../core/app.h"
 #include "../core/app_manager.h"
 #include "../core/scoped_lock.h"
@@ -46,7 +47,6 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <LilyGoLib.h>
-#include <mbedtls/base64.h>
 #include <cctype>
 #include <cstdlib>
 extern "C" {
@@ -116,44 +116,7 @@ static const uint32_t SEND_WATCHDOG_MS = 20000;
 
 #ifdef ARDUINO
 static TaskHandle_t s_send_task = nullptr;
-
-static bool b64_encode(const uint8_t *data, size_t len, std::string &out)
-{
-    size_t olen = 0;
-    mbedtls_base64_encode(nullptr, 0, &olen, data, len);
-    out.resize(olen);
-    size_t written = 0;
-    int rc = mbedtls_base64_encode((unsigned char *)&out[0], out.size(),
-                                   &written, data, len);
-    if (rc != 0) { out.clear(); return false; }
-    out.resize(written);
-    return true;
-}
 #endif
-
-static std::string json_escape(const std::string &in)
-{
-    std::string out;
-    out.reserve(in.size() + 8);
-    for (char c : in) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if ((unsigned char)c < 0x20) {
-                    char b[8];
-                    snprintf(b, sizeof(b), "\\u%04x", (unsigned char)c);
-                    out += b;
-                } else {
-                    out.push_back(c);
-                }
-        }
-    }
-    return out;
-}
 
 static void log_append(const char *prefix, const std::string &text)
 {
@@ -428,7 +391,7 @@ static bool chat_b64_sink(void *user, const uint8_t *data, size_t len)
     SendCtx *ctx = (SendCtx *)user;
     if (ctx->abandoned.load()) return false;
     std::string enc;
-    if (!b64_encode(data, len, enc)) return false;
+    if (!hal::base64_encode(data, len, enc)) return false;
     ctx->body += enc;
     return true;
 }
@@ -619,11 +582,11 @@ static void kick_off_send(const std::string &user_text,
     size_t audio_bytes = audio_path.empty() ? 0 : hw_get_file_size(audio_path.c_str());
     ctx->body.reserve(256 + (audio_bytes * 4 / 3) + user_text.size() * 2);
     ctx->body += "{\"device_id\":\"";
-    ctx->body += json_escape(current_device_id());
+    ctx->body += hal::json_escape(current_device_id());
     ctx->body += "\"";
     if (!user_text.empty()) {
         ctx->body += ",\"text\":\"";
-        ctx->body += json_escape(user_text);
+        ctx->body += hal::json_escape(user_text);
         ctx->body += "\"";
     }
     if (!audio_path.empty()) {

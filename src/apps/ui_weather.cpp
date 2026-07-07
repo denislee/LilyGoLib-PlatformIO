@@ -41,6 +41,7 @@
 #include "../hal/wireless.h"
 #include "../hal/system.h"
 #include "../hal/hub.h"
+#include "../hal/str_encode.h"
 #include "../core/app_manager.h"
 #include "../core/scoped_lock.h"
 #include "app_registry.h"
@@ -597,30 +598,10 @@ static bool fetch_geo_ip(GeoData &out, std::string &err)
     return parse_geo(body, out, err);
 }
 
-// Encode a city name into a URL query value. Spaces and non-ASCII are
-// percent-encoded; the city may contain UTF-8 if the user's keyboard supports
-// it.
-static std::string url_encode(const std::string &in)
-{
-    static const char hex[] = "0123456789ABCDEF";
-    std::string out;
-    out.reserve(in.size() * 3);
-    for (unsigned char c : in) {
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
-            out.push_back((char)c);
-        } else {
-            out.push_back('%');
-            out.push_back(hex[c >> 4]);
-            out.push_back(hex[c & 0xF]);
-        }
-    }
-    return out;
-}
-
 static bool fetch_geo_city(const std::string &city, GeoData &out, std::string &err)
 {
-    std::string enc = url_encode(city);
+    // Percent-encode the city (may contain UTF-8) for the query string.
+    std::string enc = hal::url_encode(city);
     char direct_url[256];
     snprintf(direct_url, sizeof(direct_url),
         "https://geocoding-api.open-meteo.com/v1/search?name=%s&count=1&format=json",
@@ -1271,31 +1252,10 @@ bool weather_search_cities(const char *query,
 #ifdef ARDUINO
     if (!query || !*query) { err = "empty query"; return false; }
 
-    // Skip the helper namespace's private url_encode — duplicate a minimal
-    // encoder here so this function stays independent of the anonymous
-    // namespace above. Keeps the public API self-contained.
-    auto enc = [](const char *in) {
-        static const char hex[] = "0123456789ABCDEF";
-        std::string r;
-        for (const unsigned char *p = (const unsigned char *)in; *p; ++p) {
-            unsigned char c = *p;
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                (c >= '0' && c <= '9') || c == '-' || c == '_' ||
-                c == '.' || c == '~') {
-                r.push_back((char)c);
-            } else {
-                r.push_back('%');
-                r.push_back(hex[c >> 4]);
-                r.push_back(hex[c & 0xF]);
-            }
-        }
-        return r;
-    };
-
     char url[384];
     snprintf(url, sizeof(url),
         "https://geocoding-api.open-meteo.com/v1/search?name=%s&count=10&format=json",
-        enc(query).c_str());
+        hal::url_encode(query).c_str());
 
     std::string body;
     if (!hw_http_get_string(url, body, &err)) return false;

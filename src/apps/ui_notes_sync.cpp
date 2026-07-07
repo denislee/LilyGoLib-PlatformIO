@@ -41,6 +41,7 @@
 #include "../hal/notes_crypto.h"
 #include "../hal/secrets.h"
 #include "../hal/hub.h"
+#include "../hal/str_encode.h"
 #include "../core/app.h"
 #include "../core/app_manager.h"
 #include "../core/system.h"
@@ -57,7 +58,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <Preferences.h>
-#include <mbedtls/base64.h>
 #include "../core/scoped_lock.h"
 extern "C" {
 #include "cJSON.h"
@@ -136,54 +136,6 @@ static void purge_legacy_plaintext_token() {
 #ifdef ARDUINO
 static void scrub_string(std::string &s);
 #endif
-
-// --- base64 (mbedtls) -----------------------------------------------------
-
-#ifdef ARDUINO
-static bool b64_encode(const uint8_t *data, size_t len, std::string &out)
-{
-    size_t olen = 0;
-    // Probe first to size the buffer — mbedtls writes the required length
-    // into olen when dst is NULL/undersized.
-    mbedtls_base64_encode(nullptr, 0, &olen, data, len);
-    out.resize(olen);
-    size_t written = 0;
-    int rc = mbedtls_base64_encode((unsigned char *)&out[0], out.size(),
-                                   &written, data, len);
-    if (rc != 0) { out.clear(); return false; }
-    // The "written" count includes the null terminator space, but the
-    // returned byte count does not — resize to the actual encoded bytes.
-    out.resize(written);
-    return true;
-}
-#endif
-
-// Minimal JSON string escaper — only the characters JSON forbids verbatim
-// appear in our payloads (paths, commit messages, base64). Control bytes
-// never occur inside a commit message here, but escape them to be safe.
-static std::string json_escape(const std::string &in)
-{
-    std::string out;
-    out.reserve(in.size() + 8);
-    for (char c : in) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if ((unsigned char)c < 0x20) {
-                    char b[8];
-                    snprintf(b, sizeof(b), "\\u%04x", (unsigned char)c);
-                    out += b;
-                } else {
-                    out.push_back(c);
-                }
-        }
-    }
-    return out;
-}
 
 // --- state ----------------------------------------------------------------
 
@@ -312,9 +264,9 @@ static bool try_hub_sync(const Config &cfg,
     // would warrant chunking.
     std::string body;
     body.reserve(256 + 1024 * local.size());
-    body += "{\"repo\":\"";   body += json_escape(cfg.repo);   body += "\",";
-    body += "\"branch\":\""; body += json_escape(cfg.branch); body += "\",";
-    body += "\"token\":\"";  body += json_escape(cfg.token);  body += "\",";
+    body += "{\"repo\":\"";   body += hal::json_escape(cfg.repo);   body += "\",";
+    body += "\"branch\":\""; body += hal::json_escape(cfg.branch); body += "\",";
+    body += "\"token\":\"";  body += hal::json_escape(cfg.token);  body += "\",";
     body += "\"files\":[";
     bool first = true;
     int read_skipped = 0;
@@ -325,10 +277,10 @@ static bool try_hub_sync(const Config &cfg,
                              : hw_read_sd_bytes_raw(abs.c_str(), bytes);
         if (!ok) { read_skipped++; continue; }
         std::string b64;
-        if (!b64_encode(bytes.data(), bytes.size(), b64)) { read_skipped++; continue; }
+        if (!hal::base64_encode(bytes.data(), bytes.size(), b64)) { read_skipped++; continue; }
         if (!first) body.push_back(',');
         first = false;
-        body += "{\"name\":\"";        body += json_escape(n.name); body += "\",";
+        body += "{\"name\":\"";        body += hal::json_escape(n.name); body += "\",";
         body += "\"content_b64\":\""; body += b64;                  body += "\"}";
     }
     body += "]}";

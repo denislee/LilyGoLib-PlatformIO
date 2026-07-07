@@ -4,11 +4,11 @@
  */
 #include "hub.h"
 #include "wireless.h"
+#include "str_encode.h"
 
 #ifdef ARDUINO
 #include <Arduino.h>
 #include <Preferences.h>
-#include <mbedtls/base64.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #endif
@@ -203,47 +203,6 @@ void hub_set_url(const char *url)
 #endif
 }
 
-#ifdef ARDUINO
-namespace {
-bool b64_encode_str(const uint8_t *data, size_t len, std::string &out)
-{
-    size_t olen = 0;
-    mbedtls_base64_encode(nullptr, 0, &olen, data, len);
-    out.resize(olen);
-    size_t written = 0;
-    int rc = mbedtls_base64_encode((unsigned char *)&out[0], out.size(),
-                                   &written, data, len);
-    if (rc != 0) { out.clear(); return false; }
-    out.resize(written);
-    return true;
-}
-
-std::string json_escape_str(const std::string &in)
-{
-    std::string out;
-    out.reserve(in.size() + 8);
-    for (char c : in) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if ((unsigned char)c < 0x20) {
-                    char b[8];
-                    snprintf(b, sizeof(b), "\\u%04x", (unsigned char)c);
-                    out += b;
-                } else {
-                    out.push_back(c);
-                }
-        }
-    }
-    return out;
-}
-} // namespace
-#endif
-
 HalError hub_upload_note(const char *name, const uint8_t *bytes, size_t len)
 {
 #ifdef ARDUINO
@@ -253,11 +212,11 @@ HalError hub_upload_note(const char *name, const uint8_t *bytes, size_t len)
     if (!hw_get_wifi_connected())       return HalError::WifiOffline;
 
     std::string b64;
-    if (!b64_encode_str(bytes, len, b64)) return HalError::InternalError;
+    if (!base64_encode(bytes, len, b64)) return HalError::InternalError;
 
     std::string body;
     body.reserve(64 + b64.size());
-    body += "{\"name\":\"";        body += json_escape_str(name); body += "\",";
+    body += "{\"name\":\"";        body += json_escape(name); body += "\",";
     body += "\"content_b64\":\""; body += b64;                   body += "\"}";
 
     std::string url = base + "/api/notes/upload";
