@@ -17,7 +17,7 @@ where the stale report would have caused a regression.
 | § | Item | Status |
 |---|---|---|
 | 1.1 | Whole dead files (`ui_power.cpp`, `test_sleep.cpp`, `keyboard_audio.h`) | ✅ done |
-| 1.2 | ~60 never-called `hw_*` functions | ◐ partial — storage/display/power/wireless-BLE/4×system/sensors-peripherals/core-apps/UI-helpers+system-UI-chain done; **audio, radio remain** (both HIGH-risk) |
+| 1.2 | ~60 never-called `hw_*` functions | ◐ partial — storage/display/power/wireless-BLE/4×system/sensors-peripherals/core-apps/UI-helpers+system-UI-chain/**audio** done; **radio remains** (HIGH-risk) |
 | 1.3 | Stale declarations (no definition) | ✅ done (5 removed) |
 | 1.4 | Dead `#ifdef` branches | ◐ partial — `USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER` gone; **rest remain** (incl. `USING_LED_INDICATOR` bug candidate) |
 | 1.5 | Dead types/fields/globals | ☐ not started |
@@ -158,14 +158,18 @@ branch still referencing a renamed parameter). Do not skip it.
     non-compiled tree — ignore it.)
 
 ### HIGH risk — do as a DEDICATED pass, ideally with a hardware smoke-test
-- **audio FFT subsystem** (`audio.cpp`, `types.h`): `hw_set_mic_start`/`hw_set_mic_stop`/
-  `hw_audio_get_fft_data` + `process_channel_fft` + the PSRAM FFT buffers (`i2s_buffer`,
-  `left_channel`, `right_channel`, `magnitudes`) + the `FFTData`/`FFT_SIZE`/`SAMPLE_RATE`/
-  `FREQ_BANDS` types (§1.5). Move as ONE unit — buffers, init (`ps_malloc`), and types
-  are interlocked. (Its declaration is still in `audio.h`; only the two
-  `hw_set_audio_effect_*` decls were removed in §1.3.)
-- **audio music-list chain** (`audio.cpp`): `hw_get_filesystem_music` + its static chain
-  `listDir`/`hw_fat_list`/`hw_sd_list`; `hw_set_sd_music_pause`/`hw_set_sd_music_resume`.
+- ~~**audio FFT subsystem**~~ ✅ done (compile + emulator verified; **not** yet
+  hardware-smoke-tested — the mic/FFT path never runs, so risk is low). Removed
+  `hw_set_mic_start`/`hw_set_mic_stop`/`hw_audio_get_fft_data` + `process_channel_fft` +
+  all six PSRAM buffers + the `FFTData`/`FFT_SIZE`/`SAMPLE_RATE`/`FREQ_BANDS` types
+  (`types.h`, §1.5) as one unit. Also dropped the now-orphaned `dsps_fft2r.h`/
+  `dsps_wind_hann.h` esp-dsp includes, the orphaned `<math.h>` include, and the
+  unused `FILESYSTEM` macro. The recording path (`hw_rec_*`, codec open/close) is
+  independent and untouched.
+- ~~**audio music-list chain**~~ ✅ done — removed `hw_get_filesystem_music` + its
+  static chain `listDir`/`hw_fat_list`/`hw_sd_list` and `hw_set_sd_music_pause`/
+  `hw_set_sd_music_resume`. `AudioParams_t`/`audio_source_type_t` kept (live in
+  `hw_set_sd_music_play`/`hw_sd_play`).
 - **radio** (`radio_common.cpp`, `radio.cpp`, `radio/nrf2401.cpp`, per-chip files):
   the biggest and riskiest. `hw_set_radio_listening`/`hw_set_radio_tx`/`hw_get_radio_rx`/
   `radio_transmit`; the whole NRF24 API except `hw_nrf24_begin`; `hw_set_usb_rf_switch`;

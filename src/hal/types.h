@@ -263,13 +263,3 @@ typedef enum {
     HW_TRACKBALL_DIR_RIGHT
 } hw_trackball_dir;
 
-// FFT Configuration
-#define FFT_SIZE 512
-#define SAMPLE_RATE 16000
-#define FREQ_BANDS 16
-
-typedef struct {
-    float left_bands[FREQ_BANDS];
-    float right_bands[FREQ_BANDS];
-} FFTData;
-

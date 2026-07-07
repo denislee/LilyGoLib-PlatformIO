@@ -1,6 +1,6 @@
 /**
  * @file      audio.cpp
- * @brief     Audio player (MP3 task), microphone, FFT, file listing.
+ * @brief     Audio player (MP3 task), microphone recording.
  */
 #include "audio.h"
 #include "internal.h"
@@ -8,20 +8,11 @@
 #include "../core/spi_lock.h"
 
 #ifdef ARDUINO
-#include <math.h>
 #include <LilyGoLib.h>
 #include <SD.h>
 #include <FFat.h>
 #include <Esp.h>
 #include <mp3dec.h>
-#include "dsps_fft2r.h"
-#include "dsps_wind_hann.h"
-#endif
-
-#if defined(HAS_SD_CARD_SOCKET)
-#define FILESYSTEM                  SD
-#else
-#define FILESYSTEM                  FFat
 #endif
 
 // --- Player task / event group ----------------------------------------
@@ -338,155 +329,6 @@ void hw_audio_deinit_task()
 #endif
 }
 
-// --- FFT analysis -----------------------------------------------------
-
-#ifdef ARDUINO
-static int16_t *i2s_buffer = NULL;
-static float *fft_input = NULL;
-static float *window = NULL;
-static int16_t *left_channel = NULL;
-static int16_t *right_channel = NULL;
-static float *magnitudes = NULL;
-static int read_count = 0;
-
-static void process_channel_fft(int16_t *channel_data, float *bands, float freq_per_bin)
-{
-    if (!fft_input || !window || !magnitudes) return;
-
-    for (int i = 0; i < FFT_SIZE; i++) {
-        fft_input[2 * i] = (float)channel_data[i] * 3.0f / 32768.0f * window[i];
-        fft_input[2 * i + 1] = 0;
-    }
-
-    dsps_fft2r_fc32_aes3(fft_input, FFT_SIZE);
-    dsps_bit_rev_fc32(fft_input, FFT_SIZE);
-    dsps_cplx2reC_fc32(fft_input, FFT_SIZE);
-
-    for (int i = 0; i < FFT_SIZE / 2; i++) {
-        float real = fft_input[2 * i];
-        float imag = fft_input[2 * i + 1];
-        magnitudes[i] = sqrt(real * real + imag * imag);
-
-        if (magnitudes[i] < 0.00001) magnitudes[i] = 0.00001;
-        magnitudes[i] = 20 * log10(magnitudes[i]);
-        magnitudes[i] = (magnitudes[i] + 40) / 40;
-        magnitudes[i] = constrain(magnitudes[i], 0, 1);
-    }
-
-    int bin_count = (FFT_SIZE / 2) / FREQ_BANDS;
-    memset(bands, 0, FREQ_BANDS * sizeof(float));
-
-    for (int band = 0; band < FREQ_BANDS; band++) {
-        int start_bin = band * bin_count;
-        int end_bin = start_bin + bin_count;
-        if (end_bin > FFT_SIZE / 2) end_bin = FFT_SIZE / 2;
-
-        float sum = 0;
-        int count = 0;
-        for (int bin = start_bin; bin < end_bin; bin++) {
-            sum += magnitudes[bin];
-            count++;
-        }
-
-        if (count > 0) {
-            bands[band] = sum / count;
-        }
-    }
-}
-#endif /*ARDUINO*/
-
-void hw_audio_get_fft_data(FFTData *fft_data)
-{
-#ifdef ARDUINO
-    if (!i2s_buffer || !left_channel || !right_channel) return;
-
-    float freq_per_bin = (float)SAMPLE_RATE / FFT_SIZE;
-
-#if defined(USING_PDM_MICROPHONE)
-    instance.mic.readBytes((char *)i2s_buffer, FFT_SIZE * 2 * sizeof(int16_t));
-#elif defined(USING_AUDIO_CODEC)
-    if (HW_CODEC_ONLINE & hw_get_device_online()) {
-        instance.codec.read((uint8_t *)i2s_buffer, FFT_SIZE * 2 * sizeof(int16_t));
-    } else {
-        return;
-    }
-#endif
-
-    read_count++;
-
-    for (int i = 0; i < FFT_SIZE; i++) {
-        left_channel[i] = i2s_buffer[2 * i];
-        right_channel[i] = i2s_buffer[2 * i + 1];
-    }
-
-    process_channel_fft(left_channel, fft_data->left_bands, freq_per_bin);
-    process_channel_fft(right_channel, fft_data->right_bands, freq_per_bin);
-#endif /*ARDUINO*/
-}
-
-bool hw_set_mic_start()
-{
-#ifdef ARDUINO
-    int ret ;
-
-#ifdef USING_AUDIO_CODEC
-    if (HW_CODEC_ONLINE & hw_get_device_online()) {
-        ret = instance.codec.open(16, instance.getCodecInputChannels(), 16000);
-        if (ret < 0) {
-            log_e("Audio codec open failed:0x%X", ret);
-            return false;
-        }
-    } else {
-        return false;
-    }
-#endif /*USING_AUDIO_CODEC*/
-
-    // Allocate FFT buffers in PSRAM
-    if (!i2s_buffer) i2s_buffer = (int16_t *)ps_malloc(FFT_SIZE * 2 * sizeof(int16_t));
-    if (!fft_input) fft_input = (float *)heap_caps_aligned_alloc(16, FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_SPIRAM);
-    if (!window) window = (float *)heap_caps_aligned_alloc(16, FFT_SIZE * sizeof(float), MALLOC_CAP_SPIRAM);
-    if (!left_channel) left_channel = (int16_t *)ps_malloc(FFT_SIZE * sizeof(int16_t));
-    if (!right_channel) right_channel = (int16_t *)ps_malloc(FFT_SIZE * sizeof(int16_t));
-    if (!magnitudes) magnitudes = (float *)ps_malloc((FFT_SIZE / 2) * sizeof(float));
-
-    if (!i2s_buffer || !fft_input || !window || !left_channel || !right_channel || !magnitudes) {
-        log_e("FFT buffer allocation failed!");
-        return false;
-    }
-
-    ret = dsps_fft2r_init_fc32(NULL, FFT_SIZE);
-    if (ret != ESP_OK) {
-        log_e("fft init failed = %i\n", ret);
-        return false;
-    }
-
-    dsps_wind_hann_f32(window, FFT_SIZE);
-
-#endif /*ARDUINO*/
-
-    return true;
-}
-
-void hw_set_mic_stop()
-{
-#ifdef ARDUINO
-#ifdef USING_AUDIO_CODEC
-    if (HW_CODEC_ONLINE & hw_get_device_online()) {
-        instance.codec.close();
-    }
-#endif
-    dsps_fft2r_deinit_fc32();
-
-    // Free buffers
-    if (i2s_buffer) { free(i2s_buffer); i2s_buffer = NULL; }
-    if (fft_input) { free(fft_input); fft_input = NULL; }
-    if (window) { free(window); window = NULL; }
-    if (left_channel) { free(left_channel); left_channel = NULL; }
-    if (right_channel) { free(right_channel); right_channel = NULL; }
-    if (magnitudes) { free(magnitudes); magnitudes = NULL; }
-#endif /*ARDUINO*/
-}
-
 // --- Recording: WAV / 16 kHz / 16-bit / mono → SD card ----------------
 
 bool hw_mic_available()
@@ -770,93 +612,7 @@ uint8_t hw_get_volume()
 #endif //USING_AUDIO_CODEC
 }
 
-// --- File listing / playback control ----------------------------------
-
-#ifdef ARDUINO
-static void listDir(std::vector<AudioParams_t> &list, fs::FS &fs, const char *dirname, uint8_t levels, audio_source_type_t source_type)
-{
-    Serial.printf("Listing directory: %s\r\n", dirname);
-
-    File root = fs.open(dirname);
-    if (!root) {
-        Serial.println("- failed to open directory");
-        return;
-    }
-    if (!root.isDirectory()) {
-        Serial.println(" - not a directory");
-        return;
-    }
-
-    File file = root.openNextFile();
-    while (file) {
-        if (file.isDirectory()) {
-            Serial.print("  DIR : ");
-            Serial.println(file.name());
-            if (levels) {
-                std::string next_dir = dirname;
-                if (next_dir != "/") next_dir += "/";
-                next_dir += file.name();
-                listDir(list, fs, next_dir.c_str(), levels - 1, source_type);
-            }
-        } else {
-            String filename = file.name();
-            if (filename.endsWith(".mp3") || filename.endsWith(".wav")) {
-                list.push_back({source_type, filename.c_str()});
-            }
-
-            Serial.print("  FILE: ");
-            Serial.print(file.name());
-            Serial.print("\tSIZE: ");
-            Serial.println(file.size());
-        }
-        file.close();
-        file = root.openNextFile();
-    }
-    root.close();
-}
-
-static void hw_fat_list(std::vector<AudioParams_t> &list, const char *dirname, uint8_t levels)
-{
-    Serial.printf("FFAT Listing directory: %s\n", dirname);
-    listDir(list, FFat, dirname, levels, AUDIO_SOURCE_FATFS);
-}
-
-static bool hw_sd_list(std::vector<AudioParams_t> &list, const char *dirname, uint8_t levels)
-{
-#if defined(HAS_SD_CARD_SOCKET)
-    core::ScopedSpiLock lock;
-    if (instance.installSD()) {
-        Serial.println("SD Card mount success.");
-    } else {
-        Serial.println("SD Card mount failed.");
-        return false;
-    }
-    listDir(list, SD, dirname, levels, AUDIO_SOURCE_SDCARD);
-#endif
-    return true;
-}
-#endif
-
-void hw_get_filesystem_music(std::vector<AudioParams_t> &list)
-{
-    list.clear();
-
-#if defined(ARDUINO)
-
-#if defined(HAS_SD_CARD_SOCKET)
-    Serial.println("\n================== SD Music List ==================");
-    hw_sd_list(list, "/", 0);
-#endif
-
-    Serial.println("\n================== FFat Music List ==================");
-    hw_fat_list(list, "/", 0);
-
-#else
-    list.push_back({AUDIO_SOURCE_FATFS, "/abc.mp3"});
-    list.push_back({AUDIO_SOURCE_FATFS, "/ccc.mp3"});
-    list.push_back({AUDIO_SOURCE_FATFS, "/ddd.mp3"});
-#endif
-}
+// --- Playback control -------------------------------------------------
 
 void hw_set_sd_music_play(audio_source_type_t source_type, const char *filename)
 {
@@ -892,22 +648,6 @@ void hw_set_play_stop()
             delay(2);
         }
     }
-#endif
-}
-
-void hw_set_sd_music_pause()
-{
-    printf("playerTaskHandler pause!\n");
-#ifdef ARDUINO
-    xEventGroupClearBits(playerEvent, PLAYER_PLAY);
-#endif
-}
-
-void hw_set_sd_music_resume()
-{
-    printf("playerTaskHandler resume!\n");
-#ifdef ARDUINO
-    xEventGroupSetBits(playerEvent, PLAYER_PLAY);
 #endif
 }
 
