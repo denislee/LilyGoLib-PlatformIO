@@ -6,12 +6,12 @@ before removing anything else. Last updated **2026-07-07**.
 
 > **Milestone: §1.1–§1.5, §1.7 and now §1.4 are essentially complete** (dead files,
 > ~60 never-called `hw_*` functions, dead types/globals/redundant-decls, dead `#ifdef`
-> branches). Deliberate leftovers, each with a documented reason: the write-only
+> branches), and the §3 repo-hygiene (untracked the ~96 MB `firmware/*.bin`, pruned all
+> `src/images/` orphans). Deliberate leftovers, each with a documented reason: the write-only
 > `monitor_params_t` gauge fields (§1.5, deferred to §2.12 — removing them removes live
 > per-second I2C reads); the `hw_devices[]` name-table slots and non-compiled chip-file
 > branches (§1.4, intentional structure). What's left is §1.6 (judgement), the remaining
-> §2 perf items, §3 hygiene (untrack `firmware/*.bin`, prune `src/images/`), and the §4 Go
-> server. See [Suggested next order](#suggested-next-order).
+> §2 perf items, and the §4 Go server. See [Suggested next order](#suggested-next-order).
 >
 > ⚠️ **Two removals are compile+emulator-verified only, NOT hardware-tested** — the
 > **radio** and **audio-FFT** passes. Before trusting them on a device, run the
@@ -57,10 +57,10 @@ wrong: `ui_lock`/`ui_unlock`).
 | 2.18 | Consolidate duplicated helpers | ☐ not started (cleanup) |
 | 2.19 | Telegram notif-toggle NVS cache | ✅ done |
 | 3.1 | Font-picker trimming (~250–300 KB flash) | ◐ Montserrat 34–46 disabled; **picker-cap product decision remains** |
-| 3.2 | Unused image sources | ✅ compiled `img_*.c` done; **25 PNG/JPG source orphans in `src/images/` remain** (not compiled, pure hygiene) |
+| 3.2 | Unused image sources | ✅ done — removed **all 32** `src/images/*.png|jpg` (verified: zero `LV_IMG_DECLARE`/`&img_`/`lv_image_dsc_t` refs in compiled `src/`; no build/script references the dir; every file is recoverable from the vendor `examples/factory/images/` tree). Report said "25"; the earlier compiled-`img_*.c` removal had already orphaned the other 7. |
 | 3.3 | Drop 3 dead `lib_deps` | ✅ done |
 | 3.4 | Disable LVGL demos/examples + unused fonts | ✅ done |
-| 3.5 | Untrack `compile_commands.json` | ✅ done; **`lib/LilyGoLib/firmware/*.bin` (~96 MB) still tracked** |
+| 3.5 | Untrack `compile_commands.json` | ✅ done; **`lib/LilyGoLib/firmware/*.bin` (6 × 16 MB) now untracked** (`git rm --cached` + `.gitignore`; files kept on disk). ⚠️ still present in git *history* — a full clone is unchanged until a history rewrite (filter-repo/BFG) is run. |
 | 4 | Go server (lilyhub) A1–B6 | ☐ not started (separate codebase, `server/`) |
 
 Legend: ✅ done · ◐ partial · ⊘ deferred · ☐ not started
@@ -341,8 +341,9 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 
 ## Repo-hygiene leftovers (safe, not yet done)
 
-- `lib/LilyGoLib/firmware/*.bin` — six ~16 MB factory images (~96 MB) tracked in git (§3.5).
-- `src/images/` — 25 of 32 PNG/JPG sources are orphans never generated into `.c` (§3.2).
+- ~~`lib/LilyGoLib/firmware/*.bin` (~96 MB tracked)~~ ✅ untracked (§3.5). Still in git
+  *history* — clone size only shrinks after a history rewrite (out of scope, disruptive).
+- ~~`src/images/` PNG/JPG orphans~~ ✅ all 32 removed (§3.2).
 - `test/test_desktop/test_main.cpp` — 26-line `2+2` placeholder (§3.5).
 - Duplicated helpers to consolidate (§2.18): `url_encode` twice within `ui_weather.cpp`;
   `json_escape`/`b64_encode` duplicated between `ui_chat.cpp` and `hub.cpp`; NVS
@@ -352,16 +353,14 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 
 ## Suggested next order
 
-**All of §1.1–§1.5 and §1.7 are DONE** (the §1.4/§1.5 leftovers are deliberate, documented
-in Deferred). What remains, best-first:
+**All of §1.1–§1.5, §1.7, and the §3 repo-hygiene (§3.2/§3.5) are DONE** (the §1.4/§1.5
+leftovers are deliberate, documented in Deferred). What remains, best-first:
 
-1. **Repo-hygiene (§3.5/§3.2)** — untrack `lib/LilyGoLib/firmware/*.bin` (~96 MB) and
-   prune the 25 orphan PNG/JPG sources in `src/images/`. Zero code risk; big repo-size win.
-2. **§1.6** — judgement calls (LVGL v8 theme `#else` branch is safe to drop since every
+1. **§1.6** — judgement calls (LVGL v8 theme `#else` branch is safe to drop since every
    env pins v9; keep `HalResult`/`HalStatus` unless the migration is abandoned).
-3. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
+2. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
    understood — see Deferred; the write-only `monitor_params_t` §1.5 fields ride along here),
    `§2.13` (audio busy-wait), `§2.17`, `§2.18` (helper dedup).
-4. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
-5. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
+3. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
+4. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
    to validate the radio/audio passes, then optionally do the follow-up trims it lists.
