@@ -5,10 +5,12 @@ been applied**, **what remains**, and — most importantly — **how to verify s
 before removing anything else. Last updated **2026-07-07**.
 
 > **Milestone: the entire §1.2 dead-function sweep (~60 never-called `hw_*`
-> functions, all domains) is COMPLETE.** §1.1/§1.3 are also done. What's left is
-> §1.4/§1.5/§1.6/§1.7 (dead types/globals/ifdefs/decls), the remaining §2 perf items,
-> §3 hygiene (untrack `firmware/*.bin`, prune `src/images/`), and the §4 Go server.
-> See [Suggested next order](#suggested-next-order).
+> functions, all domains) is COMPLETE.** §1.1/§1.3 are also done, and §1.5/§1.7 are
+> now mostly done (dead types/globals/redundant-decls — the only §1.5 leftover is the
+> write-only `monitor_params_t` gauge fields, deliberately deferred to §2.12 because
+> removing them removes live per-second I2C reads). What's left is §1.4 (dead ifdefs),
+> §1.6 (judgement), the remaining §2 perf items, §3 hygiene (untrack `firmware/*.bin`,
+> prune `src/images/`), and the §4 Go server. See [Suggested next order](#suggested-next-order).
 >
 > ⚠️ **Two removals are compile+emulator-verified only, NOT hardware-tested** — the
 > **radio** and **audio-FFT** passes. Before trusting them on a device, run the
@@ -31,9 +33,9 @@ wrong: `ui_lock`/`ui_unlock`).
 | 1.2 | ~60 never-called `hw_*` functions | ✅ done — all groups removed (storage/display/power/wireless-BLE/system/sensors-peripherals/core-apps/UI-helpers+system-UI-chain/audio/radio). Radio done conservatively: dead API removed, both live boot ISRs kept intact; non-compiled chip trios left as dead source (see radio note below). |
 | 1.3 | Stale declarations (no definition) | ✅ done (5 removed) |
 | 1.4 | Dead `#ifdef` branches | ◐ partial — `USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER`, `RADIO_FIXED_FREQUENCY` gone (cleared as side effects of §1.2); **rest remain** (`ARDUINO_T_DECK_V2`, `POLLING`, `USING_TRACKBALL`, `USING_SI473X_RADIO`, `USING_QMI8658_SENSOR`, `USING_LED_INDICATOR` bug candidate, …) |
-| 1.5 | Dead types/fields/globals | ◐ partial — FFT types (`FFTData`/`FFT_SIZE`/`SAMPLE_RATE`/`FREQ_BANDS`) removed with the audio pass; **rest remain** (`hw_trackball_dir`, `keyboard_type_t`, write-only `monitor_params_t` fields, `event_define.h` NFC block, once-assigned `main_screen`/`menu_panel`/`app_panel`/`app_g` globals, …) |
+| 1.5 | Dead types/fields/globals | ◐ mostly done — FFT types (audio pass) + this session `hw_trackball_dir`, `keyboard_type_t`/`DEVICE_KEYBOARD_TYPE`, `event_define.h` NFC block (`nfcData_t`/`app_event_t`/`app_audio_play_t`/`ndefType*` + dead enum values `APP_EVENT_PLAY_KEY`/`APP_NFC_EVENT`), `NFC_TIPS_STRING`, `RTC_DATA_ATTR` shim, once-assigned `main_screen`/`menu_panel`/`app_panel`/`app_g` globals, `wifi_scan_params_t.bssid`. **Only remaining: the 14 write-only `monitor_params_t` gauge/voltage fields + `monitor_params_type_t`/`type` — deferred to §2.12 (removing them removes live per-second I2C gauge reads).** |
 | 1.6 | LIKELY-dead (LVGL v8 theme branch, `HalResult`) | ☐ not started (needs judgement) |
-| 1.7 | Redundant declarations | ☐ not started |
+| 1.7 | Redundant declarations | ◐ mostly done — `isinMenu` (already gone via §1.2), `notes_crypto_path_is_protected` (kept the owning decl in `notes_path.h`, dropped the dup in `notes_crypto.h`, added `notes_path.h` include to `ui_file_browser.cpp`), `tg_get_unread_count` (menu_glance.cpp now includes `app_registry.h` instead of re-declaring). **Remaining: factory.ino timezone externs — deferred (see below).** |
 | 2.1 | Telegram poll/send off the LVGL thread | ✅ done |
 | 2.2 | Hub config + reachability caching | ✅ done (earlier) |
 | 2.3 | PBKDF2 key cache | ✅ done (earlier) |
@@ -73,11 +75,13 @@ Legend: ✅ done · ◐ partial · ⊘ deferred · ☐ not started
   deletions are build-time/hygiene wins, not flash.
 - **Internal RAM −4.6 KB**: MP3 decode frame buffer moved to PSRAM (`f6d90ed`) —
   94,232 → 89,648 B used. This is the scarce heap WiFi/TLS contend for.
-- Current image: RAM 27.4 % (89,656 B) · Flash 70.5 % (2,955,369 B) — **unchanged by
-  the §1.2 sweep**: everything removed was already `--gc-sections`-stripped, so those
+- Current image: RAM 27.4 % (89,624 B) · Flash 70.4 % (2,953,685 B) — **essentially
+  unchanged by the §1.2 and §1.5/§1.7 sweeps**: everything removed was already
+  `--gc-sections`-stripped (or an unreferenced macro/type contributing 0 bytes), so those
   deletions are build-time + source-hygiene wins, not flash/RAM.
 - **Source reduction from the §1.2 completion this session: ~1,200 lines** across
   sensors/peripherals, core/apps, UI helpers, audio, and radio (see commits below).
+  The §1.5/§1.7 pass removed a further ~90 lines of dead types/globals + redundant decls.
 
 The big *perceptual* wins are the §2.1/§2.4/§2.6 telegram+chat changes: the UI no
 longer freezes ~1–2 s per poll or per voice-memo send.
@@ -97,6 +101,15 @@ Dead code (§1.2) — this session, one commit per domain:
 - `f35abad` UI helpers + system-UI chain (widget factories, wifi-process-bar chain)
 - `4c8a563` audio (FFT subsystem + music-list chain)
 - `b010665` radio (dead TX/RX + NRF24 API)
+Dead code (§1.5/§1.7) — dead types/globals + redundant declarations (this session):
+- `hw_trackball_dir`, `keyboard_type_t`+`DEVICE_KEYBOARD_TYPE`, `wifi_scan_params_t.bssid`
+  (types.h + wireless.cpp memcpy), `event_define.h` NFC-type block + dead enum values,
+  `NFC_TIPS_STRING` (×3 boards), `RTC_DATA_ATTR` emulator shim, once-assigned globals
+  `main_screen`/`menu_panel`/`app_panel`/`app_g` (ui_define.h + core/system.cpp).
+- §1.7: `notes_crypto_path_is_protected` dup decl removed from `notes_crypto.h` (kept in
+  the owning `notes_path.h`; `ui_file_browser.cpp` now includes it directly);
+  `tg_get_unread_count` local re-decl in `menu_glance.cpp` replaced by an `app_registry.h`
+  include. Verified: HW + emulator + 19/19 native tests.
 Docs/hygiene this session: `b8906cd` (track `OPTIMIZATION_REPORT.md`),
 `880cb4c` (gitignore generated `src/*.ino.cpp`).
 
@@ -275,6 +288,27 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
   `localtime_r` instead of an I2C RTC read every second. **Blocker: confirm the RTC is not
   the post-deep-sleep source of truth** before switching, or the clock can show wrong time
   after wake. Needs the wake/time-seed flow understood (and ideally hardware).
+- **§1.5 `monitor_params_t` write-only fields** — the 14 gauge/voltage fields
+  (`type`, `charge_state`, `sys_voltage`, `battery_voltage`, `usb_voltage`,
+  `remainingCapacity`, `fullChargeCapacity`, `designCapacity`, `instantaneousCurrent`,
+  `standbyCurrent`, `averagePower`, `maxLoadCurrent`, `timeToEmpty`, `timeToFull`,
+  `ntc_state`) plus `monitor_params_type_t` are write-only (only `battery_percent`,
+  `is_charging`, and internally `battery_voltage` are read). **Left for the §2.12 gauge
+  sweep, not this dead-type pass:** each dead field is populated by a separate
+  `instance.gauge.*`/`instance.ppm.*`/`instance.pmu.*` register read inside
+  `hw_get_monitor_params` (`power.cpp`), executed every second. Removing the fields
+  therefore removes live per-second I2C traffic — a hardware-behaviour change that wants
+  a device to validate, so it belongs with §2.12 rather than a compile-verified sweep.
+  (`getFaultStatus()` is called for its clear-fault side effect and must be kept.)
+- **§1.7 factory.ino timezone externs** — `timezone_get_user_tz`/`timezone_fetch_offset`
+  (declared in the *private* `settings_internal.h`) and `timezone_get_user_posix` (no
+  header at all) are ad-hoc `extern`-declared in `factory.ino` and re-declared again in
+  `hal/gps_time_sync.cpp`. They are **functional, not dead** — the fix is consolidation
+  into a shared header, but that's blocked by a layering inversion: the functions are
+  *defined* in `ui_time_sync.cpp` (UI layer) yet *consumed* by `hal/gps_time_sync.cpp`
+  (HAL). A UI header included from HAL would formalise a HAL→UI dependency the layering
+  forbids; the clean fix is relocating the timezone logic to a neutral/HAL module first.
+  Deferred until that relocation is in scope.
 - **§1.6 `HalResult`/`HalStatus`** — referenced only by `test/test_hal_result`, but
   CLAUDE.md calls it the *preferred* error type for new code. Keep unless that migration is
   being abandoned.
@@ -298,23 +332,18 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 
 ## Suggested next order
 
-**§1.1–§1.3 and the whole §1.2 sweep (incl. audio + radio) are DONE.** What remains,
-best-first:
+**§1.1–§1.3, the whole §1.2 sweep (incl. audio + radio), and most of §1.5/§1.7 are
+DONE.** What remains, best-first:
 
-1. **§1.5 / §1.7** — dead types/fields/globals and redundant declarations. Best next
-   coding step: many now pair with functions already removed (e.g. `hw_trackball_dir`,
-   `keyboard_type_t`, the once-assigned `main_screen`/`menu_panel`/`app_panel`/`app_g`
-   globals, the write-only `monitor_params_t` fields, the `event_define.h` NFC block,
-   duplicate `isinMenu`/`notes_crypto_path_is_protected` decls). Same verified sweep;
-   watch for §1.5's tie-in with perf §2.12 (the write-only gauge fields).
-2. **§1.4 remaining dead `#ifdef` branches** — mostly mechanical, but **`USING_LED_INDICATOR`
+1. **§1.4 remaining dead `#ifdef` branches** — mostly mechanical, but **`USING_LED_INDICATOR`
    is a functional-bug decision, not just dead code** (see Deferred). Make that call first.
-3. **Repo-hygiene (§3.5/§3.2)** — untrack `lib/LilyGoLib/firmware/*.bin` (~96 MB) and
+2. **Repo-hygiene (§3.5/§3.2)** — untrack `lib/LilyGoLib/firmware/*.bin` (~96 MB) and
    prune the 25 orphan PNG/JPG sources in `src/images/`. Zero code risk; big repo-size win.
-4. **§1.6** — judgement calls (LVGL v8 theme `#else` branch is safe to drop since every
+3. **§1.6** — judgement calls (LVGL v8 theme `#else` branch is safe to drop since every
    env pins v9; keep `HalResult`/`HalStatus` unless the migration is abandoned).
-5. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
-   understood — see Deferred), `§2.13` (audio busy-wait), `§2.17`, `§2.18` (helper dedup).
-6. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
-7. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
+4. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
+   understood — see Deferred; the write-only `monitor_params_t` §1.5 fields ride along here),
+   `§2.13` (audio busy-wait), `§2.17`, `§2.18` (helper dedup).
+5. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
+6. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
    to validate the radio/audio passes, then optionally do the follow-up trims it lists.
