@@ -2,7 +2,7 @@
 
 Companion to `OPTIMIZATION_REPORT.md` (the analysis). This file tracks **what has
 been applied**, **what remains**, and — most importantly — **how to verify safely**
-before removing anything else. Last updated **2026-07-07**.
+before removing anything else. Last updated **2026-07-07** (§2.12 clock + gauge-TTL done).
 
 > **Milestone: the entire §1 dead-code audit (§1.1–§1.7) and the §3 repo-hygiene are
 > complete.** §1.1 dead files, §1.2 ~60 never-called `hw_*` functions, §1.3 stale decls,
@@ -37,7 +37,7 @@ wrong: `ui_lock`/`ui_unlock`).
 | 1.2 | ~60 never-called `hw_*` functions | ✅ done — all groups removed (storage/display/power/wireless-BLE/system/sensors-peripherals/core-apps/UI-helpers+system-UI-chain/audio/radio). Radio done conservatively: dead API removed, both live boot ISRs kept intact; non-compiled chip trios left as dead source (see radio note below). |
 | 1.3 | Stale declarations (no definition) | ✅ done (5 removed) |
 | 1.4 | Dead `#ifdef` branches | ✅ mostly done — earlier side effects of §1.2 (`USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER`, `RADIO_FIXED_FREQUENCY`), plus this session `POLLING` (2 blocks in `nfc_reader.cpp`, kept the live `#else`), `ARDUINO_T_DECK_V2` (`display.cpp` keyboard enable/disable), `USING_TRACKBALL` (whole self-contained block + type aliases in `system.cpp`), and **`USING_LED_INDICATOR` — resolved by REMOVING the phantom slider** (user decision): dropped the LED slider + `led_brightness_cb` (`settings_display.cpp`), `hw_set_led_backlight`/`hw_has_indicator_led` (`display.{cpp,h}`), `user_setting_params_t.led_indicator_level` + `HW_LED_INDIC_ONLINE` (`types.h`), and bumped `SETTINGS_VERSION` 10→11. **Left by design:** `USING_SI473X_RADIO`/`USING_QMI8658_SENSOR` are positional `hw_devices[]` name-table slots where `#ifdef NAME #else ""` is intentional self-documenting structure (see Deferred); `ARDUINO_T_DECK_V2` in the non-compiled `lr1121.cpp` (chip-file discipline). |
-| 1.5 | Dead types/fields/globals | ◐ mostly done — FFT types (audio pass) + this session `hw_trackball_dir`, `keyboard_type_t`/`DEVICE_KEYBOARD_TYPE`, `event_define.h` NFC block (`nfcData_t`/`app_event_t`/`app_audio_play_t`/`ndefType*` + dead enum values `APP_EVENT_PLAY_KEY`/`APP_NFC_EVENT`), `NFC_TIPS_STRING`, `RTC_DATA_ATTR` shim, once-assigned `main_screen`/`menu_panel`/`app_panel`/`app_g` globals, `wifi_scan_params_t.bssid`. **Only remaining: the 14 write-only `monitor_params_t` gauge/voltage fields + `monitor_params_type_t`/`type` — deferred to §2.12 (removing them removes live per-second I2C gauge reads).** |
+| 1.5 | Dead types/fields/globals | ◐ mostly done — FFT types (audio pass) + this session `hw_trackball_dir`, `keyboard_type_t`/`DEVICE_KEYBOARD_TYPE`, `event_define.h` NFC block (`nfcData_t`/`app_event_t`/`app_audio_play_t`/`ndefType*` + dead enum values `APP_EVENT_PLAY_KEY`/`APP_NFC_EVENT`), `NFC_TIPS_STRING`, `RTC_DATA_ATTR` shim, once-assigned `main_screen`/`menu_panel`/`app_panel`/`app_g` globals, `wifi_scan_params_t.bssid`. **Only remaining: the 14 write-only `monitor_params_t` gauge/voltage fields + `monitor_params_type_t`/`type` — now decoupled from §2.12 (which is done): §2.12 only *throttled* the sweep (1 s→5 s idle), it did not trim fields. Removing them still removes live I2C gauge reads, so it wants a device to validate — deferred to the hardware pass.** |
 | 1.6 | LIKELY-dead (LVGL v8 theme branch, `HalResult`) | ✅ done — dropped the dead LVGL v8 `#else` theme branch in `ui_theme.cpp` (261→80 lines) and the v8 `#else`/empty-`#if v8` compat blocks in `ui_define.h` (v9 rename shims kept unconditionally). Every env pins LVGL 9.x (hw 9.4.0 / emu 9.2.2) so the v8 paths were already never compiled. **`HalResult`/`HalStatus` KEPT** (CLAUDE.md's preferred error type). Generated font `.c` files' `#if LVGL_VERSION_MAJOR==8` blocks left as-is (converter output). |
 | 1.7 | Redundant declarations | ◐ mostly done — `isinMenu` (already gone via §1.2), `notes_crypto_path_is_protected` (kept the owning decl in `notes_path.h`, dropped the dup in `notes_crypto.h`, added `notes_path.h` include to `ui_file_browser.cpp`), `tg_get_unread_count` (menu_glance.cpp now includes `app_registry.h` instead of re-declaring). **Remaining: factory.ino timezone externs — deferred (see below).** |
 | 2.1 | Telegram poll/send off the LVGL thread | ✅ done |
@@ -51,7 +51,7 @@ wrong: `ui_lock`/`ui_unlock`).
 | 2.9 | SSH scrollback length tracking | ✅ done |
 | 2.10 | Home-screen ping off-thread | ✅ done (earlier) |
 | 2.11 | O(n²) note-list merges → set | ✅ done |
-| 2.12 | Status-bar 1 Hz RTC + gauge sweep | ☐ **needs care** (see below) |
+| 2.12 | Status-bar 1 Hz RTC + gauge sweep | ✅ done — blocker resolved by analysis (no deep-sleep-reboot path; `hw_init` seeds the system clock from RTC at boot, NTP/GPS/manual keep both in step, fake/light sleep preserves it). Clock label now reads the system clock via new `hw_get_wall_clock` (`system.{h,cpp}`) instead of an I2C RTC read every second — routed the two 1 Hz display ticks (`core/system.cpp` status bar, `menu_glance.cpp`). Gauge sweep TTL extended 1 s→5 s when not charging (`power.cpp`). **§1.5 write-only-field removal NOT done here** — kept (still rides the hardware pass; the sweep is just throttled, not trimmed). |
 | 2.13 | Audio stop busy-wait on UI thread | ☐ **needs care** |
 | 2.14 | Home-app visibility NVS cache | ✅ done |
 | 2.15 | MP3 decode buffer → PSRAM | ✅ done |
@@ -98,7 +98,13 @@ longer freezes ~1–2 s per poll or per voice-memo send.
 ## Completed commits (this effort)
 
 Perf (§2): `3b373da` `46686f3` `932eed0` `ba2a4ae` `c22a83e` `e897fe1` `37d67e5`
-`bc78d41` `c7ff2c2` `5c4ab5f` `590faf4` `9c60c5b` `c01a540` `f6d90ed`
+`bc78d41` `c7ff2c2` `5c4ab5f` `590faf4` `9c60c5b` `c01a540` `f6d90ed` `e456232`
+
+- **§2.12** status-bar RTC + gauge sweep (`e456232` / this docs commit): new
+  `hw_get_wall_clock()` (`system.{h,cpp}`) drives the two 1 Hz display ticks
+  (`core/system.cpp`, `menu_glance.cpp`) off the ESP32 system clock instead of a
+  per-second I2C RTC read; `hw_get_monitor_params` (`power.cpp`) backs its TTL off to 5 s
+  when not charging. RTC-blocker resolved by analysis (see the §2.12 Deferred entry).
 Build/hygiene (§3): `ab01a78` `0089c55`
 Dead code (§1) earlier: `e082021` `39a388a` `6449afa` `036d52a` `4db8948` `7fcda8d`
 `409be67` `0e0e0f2`
@@ -306,10 +312,18 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
   a fetch. The benefit is one transient copy of a small (~2–5 KB) body that frees
   immediately. Poor risk/reward vs. the robust `getString()`. Revisit only if profiling
   shows internal-heap pressure during TLS.
-- **§2.12 (status-bar RTC + gauge sweep)** — the clock fix wants `time(nullptr)` +
-  `localtime_r` instead of an I2C RTC read every second. **Blocker: confirm the RTC is not
-  the post-deep-sleep source of truth** before switching, or the clock can show wrong time
-  after wake. Needs the wake/time-seed flow understood (and ideally hardware).
+- ~~**§2.12 (status-bar RTC + gauge sweep)**~~ ✅ **DONE.** Blocker ("confirm the RTC is not
+  the post-deep-sleep source of truth") resolved by reading the time/wake flow:
+  `hw_init` (`system.cpp:207`) seeds the ESP32 system clock from the external RTC via
+  `settimeofday()` at every boot, and NTP (`configTime` + SNTP callback), GPS
+  (`gps_time_sync.cpp`), and manual sets (`hw_set_date_time`) all write **both** the system
+  clock and the RTC. Crucially there is **no `esp_deep_sleep`/reboot path in `src/`** — the
+  firmware uses *fake sleep* (`hw_power_down_all` lowers CPU freq) / *light sleep*
+  (`hw_light_sleep` → `instance.lightSleep`), both of which keep the system clock running.
+  So `time(nullptr)`+`localtime_r` is a valid source of truth for the display clock. Fix
+  applied: new `hw_get_wall_clock()` (no I2C, no instance-mutex hold) drives the two 1 Hz
+  ticks; the gauge sweep backs off to a 5 s TTL when not charging. `hw_get_date_time()`
+  (RTC-authoritative) is unchanged and still used by settings/info/one-off timestamps.
 - **§1.5 `monitor_params_t` write-only fields** — the 14 gauge/voltage fields
   (`type`, `charge_state`, `sys_voltage`, `battery_voltage`, `usb_voltage`,
   `remainingCapacity`, `fullChargeCapacity`, `designCapacity`, `instantaneousCurrent`,
@@ -318,9 +332,10 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
   `is_charging`, and internally `battery_voltage` are read). **Left for the §2.12 gauge
   sweep, not this dead-type pass:** each dead field is populated by a separate
   `instance.gauge.*`/`instance.ppm.*`/`instance.pmu.*` register read inside
-  `hw_get_monitor_params` (`power.cpp`), executed every second. Removing the fields
-  therefore removes live per-second I2C traffic — a hardware-behaviour change that wants
-  a device to validate, so it belongs with §2.12 rather than a compile-verified sweep.
+  `hw_get_monitor_params` (`power.cpp`), executed every second (now every 5 s when idle
+  after §2.12). Removing the fields still removes live I2C traffic — a hardware-behaviour
+  change that wants a device to validate, so it stays deferred to the hardware pass (§2.12
+  merely throttled the sweep cadence; it did not trim any field).
   (`getFaultStatus()` is called for its clear-fault side effect and must be kept.)
 - **§1.7 factory.ino timezone externs** — `timezone_get_user_tz`/`timezone_fetch_offset`
   (declared in the *private* `settings_internal.h`) and `timezone_get_user_posix` (no
@@ -372,10 +387,11 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 **The whole §1 dead-code audit (§1.1–§1.7) and §3 repo-hygiene are DONE** (the §1.4/§1.5/§1.6
 leftovers are deliberate, documented in Deferred). What remains, best-first:
 
-1. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
-   understood — see Deferred; the write-only `monitor_params_t` §1.5 fields ride along here),
-   `§2.13` (audio busy-wait), `§2.17`, `§2.18` (helper dedup). `§3.1` font-picker cap is a
-   product decision still open.
+1. **Remaining §2 perf** — `§2.13` (audio busy-wait, needs care), `§2.17` (settings
+   blocking HTTPS, user-initiated), `§2.18` (helper dedup, safe cleanup). `§3.1`
+   font-picker cap is a product decision still open. (`§2.12` is now done — see the table
+   row; the write-only `monitor_params_t` §1.5 fields are still deferred to the hardware
+   pass, decoupled from §2.12.)
 2. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
 3. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
    to validate the radio/audio passes, then optionally do the follow-up trims it lists.
