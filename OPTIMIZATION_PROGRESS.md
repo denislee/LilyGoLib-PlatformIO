@@ -4,13 +4,14 @@ Companion to `OPTIMIZATION_REPORT.md` (the analysis). This file tracks **what ha
 been applied**, **what remains**, and — most importantly — **how to verify safely**
 before removing anything else. Last updated **2026-07-07**.
 
-> **Milestone: the entire §1.2 dead-function sweep (~60 never-called `hw_*`
-> functions, all domains) is COMPLETE.** §1.1/§1.3 are also done, and §1.5/§1.7 are
-> now mostly done (dead types/globals/redundant-decls — the only §1.5 leftover is the
-> write-only `monitor_params_t` gauge fields, deliberately deferred to §2.12 because
-> removing them removes live per-second I2C reads). What's left is §1.4 (dead ifdefs),
-> §1.6 (judgement), the remaining §2 perf items, §3 hygiene (untrack `firmware/*.bin`,
-> prune `src/images/`), and the §4 Go server. See [Suggested next order](#suggested-next-order).
+> **Milestone: §1.1–§1.5, §1.7 and now §1.4 are essentially complete** (dead files,
+> ~60 never-called `hw_*` functions, dead types/globals/redundant-decls, dead `#ifdef`
+> branches). Deliberate leftovers, each with a documented reason: the write-only
+> `monitor_params_t` gauge fields (§1.5, deferred to §2.12 — removing them removes live
+> per-second I2C reads); the `hw_devices[]` name-table slots and non-compiled chip-file
+> branches (§1.4, intentional structure). What's left is §1.6 (judgement), the remaining
+> §2 perf items, §3 hygiene (untrack `firmware/*.bin`, prune `src/images/`), and the §4 Go
+> server. See [Suggested next order](#suggested-next-order).
 >
 > ⚠️ **Two removals are compile+emulator-verified only, NOT hardware-tested** — the
 > **radio** and **audio-FFT** passes. Before trusting them on a device, run the
@@ -32,7 +33,7 @@ wrong: `ui_lock`/`ui_unlock`).
 | 1.1 | Whole dead files (`ui_power.cpp`, `test_sleep.cpp`, `keyboard_audio.h`) | ✅ done |
 | 1.2 | ~60 never-called `hw_*` functions | ✅ done — all groups removed (storage/display/power/wireless-BLE/system/sensors-peripherals/core-apps/UI-helpers+system-UI-chain/audio/radio). Radio done conservatively: dead API removed, both live boot ISRs kept intact; non-compiled chip trios left as dead source (see radio note below). |
 | 1.3 | Stale declarations (no definition) | ✅ done (5 removed) |
-| 1.4 | Dead `#ifdef` branches | ◐ partial — `USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER`, `RADIO_FIXED_FREQUENCY` gone (cleared as side effects of §1.2); **rest remain** (`ARDUINO_T_DECK_V2`, `POLLING`, `USING_TRACKBALL`, `USING_SI473X_RADIO`, `USING_QMI8658_SENSOR`, `USING_LED_INDICATOR` bug candidate, …) |
+| 1.4 | Dead `#ifdef` branches | ✅ mostly done — earlier side effects of §1.2 (`USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER`, `RADIO_FIXED_FREQUENCY`), plus this session `POLLING` (2 blocks in `nfc_reader.cpp`, kept the live `#else`), `ARDUINO_T_DECK_V2` (`display.cpp` keyboard enable/disable), `USING_TRACKBALL` (whole self-contained block + type aliases in `system.cpp`), and **`USING_LED_INDICATOR` — resolved by REMOVING the phantom slider** (user decision): dropped the LED slider + `led_brightness_cb` (`settings_display.cpp`), `hw_set_led_backlight`/`hw_has_indicator_led` (`display.{cpp,h}`), `user_setting_params_t.led_indicator_level` + `HW_LED_INDIC_ONLINE` (`types.h`), and bumped `SETTINGS_VERSION` 10→11. **Left by design:** `USING_SI473X_RADIO`/`USING_QMI8658_SENSOR` are positional `hw_devices[]` name-table slots where `#ifdef NAME #else ""` is intentional self-documenting structure (see Deferred); `ARDUINO_T_DECK_V2` in the non-compiled `lr1121.cpp` (chip-file discipline). |
 | 1.5 | Dead types/fields/globals | ◐ mostly done — FFT types (audio pass) + this session `hw_trackball_dir`, `keyboard_type_t`/`DEVICE_KEYBOARD_TYPE`, `event_define.h` NFC block (`nfcData_t`/`app_event_t`/`app_audio_play_t`/`ndefType*` + dead enum values `APP_EVENT_PLAY_KEY`/`APP_NFC_EVENT`), `NFC_TIPS_STRING`, `RTC_DATA_ATTR` shim, once-assigned `main_screen`/`menu_panel`/`app_panel`/`app_g` globals, `wifi_scan_params_t.bssid`. **Only remaining: the 14 write-only `monitor_params_t` gauge/voltage fields + `monitor_params_type_t`/`type` — deferred to §2.12 (removing them removes live per-second I2C gauge reads).** |
 | 1.6 | LIKELY-dead (LVGL v8 theme branch, `HalResult`) | ☐ not started (needs judgement) |
 | 1.7 | Redundant declarations | ◐ mostly done — `isinMenu` (already gone via §1.2), `notes_crypto_path_is_protected` (kept the owning decl in `notes_path.h`, dropped the dup in `notes_crypto.h`, added `notes_path.h` include to `ui_file_browser.cpp`), `tg_get_unread_count` (menu_glance.cpp now includes `app_registry.h` instead of re-declaring). **Remaining: factory.ino timezone externs — deferred (see below).** |
@@ -110,6 +111,17 @@ Dead code (§1.5/§1.7) — dead types/globals + redundant declarations (this se
   the owning `notes_path.h`; `ui_file_browser.cpp` now includes it directly);
   `tg_get_unread_count` local re-decl in `menu_glance.cpp` replaced by an `app_registry.h`
   include. Verified: HW + emulator + 19/19 native tests.
+Dead code (§1.4) — dead `#ifdef` branches (this session):
+- `POLLING` (both `nfc_reader.cpp` blocks collapsed to their live `#else`), `ARDUINO_T_DECK_V2`
+  (`display.cpp` keyboard enable/disable — kept the `ARDUINO_T_LORA_PAGER` branch),
+  `USING_TRACKBALL` (whole self-contained block + `TrackballEventCallback`/`ButtonEventCallback`
+  aliases in `system.cpp`).
+- `USING_LED_INDICATOR` — **resolved by removing the phantom slider** (user decision, not
+  by defining the macro): LED slider + `led_brightness_cb` (`settings_display.cpp`),
+  `hw_set_led_backlight`/`hw_has_indicator_led` (`display.{cpp,h}`),
+  `user_setting_params_t.led_indicator_level` + `HW_LED_INDIC_ONLINE` (`types.h`).
+  `SETTINGS_VERSION` 10→11 so the NVS blob-size change triggers a clean one-time
+  defaults-reset on upgrade. Verified: HW + emulator + 19/19 native tests.
 Docs/hygiene this session: `b8906cd` (track `OPTIMIZATION_REPORT.md`),
 `880cb4c` (gitignore generated `src/*.ino.cpp`).
 
@@ -312,10 +324,18 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 - **§1.6 `HalResult`/`HalStatus`** — referenced only by `test/test_hal_result`, but
   CLAUDE.md calls it the *preferred* error type for new code. Keep unless that migration is
   being abandoned.
-- **§1.4 `USING_LED_INDICATOR`** — not just dead code: it's a functional-bug candidate.
-  Settings shows an LED-brightness slider, but `hw_set_led_backlight`'s body is compiled
-  out, so the slider does nothing and `led_indicator_level` is persisted-but-never-applied.
-  Decide: define the macro where the LED exists, or remove the slider.
+- **§1.4 `USING_LED_INDICATOR`** — ✅ RESOLVED: the phantom LED slider and all its plumbing
+  were removed (the pager has no user-facing indicator LED to drive). See the §1.4 row and
+  the §1.4 commit note above.
+- **§1.4 `USING_SI473X_RADIO` / `USING_QMI8658_SENSOR`** — left in place *by design*, not
+  overlooked. Both live only as slots in the positional `hw_devices[]` name table
+  (`system.cpp`), each `#ifdef NAME "name" #else "" #endif`. The `#else ""` is intentional
+  structure: the slot index maps to a device-online bit, and the name documents which
+  device that slot is for. Collapsing the two dead entries to a bare `""` yields identical
+  compiled output (0 flash) while deleting that documentation and risking index drift —
+  strictly worse. Removing the *device concept* (slot + online bit + renumber) is a bigger,
+  riskier change out of scope here. `ARDUINO_T_DECK_V2` in `lr1121.cpp` is likewise left
+  under the non-compiled-chip-file discipline (see radio note).
 
 ---
 
@@ -332,18 +352,16 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 
 ## Suggested next order
 
-**§1.1–§1.3, the whole §1.2 sweep (incl. audio + radio), and most of §1.5/§1.7 are
-DONE.** What remains, best-first:
+**All of §1.1–§1.5 and §1.7 are DONE** (the §1.4/§1.5 leftovers are deliberate, documented
+in Deferred). What remains, best-first:
 
-1. **§1.4 remaining dead `#ifdef` branches** — mostly mechanical, but **`USING_LED_INDICATOR`
-   is a functional-bug decision, not just dead code** (see Deferred). Make that call first.
-2. **Repo-hygiene (§3.5/§3.2)** — untrack `lib/LilyGoLib/firmware/*.bin` (~96 MB) and
+1. **Repo-hygiene (§3.5/§3.2)** — untrack `lib/LilyGoLib/firmware/*.bin` (~96 MB) and
    prune the 25 orphan PNG/JPG sources in `src/images/`. Zero code risk; big repo-size win.
-3. **§1.6** — judgement calls (LVGL v8 theme `#else` branch is safe to drop since every
+2. **§1.6** — judgement calls (LVGL v8 theme `#else` branch is safe to drop since every
    env pins v9; keep `HalResult`/`HalStatus` unless the migration is abandoned).
-4. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
+3. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
    understood — see Deferred; the write-only `monitor_params_t` §1.5 fields ride along here),
    `§2.13` (audio busy-wait), `§2.17`, `§2.18` (helper dedup).
-5. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
-6. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
+4. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
+5. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
    to validate the radio/audio passes, then optionally do the follow-up trims it lists.
