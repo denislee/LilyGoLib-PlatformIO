@@ -4,16 +4,17 @@ Companion to `OPTIMIZATION_REPORT.md` (the analysis). This file tracks **what ha
 been applied**, **what remains**, and — most importantly — **how to verify safely**
 before removing anything else. Last updated **2026-07-07**.
 
-> **Milestone: §1.1–§1.5, §1.7 and now §1.4 are essentially complete** (dead files,
-> ~60 never-called `hw_*` functions, dead types/globals/redundant-decls, dead `#ifdef`
-> branches), the §3 repo-hygiene (untracked the ~96 MB `firmware/*.bin`, pruned all
-> `src/images/` orphans), and §1.6 (dropped the dead LVGL v8 theme branch; kept `HalResult`).
-> Deliberate leftovers, each with a documented reason: the write-only `monitor_params_t`
-> gauge fields (§1.5, deferred to §2.12 — removing them removes live per-second I2C reads);
-> the `hw_devices[]` name-table slots and non-compiled chip-file branches (§1.4, intentional
-> structure); scattered v9 guards + `HalResult` (§1.6). **The entire §1 dead-code audit is
-> now complete.** What's left is the remaining §2 perf items and the §4 Go server. See
-> [Suggested next order](#suggested-next-order).
+> **Milestone: the entire §1 dead-code audit (§1.1–§1.7) and the §3 repo-hygiene are
+> complete.** §1.1 dead files, §1.2 ~60 never-called `hw_*` functions, §1.3 stale decls,
+> §1.4 dead `#ifdef` branches (+ removed the phantom LED slider), §1.5 dead
+> types/globals, §1.6 the LVGL v8 theme branch, §1.7 redundant decls; §3 untracked the
+> ~96 MB `firmware/*.bin` and pruned all `src/images/` orphans. Deliberate leftovers, each
+> with a documented reason in [Deferred](#deferred--judgement-call-items): the write-only
+> `monitor_params_t` gauge fields (§1.5 → rides with the §2.12 gauge sweep, since removing
+> them removes live per-second I2C reads); the `hw_devices[]` name-table slots and
+> non-compiled chip-file branches (§1.4, intentional structure); scattered v9 guards and
+> `HalResult` (§1.6, kept). **What's left is the remaining §2 perf items and the §4 Go
+> server.** See [Suggested next order](#suggested-next-order).
 >
 > ⚠️ **Two removals are compile+emulator-verified only, NOT hardware-tested** — the
 > **radio** and **audio-FFT** passes. Before trusting them on a device, run the
@@ -78,13 +79,16 @@ Legend: ✅ done · ◐ partial · ⊘ deferred · ☐ not started
   deletions are build-time/hygiene wins, not flash.
 - **Internal RAM −4.6 KB**: MP3 decode frame buffer moved to PSRAM (`f6d90ed`) —
   94,232 → 89,648 B used. This is the scarce heap WiFi/TLS contend for.
-- Current image: RAM 27.4 % (89,624 B) · Flash 70.4 % (2,953,685 B) — **essentially
-  unchanged by the §1.2 and §1.5/§1.7 sweeps**: everything removed was already
-  `--gc-sections`-stripped (or an unreferenced macro/type contributing 0 bytes), so those
-  deletions are build-time + source-hygiene wins, not flash/RAM.
-- **Source reduction from the §1.2 completion this session: ~1,200 lines** across
-  sensors/peripherals, core/apps, UI helpers, audio, and radio (see commits below).
-  The §1.5/§1.7 pass removed a further ~90 lines of dead types/globals + redundant decls.
+- Current image: RAM 27.4 % (89,624 B) · Flash 70.4 % (2,953,489 B) — **essentially
+  unchanged across the whole §1 audit**: everything removed was already
+  `--gc-sections`-stripped (or an unreferenced macro / type / `#ifdef` branch contributing
+  0 bytes), so those deletions are build-time + source-hygiene wins, not flash/RAM. The one
+  real flash win in this effort is still the MP3-blob removal above.
+- **Source reduction this session ≈ 1,550 lines**: ~1,200 (§1.2 — sensors/peripherals,
+  core/apps, UI helpers, audio, radio) + ~90 (§1.5/§1.7 dead types/globals + redundant
+  decls) + ~85 (§1.4 dead `#ifdef` branches + LED slider) + ~180 (§1.6 LVGL v8 theme
+  branch). Repo tree also lighter: 32 orphan images deleted, ~96 MB of `firmware/*.bin`
+  untracked (§3, still in history).
 
 The big *perceptual* wins are the §2.1/§2.4/§2.6 telegram+chat changes: the UI no
 longer freezes ~1–2 s per poll or per voice-memo send.
@@ -104,33 +108,31 @@ Dead code (§1.2) — this session, one commit per domain:
 - `f35abad` UI helpers + system-UI chain (widget factories, wifi-process-bar chain)
 - `4c8a563` audio (FFT subsystem + music-list chain)
 - `b010665` radio (dead TX/RX + NRF24 API)
-Dead code (§1.5/§1.7) — dead types/globals + redundant declarations (this session):
-- `hw_trackball_dir`, `keyboard_type_t`+`DEVICE_KEYBOARD_TYPE`, `wifi_scan_params_t.bssid`
+Dead code + hygiene — this session, chronological (`<code>` / `<docs>` commit per pass):
+- **§1.5/§1.7** dead types/globals + redundant decls (`6309031` / `2f65390`):
+  `hw_trackball_dir`, `keyboard_type_t`+`DEVICE_KEYBOARD_TYPE`, `wifi_scan_params_t.bssid`
   (types.h + wireless.cpp memcpy), `event_define.h` NFC-type block + dead enum values,
-  `NFC_TIPS_STRING` (×3 boards), `RTC_DATA_ATTR` emulator shim, once-assigned globals
-  `main_screen`/`menu_panel`/`app_panel`/`app_g` (ui_define.h + core/system.cpp).
-- §1.7: `notes_crypto_path_is_protected` dup decl removed from `notes_crypto.h` (kept in
-  the owning `notes_path.h`; `ui_file_browser.cpp` now includes it directly);
-  `tg_get_unread_count` local re-decl in `menu_glance.cpp` replaced by an `app_registry.h`
-  include. Verified: HW + emulator + 19/19 native tests.
-Dead code (§1.6) — dead LVGL v8 branches (this session):
-- `ui_theme.cpp` (261→80 lines): removed the v8 `#else` theme implementation, unwrapped
-  the live v9 body. `ui_define.h`: removed the v8 `#else` macro block (`lv_timer_get_user_data`/
-  `lv_indev_get_type` — real functions in v9) and the empty `#if LVGL_VERSION_MAJOR==8`
-  block; kept the v8→v9 rename shims (`lv_mem_alloc`→`lv_malloc`, etc.) unconditionally.
-  `HalResult`/`HalStatus` kept. Verified: HW + clean emulator rebuild + 19/19 native tests.
-Dead code (§1.4) — dead `#ifdef` branches (this session):
-- `POLLING` (both `nfc_reader.cpp` blocks collapsed to their live `#else`), `ARDUINO_T_DECK_V2`
-  (`display.cpp` keyboard enable/disable — kept the `ARDUINO_T_LORA_PAGER` branch),
-  `USING_TRACKBALL` (whole self-contained block + `TrackballEventCallback`/`ButtonEventCallback`
-  aliases in `system.cpp`).
-- `USING_LED_INDICATOR` — **resolved by removing the phantom slider** (user decision, not
-  by defining the macro): LED slider + `led_brightness_cb` (`settings_display.cpp`),
-  `hw_set_led_backlight`/`hw_has_indicator_led` (`display.{cpp,h}`),
-  `user_setting_params_t.led_indicator_level` + `HW_LED_INDIC_ONLINE` (`types.h`).
-  `SETTINGS_VERSION` 10→11 so the NVS blob-size change triggers a clean one-time
-  defaults-reset on upgrade. Verified: HW + emulator + 19/19 native tests.
-Docs/hygiene this session: `b8906cd` (track `OPTIMIZATION_REPORT.md`),
+  `NFC_TIPS_STRING` (×3 boards), `RTC_DATA_ATTR` shim, once-assigned globals
+  `main_screen`/`menu_panel`/`app_panel`/`app_g`. §1.7: `notes_crypto_path_is_protected`
+  dup decl dropped from `notes_crypto.h` (kept the owner in `notes_path.h`);
+  `tg_get_unread_count` local re-decl → `app_registry.h` include.
+- **§1.4** dead `#ifdef` branches + phantom LED slider (`ebf017e` / `641a9d1`):
+  `POLLING` (both `nfc_reader.cpp` blocks → live `#else`), `ARDUINO_T_DECK_V2`
+  (`display.cpp` keyboard init — kept the T_LORA_PAGER branch), `USING_TRACKBALL`
+  (whole block + type aliases in `system.cpp`). `USING_LED_INDICATOR` resolved by
+  REMOVING the slider (user decision): slider+cb, `hw_set_led_backlight`/
+  `hw_has_indicator_led`, `led_indicator_level` + `HW_LED_INDIC_ONLINE`; bumped
+  `SETTINGS_VERSION` 10→11 (one-time NVS defaults reset on upgrade).
+- **§3** repo-hygiene (`73ca8e8` / `c646f11`): untracked `lib/LilyGoLib/firmware/*.bin`
+  (6 × 16 MB, `git rm --cached` + `.gitignore`); pruned all 32 `src/images/*.png|jpg`
+  orphans. No compiled code touched.
+- **§1.6** dead LVGL v8 branches (`bc5506d` / `68dcaf0`): `ui_theme.cpp` 261→80 lines
+  (v8 `#else` theme removed), `ui_define.h` v8 `#else` macro block + empty `#if v8` removed
+  (v8→v9 rename shims kept). `HalResult`/`HalStatus` kept.
+
+Each pass verified: `pio run -e tlora_pager` + `-e emulator_lora_pager` + 19/19 native tests
+(§1.6 used a *clean* emulator rebuild — incremental was returning a stale "up to date").
+Earlier docs/hygiene: `b8906cd` (track `OPTIMIZATION_REPORT.md`),
 `880cb4c` (gitignore generated `src/*.ino.cpp`).
 
 New HAL primitive added along the way: `hw_read_sd_stream()` (`storage.h`/`storage.cpp`)
