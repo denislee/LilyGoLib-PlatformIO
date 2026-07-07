@@ -2,13 +2,24 @@
 
 Companion to `OPTIMIZATION_REPORT.md` (the analysis). This file tracks **what has
 been applied**, **what remains**, and — most importantly — **how to verify safely**
-before removing anything else. Last updated **2026-07-06**.
+before removing anything else. Last updated **2026-07-07**.
+
+> **Milestone: the entire §1.2 dead-function sweep (~60 never-called `hw_*`
+> functions, all domains) is COMPLETE.** §1.1/§1.3 are also done. What's left is
+> §1.4/§1.5/§1.6/§1.7 (dead types/globals/ifdefs/decls), the remaining §2 perf items,
+> §3 hygiene (untrack `firmware/*.bin`, prune `src/images/`), and the §4 Go server.
+> See [Suggested next order](#suggested-next-order).
+>
+> ⚠️ **Two removals are compile+emulator-verified only, NOT hardware-tested** — the
+> **radio** and **audio-FFT** passes. Before trusting them on a device, run the
+> [Hardware smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes).
 
 `OPTIMIZATION_REPORT.md` is analysis only and is **stale relative to the code** (it
 was generated 2026-07-05, before any of the changes below). Do **not** trust its
 "dead"/"live" verdicts blindly — re-verify every symbol against current source. See
-[Methodology](#methodology--read-this-before-removing-code) for two concrete cases
-where the stale report would have caused a regression.
+[Methodology](#methodology--read-this-before-removing-code) for three concrete cases
+where the stale report would have caused a regression (incl. one it got outright
+wrong: `ui_lock`/`ui_unlock`).
 
 ---
 
@@ -19,8 +30,8 @@ where the stale report would have caused a regression.
 | 1.1 | Whole dead files (`ui_power.cpp`, `test_sleep.cpp`, `keyboard_audio.h`) | ✅ done |
 | 1.2 | ~60 never-called `hw_*` functions | ✅ done — all groups removed (storage/display/power/wireless-BLE/system/sensors-peripherals/core-apps/UI-helpers+system-UI-chain/audio/radio). Radio done conservatively: dead API removed, both live boot ISRs kept intact; non-compiled chip trios left as dead source (see radio note below). |
 | 1.3 | Stale declarations (no definition) | ✅ done (5 removed) |
-| 1.4 | Dead `#ifdef` branches | ◐ partial — `USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER` gone; **rest remain** (incl. `USING_LED_INDICATOR` bug candidate) |
-| 1.5 | Dead types/fields/globals | ☐ not started |
+| 1.4 | Dead `#ifdef` branches | ◐ partial — `USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER`, `RADIO_FIXED_FREQUENCY` gone (cleared as side effects of §1.2); **rest remain** (`ARDUINO_T_DECK_V2`, `POLLING`, `USING_TRACKBALL`, `USING_SI473X_RADIO`, `USING_QMI8658_SENSOR`, `USING_LED_INDICATOR` bug candidate, …) |
+| 1.5 | Dead types/fields/globals | ◐ partial — FFT types (`FFTData`/`FFT_SIZE`/`SAMPLE_RATE`/`FREQ_BANDS`) removed with the audio pass; **rest remain** (`hw_trackball_dir`, `keyboard_type_t`, write-only `monitor_params_t` fields, `event_define.h` NFC block, once-assigned `main_screen`/`menu_panel`/`app_panel`/`app_g` globals, …) |
 | 1.6 | LIKELY-dead (LVGL v8 theme branch, `HalResult`) | ☐ not started (needs judgement) |
 | 1.7 | Redundant declarations | ☐ not started |
 | 2.1 | Telegram poll/send off the LVGL thread | ✅ done |
@@ -62,7 +73,11 @@ Legend: ✅ done · ◐ partial · ⊘ deferred · ☐ not started
   deletions are build-time/hygiene wins, not flash.
 - **Internal RAM −4.6 KB**: MP3 decode frame buffer moved to PSRAM (`f6d90ed`) —
   94,232 → 89,648 B used. This is the scarce heap WiFi/TLS contend for.
-- Current image: RAM 27.4 % (89,656 B) · Flash 70.5 % (2,955,369 B).
+- Current image: RAM 27.4 % (89,656 B) · Flash 70.5 % (2,955,369 B) — **unchanged by
+  the §1.2 sweep**: everything removed was already `--gc-sections`-stripped, so those
+  deletions are build-time + source-hygiene wins, not flash/RAM.
+- **Source reduction from the §1.2 completion this session: ~1,200 lines** across
+  sensors/peripherals, core/apps, UI helpers, audio, and radio (see commits below).
 
 The big *perceptual* wins are the §2.1/§2.4/§2.6 telegram+chat changes: the UI no
 longer freezes ~1–2 s per poll or per voice-memo send.
@@ -74,8 +89,16 @@ longer freezes ~1–2 s per poll or per voice-memo send.
 Perf (§2): `3b373da` `46686f3` `932eed0` `ba2a4ae` `c22a83e` `e897fe1` `37d67e5`
 `bc78d41` `c7ff2c2` `5c4ab5f` `590faf4` `9c60c5b` `c01a540` `f6d90ed`
 Build/hygiene (§3): `ab01a78` `0089c55`
-Dead code (§1): `e082021` `39a388a` `6449afa` `036d52a` `4db8948` `7fcda8d`
+Dead code (§1) earlier: `e082021` `39a388a` `6449afa` `036d52a` `4db8948` `7fcda8d`
 `409be67` `0e0e0f2`
+Dead code (§1.2) — this session, one commit per domain:
+- `0eece2c` sensors/peripherals (magnetometer, BME280, IR)
+- `abe2841` core/apps (`notify::dismiss`, `secret_erase`, `home_apps_symbol`, getters)
+- `f35abad` UI helpers + system-UI chain (widget factories, wifi-process-bar chain)
+- `4c8a563` audio (FFT subsystem + music-list chain)
+- `b010665` radio (dead TX/RX + NRF24 API)
+Docs/hygiene this session: `b8906cd` (track `OPTIMIZATION_REPORT.md`),
+`880cb4c` (gitignore generated `src/*.ino.cpp`).
 
 New HAL primitive added along the way: `hw_read_sd_stream()` (`storage.h`/`storage.cpp`)
 — chunked SD read that releases the SPI bus between chunks; used by the §2.4 voice-memo
@@ -89,14 +112,17 @@ The report is stale. For every candidate function, verify against **current** so
 
 ```bash
 # A truly-dead function has ONLY its declaration (header) + definition (.cpp).
-# Count references across all compiled sources:
-grep -rIn "\bFUNC\b" src/ --include=*.cpp --include=*.c --include=*.h --include=*.ino | wc -l
+# Count references across all compiled sources — INCLUDING the compiled vendor tree,
+# which can call back into our code (see catch #3):
+grep -rIn "\bFUNC\b" src/ lib/LilyGoLib/src/ --include=*.cpp --include=*.c --include=*.h --include=*.ino | wc -l
 # 2 == dead (decl + def).  >2 == inspect the extra lines: a call site => LIVE.
+# NOTE: matches in lib/LilyGoLib/examples/ are the vendor's STALE, non-compiled copy
+# of this tree (src_dir = src) — ignore them. matches in lib/LilyGoLib/src/ are REAL.
 # Then confirm the extras are only in the owning HAL .h/.cpp, never an app/ui caller:
 grep -rIn "\bFUNC\b" src/ --include=*.cpp --include=*.h --include=*.ino | sed 's/:.*//' | sort | uniq -c
 ```
 
-**Two real catches this discipline made — both would have shipped a regression:**
+**Three real catches this discipline made — all would have shipped a regression:**
 
 1. **`hw_get_file_size`** — on the report's §1.2 dead list, but the §2.4 voice-memo
    work made it a live caller. Kept it.
@@ -104,6 +130,13 @@ grep -rIn "\bFUNC\b" src/ --include=*.cpp --include=*.h --include=*.ino | sed 's
    `grep -v "storage.cpp"` also swallowed **`settings_storage.cpp`** (substring match!),
    hiding its one live caller. When excluding the owning file, anchor the path:
    `grep -vE "src/hal/storage\.(cpp|h):"`, not `grep -v "storage.cpp"`.
+3. **`ui_lock`/`ui_unlock`** (this session) — the report listed them as dead "compat
+   aliases," and they have **zero callers in `src/`**. But the **compiled vendor**
+   `lib/LilyGoLib/src/LilyGo_LoRa_Pager.cpp` declares them `extern` and calls them
+   (~lines 1309–1319) from the SPI-guard path. Removing them = link error. **This is why
+   the grep above must include `lib/LilyGoLib/src/`.** A comment in `ui_main.cpp` even
+   said "Called from the vendor LilyGoLib paths" — read the code around a candidate, not
+   just the grep count.
 
 Other rules that held up:
 - Functions are **interleaved** with live ones in the `.cpp` — remove each precisely,
@@ -128,9 +161,12 @@ branch still referencing a renamed parameter). Do not skip it.
 
 ---
 
-## Remaining §1.2 — what's left, by risk
+## §1.2 sweep — completed record (by risk tier)
 
-### LOW risk — continue the same sweep
+**All groups below are done.** Kept as a record of what was removed, the cascades
+followed, and (crucially) the deliberate *conservative* choices in the HIGH-risk tier.
+
+### LOW risk — the routine sweep
 - ~~**sensors/peripherals**~~ ✅ done — removed `hw_mag_enable`, `hw_mag_get_polar`
   (whole `USING_MAG_QMC5883` block), `hw_bme_enable`/`hw_bme_get_data` (whole
   `USING_BME280` block), and the entire IR block (`hw_set_remote_code`,
@@ -157,7 +193,7 @@ branch still referencing a renamed parameter). Do not skip it.
     error. **Kept.** (The `isinMenu` in `lib/.../examples/` is the vendor's stale,
     non-compiled tree — ignore it.)
 
-### HIGH risk — do as a DEDICATED pass, ideally with a hardware smoke-test
+### HIGH risk — done as dedicated passes (⚠️ compile+emulator only, see smoke-test checklist)
 - ~~**audio FFT subsystem**~~ ✅ done (compile + emulator verified; **not** yet
   hardware-smoke-tested — the mic/FFT path never runs, so risk is low). Removed
   `hw_set_mic_start`/`hw_set_mic_stop`/`hw_audio_get_fft_data` + `process_channel_fft` +
@@ -202,6 +238,31 @@ branch still referencing a renamed parameter). Do not skip it.
 
 ---
 
+## Hardware smoke-test checklist (do before trusting the radio + audio-FFT passes)
+
+Commits `b010665` (radio) and `4c8a563` (audio) were verified by `pio run -e tlora_pager`
++ `pio run -e emulator_lora_pager` + `pio test -e native_test` only. They touch (or sit
+next to) boot/ISR/DMA paths that a compile cannot exercise. On a physical T-LoRa-Pager,
+flash `pio run -e tlora_pager -t upload` and confirm:
+
+- [ ] **Boots to the home screen** (no boot loop / panic on serial `@115200`). This alone
+      clears the biggest radio worry — `hw_radio_begin`/`hw_nrf24_begin` still run at boot.
+- [ ] **Radio settings work** — Settings » Connectivity » Radio toggle flips without hang
+      (exercises the kept `hw_set_radio_enable` → `hw_set_radio_default` → chip `configure`).
+- [ ] **Audio still plays** — play an MP3/WAV (exercises the kept player task + codec path
+      that sits right below the removed FFT block).
+- [ ] **Voice recording still works** — record + play back an audio note (the `hw_rec_*`
+      path shares the codec with the removed mic/FFT code; confirm codec open/close is fine).
+- [ ] No new serial warnings/errors around radio or codec init.
+
+If all pass, delete this checklist and the "compile-only" caveats above. If the radio
+boot is solid, the *optional* follow-up trims become safe: empty `hw_radio_begin`/
+`hw_nrf24_begin`'s now-inert ISR/event-group setup, and remove the dead `radio_get_*`
+trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1121`'s
+`_high_freq`) after building each with its chip macro.
+
+---
+
 ## Deferred / judgement-call items
 
 - **§2.16 (`hw_http_request` double-buffer)** — deferred. The safe fix (stream
@@ -237,11 +298,23 @@ branch still referencing a renamed parameter). Do not skip it.
 
 ## Suggested next order
 
-1. Finish the **LOW-risk §1.2** groups (sensors/peripherals, core/apps, UI helpers,
-   system UI chain) — same verified sweep as above, one commit per domain.
-2. **§1.5 / §1.7** — dead types/fields/globals and redundant declarations (many pair with
-   the functions already removed).
-3. Dedicated **audio-FFT** pass (move buffers + types + functions as a unit).
-4. Dedicated **radio** pass — with a hardware smoke-test (TX/RX + boot) afterward.
-5. Repo-hygiene: untrack `firmware/*.bin`, prune `src/images/` orphans.
-6. **§4 Go server** (`server/`) — independent; A1/A3/B4/B5/B6 are the concrete items.
+**§1.1–§1.3 and the whole §1.2 sweep (incl. audio + radio) are DONE.** What remains,
+best-first:
+
+1. **§1.5 / §1.7** — dead types/fields/globals and redundant declarations. Best next
+   coding step: many now pair with functions already removed (e.g. `hw_trackball_dir`,
+   `keyboard_type_t`, the once-assigned `main_screen`/`menu_panel`/`app_panel`/`app_g`
+   globals, the write-only `monitor_params_t` fields, the `event_define.h` NFC block,
+   duplicate `isinMenu`/`notes_crypto_path_is_protected` decls). Same verified sweep;
+   watch for §1.5's tie-in with perf §2.12 (the write-only gauge fields).
+2. **§1.4 remaining dead `#ifdef` branches** — mostly mechanical, but **`USING_LED_INDICATOR`
+   is a functional-bug decision, not just dead code** (see Deferred). Make that call first.
+3. **Repo-hygiene (§3.5/§3.2)** — untrack `lib/LilyGoLib/firmware/*.bin` (~96 MB) and
+   prune the 25 orphan PNG/JPG sources in `src/images/`. Zero code risk; big repo-size win.
+4. **§1.6** — judgement calls (LVGL v8 theme `#else` branch is safe to drop since every
+   env pins v9; keep `HalResult`/`HalStatus` unless the migration is abandoned).
+5. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
+   understood — see Deferred), `§2.13` (audio busy-wait), `§2.17`, `§2.18` (helper dedup).
+6. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
+7. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
+   to validate the radio/audio passes, then optionally do the follow-up trims it lists.
