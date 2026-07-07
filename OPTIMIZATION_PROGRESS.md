@@ -6,12 +6,14 @@ before removing anything else. Last updated **2026-07-07**.
 
 > **Milestone: §1.1–§1.5, §1.7 and now §1.4 are essentially complete** (dead files,
 > ~60 never-called `hw_*` functions, dead types/globals/redundant-decls, dead `#ifdef`
-> branches), and the §3 repo-hygiene (untracked the ~96 MB `firmware/*.bin`, pruned all
-> `src/images/` orphans). Deliberate leftovers, each with a documented reason: the write-only
-> `monitor_params_t` gauge fields (§1.5, deferred to §2.12 — removing them removes live
-> per-second I2C reads); the `hw_devices[]` name-table slots and non-compiled chip-file
-> branches (§1.4, intentional structure). What's left is §1.6 (judgement), the remaining
-> §2 perf items, and the §4 Go server. See [Suggested next order](#suggested-next-order).
+> branches), the §3 repo-hygiene (untracked the ~96 MB `firmware/*.bin`, pruned all
+> `src/images/` orphans), and §1.6 (dropped the dead LVGL v8 theme branch; kept `HalResult`).
+> Deliberate leftovers, each with a documented reason: the write-only `monitor_params_t`
+> gauge fields (§1.5, deferred to §2.12 — removing them removes live per-second I2C reads);
+> the `hw_devices[]` name-table slots and non-compiled chip-file branches (§1.4, intentional
+> structure); scattered v9 guards + `HalResult` (§1.6). **The entire §1 dead-code audit is
+> now complete.** What's left is the remaining §2 perf items and the §4 Go server. See
+> [Suggested next order](#suggested-next-order).
 >
 > ⚠️ **Two removals are compile+emulator-verified only, NOT hardware-tested** — the
 > **radio** and **audio-FFT** passes. Before trusting them on a device, run the
@@ -35,7 +37,7 @@ wrong: `ui_lock`/`ui_unlock`).
 | 1.3 | Stale declarations (no definition) | ✅ done (5 removed) |
 | 1.4 | Dead `#ifdef` branches | ✅ mostly done — earlier side effects of §1.2 (`USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER`, `RADIO_FIXED_FREQUENCY`), plus this session `POLLING` (2 blocks in `nfc_reader.cpp`, kept the live `#else`), `ARDUINO_T_DECK_V2` (`display.cpp` keyboard enable/disable), `USING_TRACKBALL` (whole self-contained block + type aliases in `system.cpp`), and **`USING_LED_INDICATOR` — resolved by REMOVING the phantom slider** (user decision): dropped the LED slider + `led_brightness_cb` (`settings_display.cpp`), `hw_set_led_backlight`/`hw_has_indicator_led` (`display.{cpp,h}`), `user_setting_params_t.led_indicator_level` + `HW_LED_INDIC_ONLINE` (`types.h`), and bumped `SETTINGS_VERSION` 10→11. **Left by design:** `USING_SI473X_RADIO`/`USING_QMI8658_SENSOR` are positional `hw_devices[]` name-table slots where `#ifdef NAME #else ""` is intentional self-documenting structure (see Deferred); `ARDUINO_T_DECK_V2` in the non-compiled `lr1121.cpp` (chip-file discipline). |
 | 1.5 | Dead types/fields/globals | ◐ mostly done — FFT types (audio pass) + this session `hw_trackball_dir`, `keyboard_type_t`/`DEVICE_KEYBOARD_TYPE`, `event_define.h` NFC block (`nfcData_t`/`app_event_t`/`app_audio_play_t`/`ndefType*` + dead enum values `APP_EVENT_PLAY_KEY`/`APP_NFC_EVENT`), `NFC_TIPS_STRING`, `RTC_DATA_ATTR` shim, once-assigned `main_screen`/`menu_panel`/`app_panel`/`app_g` globals, `wifi_scan_params_t.bssid`. **Only remaining: the 14 write-only `monitor_params_t` gauge/voltage fields + `monitor_params_type_t`/`type` — deferred to §2.12 (removing them removes live per-second I2C gauge reads).** |
-| 1.6 | LIKELY-dead (LVGL v8 theme branch, `HalResult`) | ☐ not started (needs judgement) |
+| 1.6 | LIKELY-dead (LVGL v8 theme branch, `HalResult`) | ✅ done — dropped the dead LVGL v8 `#else` theme branch in `ui_theme.cpp` (261→80 lines) and the v8 `#else`/empty-`#if v8` compat blocks in `ui_define.h` (v9 rename shims kept unconditionally). Every env pins LVGL 9.x (hw 9.4.0 / emu 9.2.2) so the v8 paths were already never compiled. **`HalResult`/`HalStatus` KEPT** (CLAUDE.md's preferred error type). Generated font `.c` files' `#if LVGL_VERSION_MAJOR==8` blocks left as-is (converter output). |
 | 1.7 | Redundant declarations | ◐ mostly done — `isinMenu` (already gone via §1.2), `notes_crypto_path_is_protected` (kept the owning decl in `notes_path.h`, dropped the dup in `notes_crypto.h`, added `notes_path.h` include to `ui_file_browser.cpp`), `tg_get_unread_count` (menu_glance.cpp now includes `app_registry.h` instead of re-declaring). **Remaining: factory.ino timezone externs — deferred (see below).** |
 | 2.1 | Telegram poll/send off the LVGL thread | ✅ done |
 | 2.2 | Hub config + reachability caching | ✅ done (earlier) |
@@ -111,6 +113,12 @@ Dead code (§1.5/§1.7) — dead types/globals + redundant declarations (this se
   the owning `notes_path.h`; `ui_file_browser.cpp` now includes it directly);
   `tg_get_unread_count` local re-decl in `menu_glance.cpp` replaced by an `app_registry.h`
   include. Verified: HW + emulator + 19/19 native tests.
+Dead code (§1.6) — dead LVGL v8 branches (this session):
+- `ui_theme.cpp` (261→80 lines): removed the v8 `#else` theme implementation, unwrapped
+  the live v9 body. `ui_define.h`: removed the v8 `#else` macro block (`lv_timer_get_user_data`/
+  `lv_indev_get_type` — real functions in v9) and the empty `#if LVGL_VERSION_MAJOR==8`
+  block; kept the v8→v9 rename shims (`lv_mem_alloc`→`lv_malloc`, etc.) unconditionally.
+  `HalResult`/`HalStatus` kept. Verified: HW + clean emulator rebuild + 19/19 native tests.
 Dead code (§1.4) — dead `#ifdef` branches (this session):
 - `POLLING` (both `nfc_reader.cpp` blocks collapsed to their live `#else`), `ARDUINO_T_DECK_V2`
   (`display.cpp` keyboard enable/disable — kept the `ARDUINO_T_LORA_PAGER` branch),
@@ -321,9 +329,15 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
   (HAL). A UI header included from HAL would formalise a HAL→UI dependency the layering
   forbids; the clean fix is relocating the timezone logic to a neutral/HAL module first.
   Deferred until that relocation is in scope.
-- **§1.6 `HalResult`/`HalStatus`** — referenced only by `test/test_hal_result`, but
-  CLAUDE.md calls it the *preferred* error type for new code. Keep unless that migration is
-  being abandoned.
+- **§1.6 `HalResult`/`HalStatus`** — KEPT (not removed). Referenced only by
+  `test/test_hal_result`, but CLAUDE.md calls it the *preferred* error type for new code.
+  Keep unless that migration is abandoned. (The rest of §1.6 — the dead LVGL v8 theme
+  branch — is done; see the §1.6 row/commit note.)
+- **Scattered `#if LVGL_VERSION_MAJOR == 9` guards** (`ui_tools.cpp` ×6, `ui_settings.cpp`,
+  `ui_journal.cpp`) — NOT touched. These were outside the report's §1.6 scope (which named
+  only `ui_theme.cpp`/`ui_define.h`). They are small version guards, not a big dead branch;
+  unwrapping them is low-value churn. Fold into a future pass only if simplifying all v9
+  guards at once. Generated font `.c` files' v8 blocks stay (LVGL-converter output).
 - **§1.4 `USING_LED_INDICATOR`** — ✅ RESOLVED: the phantom LED slider and all its plumbing
   were removed (the pager has no user-facing indicator LED to drive). See the §1.4 row and
   the §1.4 commit note above.
@@ -353,14 +367,13 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 
 ## Suggested next order
 
-**All of §1.1–§1.5, §1.7, and the §3 repo-hygiene (§3.2/§3.5) are DONE** (the §1.4/§1.5
+**The whole §1 dead-code audit (§1.1–§1.7) and §3 repo-hygiene are DONE** (the §1.4/§1.5/§1.6
 leftovers are deliberate, documented in Deferred). What remains, best-first:
 
-1. **§1.6** — judgement calls (LVGL v8 theme `#else` branch is safe to drop since every
-   env pins v9; keep `HalResult`/`HalStatus` unless the migration is abandoned).
-2. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
+1. **Remaining §2 perf** — `§2.12` (status-bar RTC/gauge, needs the wake/time-seed flow
    understood — see Deferred; the write-only `monitor_params_t` §1.5 fields ride along here),
-   `§2.13` (audio busy-wait), `§2.17`, `§2.18` (helper dedup).
-3. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
-4. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
+   `§2.13` (audio busy-wait), `§2.17`, `§2.18` (helper dedup). `§3.1` font-picker cap is a
+   product decision still open.
+2. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
+3. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
    to validate the radio/audio passes, then optionally do the follow-up trims it lists.
