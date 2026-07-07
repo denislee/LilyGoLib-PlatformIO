@@ -3,7 +3,7 @@
 Companion to `OPTIMIZATION_REPORT.md` (the analysis). This file tracks **what has
 been applied**, **what remains**, and — most importantly — **how to verify safely**
 before removing anything else. Last updated **2026-07-07** (§2.12 clock + gauge-TTL done;
-§2.18 encoder consolidation done).
+§2.18 encoder consolidation done; §2.13 audio stop busy-waits → bounded blocking waits done).
 
 > **Milestone: the entire §1 dead-code audit (§1.1–§1.7) and the §3 repo-hygiene are
 > complete.** §1.1 dead files, §1.2 ~60 never-called `hw_*` functions, §1.3 stale decls,
@@ -53,7 +53,7 @@ wrong: `ui_lock`/`ui_unlock`).
 | 2.10 | Home-screen ping off-thread | ✅ done (earlier) |
 | 2.11 | O(n²) note-list merges → set | ✅ done |
 | 2.12 | Status-bar 1 Hz RTC + gauge sweep | ✅ done — blocker resolved by analysis (no deep-sleep-reboot path; `hw_init` seeds the system clock from RTC at boot, NTP/GPS/manual keep both in step, fake/light sleep preserves it). Clock label now reads the system clock via new `hw_get_wall_clock` (`system.{h,cpp}`) instead of an I2C RTC read every second — routed the two 1 Hz display ticks (`core/system.cpp` status bar, `menu_glance.cpp`). Gauge sweep TTL extended 1 s→5 s when not charging (`power.cpp`). **§1.5 write-only-field removal NOT done here** — kept (still rides the hardware pass; the sweep is just throttled, not trimmed). |
-| 2.13 | Audio stop busy-wait on UI thread | ☐ **needs care** |
+| 2.13 | Audio stop busy-wait on UI thread | ✅ done — the three UI-thread poll loops in `audio.cpp` (`hw_rec_stop`, `hw_set_sd_music_play`, `hw_set_play_stop`) replaced with **bounded blocking waits**. Player: new `PLAYER_STOPPED` event-group bit (set wherever the player clears `PLAYER_RUNNING`); callers `xEventGroupWaitBits(PLAYER_STOPPED, …, 2 s)` instead of `while (hw_player_running()) delay(2)`. Recorder: new `recorderDoneSem` binary semaphore (given at both recorder-task exits, drained at `hw_rec_start`); `hw_rec_stop` does `xSemaphoreTake(…, 5 s)` instead of `while (recorder_running) delay(5)`, with a poll fallback on timeout to keep the synchronous "file closed on return" contract `finalize_recording` relies on. All changes ARDUINO-gated (emulator uses the stub `#else`). ⚠️ **compile+emulator-verified only** — the recorder/codec stop paths are on the [hardware smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes). |
 | 2.14 | Home-app visibility NVS cache | ✅ done |
 | 2.15 | MP3 decode buffer → PSRAM | ✅ done |
 | 2.16 | `hw_http_request` double-buffer | ⊘ **deferred** (poor risk/reward — see below) |
@@ -100,12 +100,19 @@ longer freezes ~1–2 s per poll or per voice-memo send.
 
 Perf (§2): `3b373da` `46686f3` `932eed0` `ba2a4ae` `c22a83e` `e897fe1` `37d67e5`
 `bc78d41` `c7ff2c2` `5c4ab5f` `590faf4` `9c60c5b` `c01a540` `f6d90ed` `e456232` `c7868e4`
+`de08e09`
 
 - **§2.12** status-bar RTC + gauge sweep (`e456232` / `54c13e8`): new
   `hw_get_wall_clock()` (`system.{h,cpp}`) drives the two 1 Hz display ticks
   (`core/system.cpp`, `menu_glance.cpp`) off the ESP32 system clock instead of a
   per-second I2C RTC read; `hw_get_monitor_params` (`power.cpp`) backs its TTL off to 5 s
   when not charging. RTC-blocker resolved by analysis (see the §2.12 Deferred entry).
+- **§2.13** audio stop busy-wait → bounded blocking waits (`de08e09` / this docs commit):
+  the three UI-thread poll loops in `audio.cpp` become bounded blocking waits. Player gets a
+  `PLAYER_STOPPED` event-group bit (`xEventGroupWaitBits`, 2 s); recorder gets a
+  `recorderDoneSem` binary semaphore (`xSemaphoreTake`, 5 s, poll fallback on timeout). No
+  flash/RAM delta (2,953,041 B / 89,632 B). ARDUINO-gated; emulator unaffected. ⚠️
+  compile+emulator only — recorder/codec stop paths ride the hardware smoke-test.
 - **§2.18** (partial) encoder consolidation (`c7868e4` / this docs commit): new
   `hal::str_encode` module absorbs the 3× `json_escape`, 3× `b64_encode` and 2× `url_encode`
   copies (ui_chat, ui_notes_sync, ui_weather, hub). −166 net lines in the consumers. NVS
@@ -397,12 +404,12 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 **The whole §1 dead-code audit (§1.1–§1.7) and §3 repo-hygiene are DONE** (the §1.4/§1.5/§1.6
 leftovers are deliberate, documented in Deferred). What remains, best-first:
 
-1. **Remaining §2 perf** — `§2.13` (audio busy-wait, needs care), `§2.17` (settings
-   blocking HTTPS, user-initiated), `§2.18` NVS `load/save_pref` triplet dedup (the encoder
-   half of §2.18 is done — see the table row; the sanitizer half is left by design). `§3.1`
-   font-picker cap is a product decision still open. (`§2.12` is done; the write-only
-   `monitor_params_t` §1.5 fields are still deferred to the hardware pass, decoupled from
-   §2.12.)
+1. **Remaining §2 perf** — `§2.17` (settings blocking HTTPS, user-initiated), `§2.18` NVS
+   `load/save_pref` triplet dedup (the encoder half of §2.18 is done — see the table row; the
+   sanitizer half is left by design). `§3.1` font-picker cap is a product decision still open.
+   (`§2.12` and `§2.13` are done; the write-only `monitor_params_t` §1.5 fields are still
+   deferred to the hardware pass, decoupled from §2.12. `§2.13`'s recorder/codec stop paths
+   want the hardware smoke-test to confirm the bounded waits behave on-device.)
 2. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
 3. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
    to validate the radio/audio passes, then optionally do the follow-up trims it lists.
