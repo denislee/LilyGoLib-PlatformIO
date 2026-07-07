@@ -5,3 +5,6 @@ build
 compile_commands.json
 # PlatformIO transpiles each .ino into a sibling .ino.cpp at build time.
 src/*.ino.cpp
+# Vendor factory images (~16 MB each) — reference restore blobs, not build
+# inputs. Untracked to keep the repo lean; recoverable from the vendor release.
+lib/LilyGoLib/firmware/*.bin
