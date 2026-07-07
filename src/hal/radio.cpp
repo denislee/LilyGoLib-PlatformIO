@@ -1,6 +1,6 @@
 /**
  * @file      radio.cpp
- * @brief     Radio enable/disable + USB/RF switch.
+ * @brief     Radio enable/disable.
  *
  * The per-module driver implementations (sx1262, cc1101, sx1280, lr1121, nrf24)
  * live in src/hw_*.cpp.
@@ -24,13 +24,4 @@ int16_t hw_set_radio_enable(bool en)
     hw_get_radio_params(params);
     params.mode = RADIO_DISABLE;
     return hw_set_radio_params(params);
-}
-
-void hw_set_usb_rf_switch(bool to_usb)
-{
-#ifdef ARDUINO
-#if defined(HAS_USB_RF_SWITCH)
-    instance.setRFSwitch(to_usb);
-#endif
-#endif
 }

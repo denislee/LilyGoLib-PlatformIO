@@ -1,6 +1,6 @@
 /**
  * @file      radio_common.cpp
- * @brief     Shared TX/RX/ISR plumbing for every LoRa/FSK RadioLib driver.
+ * @brief     Shared radio config + boot ISR wiring for every LoRa/FSK RadioLib driver.
  *
  * Per-chip programming (setFrequency, setBandwidth, mode entry, ...) lives in
  * src/hw_<chip>.cpp and is reached through the `radio_chip::` hooks in
@@ -16,7 +16,6 @@
 #include <LilyGoLib.h>
 
 static EventGroupHandle_t radioEvent = NULL;
-static uint32_t last_send_millis = 0;
 
 #define LORA_ISR_FLAG _BV(0)
 
@@ -77,100 +76,4 @@ int16_t hw_set_radio_default()
     radio_params_t params;
     hw_get_radio_params(params);
     return hw_set_radio_params(params);
-}
-
-void hw_set_radio_listening()
-{
-#ifdef ARDUINO
-    core::ScopedSpiLock lock;
-    radio.startReceive();
-#endif
-}
-
-void hw_set_radio_tx(radio_tx_params_t &params, bool continuous)
-{
-#ifdef ARDUINO
-    if (continuous) {
-        EventBits_t eventBits = xEventGroupWaitBits(
-                                    radioEvent, LORA_ISR_FLAG,
-                                    pdTRUE, pdTRUE, pdMS_TO_TICKS(2));
-        if ((eventBits & LORA_ISR_FLAG) != LORA_ISR_FLAG) {
-            params.state = -1;
-            return;
-        }
-    }
-
-    if (!params.data) {
-        params.state = -1;
-        return;
-    }
-
-    // Both calls touch the SPI bus, so they must sit inside the instance lock.
-    // Pre-refactor, the SX1262 path ran finishTransmit() outside the lock —
-    // a latent race against other SPI users (e.g. the display flush task).
-    {
-        core::ScopedSpiLock lock;
-        radio.finishTransmit();
-        params.state = radio.startTransmit(params.data, params.length);
-    }
-#else
-    (void)params;
-    (void)continuous;
-#endif
-}
-
-void hw_get_radio_rx(radio_rx_params_t &params)
-{
-#ifdef ARDUINO
-    EventBits_t eventBits = xEventGroupWaitBits(
-                                radioEvent, LORA_ISR_FLAG,
-                                pdTRUE, pdTRUE, pdMS_TO_TICKS(2));
-    if ((eventBits & LORA_ISR_FLAG) != LORA_ISR_FLAG) {
-        params.state = -1;
-        return;
-    }
-
-    if (!params.data) {
-        params.state = -1;
-        printf("Rx data buffer is empty\n");
-        return;
-    }
-
-    {
-        core::ScopedSpiLock lock;
-        params.length = radio.getPacketLength();
-        params.state  = radio.readData(params.data, params.length);
-        params.rssi   = radio.getRSSI();
-        params.snr    = radio.getSNR();
-        // Re-arm receive before releasing the lock so we don't drop the next packet.
-        radio.startReceive();
-    }
-
-    // Suppress echoes of our own just-transmitted packet.
-    if (last_send_millis + 200 > millis()) {
-        params.length = 0;
-        return;
-    }
-
-    params.data[params.length] = '\0';
-#else
-    params.length = 0;
-#endif
-}
-
-bool radio_transmit(const uint8_t *data, size_t length)
-{
-#ifdef ARDUINO
-    // radio.transmit() blocks and drives the shared SPI bus, so it must hold
-    // the bus lock like every other radio SPI access in this file. Currently
-    // unused but exported — don't leave it as an unlocked landmine.
-    core::ScopedSpiLock lock;
-    int state = radio.transmit(data, length);
-    last_send_millis = millis();
-    return (state == RADIOLIB_ERR_NONE);
-#else
-    (void)data;
-    (void)length;
-    return true;
-#endif
 }

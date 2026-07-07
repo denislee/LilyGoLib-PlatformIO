@@ -17,7 +17,7 @@ where the stale report would have caused a regression.
 | § | Item | Status |
 |---|---|---|
 | 1.1 | Whole dead files (`ui_power.cpp`, `test_sleep.cpp`, `keyboard_audio.h`) | ✅ done |
-| 1.2 | ~60 never-called `hw_*` functions | ◐ partial — storage/display/power/wireless-BLE/4×system/sensors-peripherals/core-apps/UI-helpers+system-UI-chain/**audio** done; **radio remains** (HIGH-risk) |
+| 1.2 | ~60 never-called `hw_*` functions | ✅ done — all groups removed (storage/display/power/wireless-BLE/system/sensors-peripherals/core-apps/UI-helpers+system-UI-chain/audio/radio). Radio done conservatively: dead API removed, both live boot ISRs kept intact; non-compiled chip trios left as dead source (see radio note below). |
 | 1.3 | Stale declarations (no definition) | ✅ done (5 removed) |
 | 1.4 | Dead `#ifdef` branches | ◐ partial — `USING_UART_BLE`, `USING_MAG_QMC5883`, `USING_BME280`, `USING_IR_REMOTE`/`_RECEIVER` gone; **rest remain** (incl. `USING_LED_INDICATOR` bug candidate) |
 | 1.5 | Dead types/fields/globals | ☐ not started |
@@ -170,14 +170,35 @@ branch still referencing a renamed parameter). Do not skip it.
   static chain `listDir`/`hw_fat_list`/`hw_sd_list` and `hw_set_sd_music_pause`/
   `hw_set_sd_music_resume`. `AudioParams_t`/`audio_source_type_t` kept (live in
   `hw_set_sd_music_play`/`hw_sd_play`).
-- **radio** (`radio_common.cpp`, `radio.cpp`, `radio/nrf2401.cpp`, per-chip files):
-  the biggest and riskiest. `hw_set_radio_listening`/`hw_set_radio_tx`/`hw_get_radio_rx`/
-  `radio_transmit`; the whole NRF24 API except `hw_nrf24_begin`; `hw_set_usb_rf_switch`;
-  the `radio_get_{freq,bandwidth,tx_power}_from_index` + `_length()` trios in all four
-  chip files. Removing the TX/RX API shrinks the **ISR / FreeRTOS event-group plumbing**
-  in `hw_radio_begin`, and lets the `hw_nrf24_begin` boot call (`system.cpp`) +
-  `USING_EXTERN_NRF2401` block (`board_config.h`) go too. This touches interrupt and boot
-  paths — a compile-clean mistake here can still brick radio/boot. **Do not rush blind.**
+- ~~**radio**~~ ✅ done (compile + emulator verified; **not** hardware-smoke-tested).
+  Removed, from the **compiled** files only, everything with zero call sites:
+  - `radio_common.cpp`: `hw_set_radio_listening`/`hw_set_radio_tx`/`hw_get_radio_rx`/
+    `radio_transmit` + the now-unused `last_send_millis`.
+  - `radio.cpp`: `hw_set_usb_rf_switch`.
+  - `radio/nrf2401.cpp`: the 7 dead NRF24 API functions (`hw_has_nrf24`,
+    `hw_get/set_nrf24_params`, `hw_set_nrf24_listening`, `hw_clear_nrf24_flag`,
+    `hw_set_nrf24_tx`, `hw_get_nrf24_rx`).
+  - `radio/sx1262.cpp`: the option-table arrays + the `radio_get_*_from_index`/`_length`
+    trio (also clears the `RADIO_FIXED_FREQUENCY` §1.4 branch).
+  - `radio.h`: all the above decls.
+
+  **Conservative choices (deliberate — this is boot/ISR code and was NOT hardware-tested):**
+  1. **Kept `hw_radio_begin` and `hw_nrf24_begin` (+ their `hw_radio_isr`/`hw_nrf24_isr`
+     and `radioEvent`) fully intact.** They're called at boot. After removing the dead
+     TX/RX consumers the ISR/event-group is now *inert* (nothing waits on the events), but
+     emptying a live boot function / dropping `setPacketSentAction` is exactly the kind of
+     change that can brick boot without a hardware smoke-test. The report says this
+     plumbing "shrinks to nothing" — that final trim is left for a **hardware-validated**
+     pass. `hw_nrf24_begin` + `USING_EXTERN_NRF2401` likewise kept (live boot init).
+  2. **Did NOT touch the non-compiled chip files** (`cc1101.cpp`, `lr1121.cpp`,
+     `sx1280.cpp` — SX1262 is the selected chip). Their `radio_get_*` trios remain as
+     harmless dead source (0 flash, not compiled). Removing the shared `radio.h` decls is
+     safe for them (their defs are self-declaring). `lr1121.cpp` additionally writes
+     `_high_freq` from its **live** `configure()` but only reads it in the trio — trimming
+     that needs an LR1121 build to verify. Do these when/if that chip is built.
+  The radio is configured-but-idle in this firmware (like GPS): `hw_set_radio_enable` sets
+  frequency/params at boot but nothing ever TX/RXes — which is why the whole TX/RX/NRF24
+  API was dead.
 
 ---
 

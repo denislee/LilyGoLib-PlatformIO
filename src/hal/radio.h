@@ -1,6 +1,6 @@
 /**
  * @file      radio.h
- * @brief     LoRa/FSK radio (sx126x/cc1101/sx128x/lr1121), NRF24, RF switch.
+ * @brief     LoRa/FSK radio (sx126x/cc1101/sx128x/lr1121) enable + config.
  */
 #pragma once
 
@@ -16,30 +16,5 @@ int16_t hw_set_radio_enable(bool en);
 
 int16_t hw_set_radio_params(radio_params_t &params);
 void hw_get_radio_params(radio_params_t &params);
-void hw_set_radio_listening();
 int16_t hw_set_radio_default();
-void hw_set_radio_tx(radio_tx_params_t &params, bool continuous = true);
-void hw_get_radio_rx(radio_rx_params_t &params);
-
-float radio_get_freq_from_index(uint8_t index);
-uint16_t radio_get_freq_length();
-
-float radio_get_bandwidth_from_index(uint8_t index);
-uint16_t radio_get_bandwidth_length();
-
-float radio_get_tx_power_from_index(uint8_t index);
-uint16_t radio_get_tx_power_length();
-
-bool radio_transmit(const uint8_t *data, size_t length);
-
-void hw_set_usb_rf_switch(bool to_usb);
-
-// --- NRF24 (2.4 GHz) ---
-void hw_get_nrf24_params(radio_params_t &params);
-int16_t hw_set_nrf24_params(radio_params_t &params);
-void hw_set_nrf24_listening();
-bool hw_set_nrf24_tx(radio_tx_params_t &params, bool continuous = true);
-void hw_get_nrf24_rx(radio_rx_params_t &params);
-bool hw_has_nrf24();
-void hw_clear_nrf24_flag();
 

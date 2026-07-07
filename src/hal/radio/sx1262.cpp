@@ -80,37 +80,4 @@ int16_t configure(const radio_params_t &params)
 
 } // namespace radio_chip
 
-
-// ----- Option tables -----
-
-static const float bandwidth_list[]   = {41.7, 62.5, 125.0, 250.0, 500.0};
-static const float power_level_list[] = {2, 5, 10, 12, 17, 20, 22};
-#ifdef RADIO_FIXED_FREQUENCY
-static const float freq_list[] = {RADIO_FIXED_FREQUENCY};
-#else
-static const float freq_list[] = {433.0, 470.0, 842.0, 850, 868.0, 915.0, 923.0, 945.0};
-#endif
-
-uint16_t radio_get_freq_length()      { return sizeof(freq_list)        / sizeof(freq_list[0]); }
-uint16_t radio_get_bandwidth_length() { return sizeof(bandwidth_list)   / sizeof(bandwidth_list[0]); }
-uint16_t radio_get_tx_power_length()  { return sizeof(power_level_list) / sizeof(power_level_list[0]); }
-
-float radio_get_freq_from_index(uint8_t index)
-{
-    if (index >= radio_get_freq_length()) return RADIO_DEFAULT_FREQUENCY;
-    return freq_list[index];
-}
-
-float radio_get_bandwidth_from_index(uint8_t index)
-{
-    if (index >= radio_get_bandwidth_length()) return 125.0;
-    return bandwidth_list[index];
-}
-
-float radio_get_tx_power_from_index(uint8_t index)
-{
-    if (index >= radio_get_tx_power_length()) return 22;
-    return power_level_list[index];
-}
-
 #endif  // ARDUINO_LILYGO_LORA_SX1262
