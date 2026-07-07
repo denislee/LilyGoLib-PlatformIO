@@ -54,16 +54,6 @@ void keyboard_brightness_cb(lv_event_t *e)
     hw_set_kb_backlight(val);
 }
 
-void led_brightness_cb(lv_event_t *e)
-{
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    uint8_t val =  lv_slider_get_value(obj);
-    lv_obj_t *slider_label = (lv_obj_t *)lv_obj_get_user_data(obj);
-    lv_label_set_text_fmt(slider_label, "   %u%%  ", map_r(val, 0, 255, 0, 100));
-    local_param.led_indicator_level = val;
-    hw_set_led_backlight(val);
-}
-
 void disp_timeout_cb(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
@@ -239,11 +229,6 @@ void build_backlight(lv_obj_t *menu, lv_obj_t *sub_page)
         add_slider("Keyboard", 0, 20, kb_step, keyboard_brightness_cb, "%d%%");
         lv_obj_add_event_cb(slider, invert_scroll_key_cb,
                             (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS), NULL);
-    }
-
-    if (hw_has_indicator_led()) {
-        add_slider("LED", 0, 255,
-                   local_param.led_indicator_level, led_brightness_cb, "%d%%");
     }
 
     slider = create_slider(sub_page, NULL, "Timeout", 0, 180,

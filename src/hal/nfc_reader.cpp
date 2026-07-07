@@ -120,28 +120,7 @@ static void demoNotif(rfalNfcState st )
         NFCReader.rfalNfcDeactivate(true);
         NFCReader.rfalNfcaPollerSleep();
 
-#ifdef POLLING
-        rfalNfcaSensRes       sensRes;
-        rfalNfcaSelRes        selRes;
-        rfalNfcDevice *nfcDev;
-        NFCReader.rfalNfcGetActiveDevice(&nfcDev);
-        /* Loop until tag is removed from the field */
-        log_d("Operation completed. Tag can be removed from the field");
-        NFCReader.rfalNfcaPollerInitialize();
-        while (NFCReader.rfalNfcaPollerCheckPresence(RFAL_14443A_SHORTFRAME_CMD_WUPA, &sensRes) == ST_ERR_NONE) {
-            if (((nfcDev->dev.nfca.type == RFAL_NFCA_T1T) && (!rfalNfcaIsSensResT1T(&sensRes))) ||
-                    ((nfcDev->dev.nfca.type != RFAL_NFCA_T1T) && (NFCReader.rfalNfcaPollerSelect(nfcDev->dev.nfca.nfcId1, nfcDev->dev.nfca.nfcId1Len, &selRes) != ST_ERR_NONE))) {
-                break;
-            }
-            NFCReader.rfalNfcaPollerSleep();
-            instanceLockGive();
-            delay(130);
-            instanceLockTake();
-        }
-        log_d("Start discovery");
-#else
         state = ST_WAIT_RELEASED;
-#endif
     }
 }
 
@@ -152,9 +131,6 @@ uint32_t interval = 0;
 void loopNFCReader()
 {
     if (!_nfc_running)return;
-#ifdef POLLING
-    NFCReader.rfalNfcWorker();
-#else
     switch (state) {
     case ST_POLLING:
         NFCReader.rfalNfcWorker();
@@ -188,7 +164,6 @@ void loopNFCReader()
     default:
         break;
     }
-#endif
 }
 
 static ReturnCode ndefBufferPrint(const char *prefix, const ndefConstBuffer *bufString, const char *suffix)

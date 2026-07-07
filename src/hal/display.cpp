@@ -24,13 +24,6 @@ void hw_set_kb_backlight(uint8_t level)
 #endif
 }
 
-void hw_set_led_backlight(uint8_t level)
-{
-#if defined(ARDUINO) && defined(USING_LED_INDICATOR)
-    instance.setLedIndicatorBrightness(level);
-#endif
-}
-
 uint8_t hw_get_disp_min_brightness()
 {
     return dev_conts_var.min_brightness;
@@ -44,9 +37,7 @@ uint16_t hw_get_disp_max_brightness()
 void hw_enable_keyboard()
 {
 #if defined(ARDUINO)
-#if defined(ARDUINO_T_DECK_V2)
-    instance.enableKeyboard();
-#elif defined(ARDUINO_T_LORA_PAGER)
+#if defined(ARDUINO_T_LORA_PAGER)
     instance.initKeyboard();
 #endif
     // Ensure user setting is restored as initKeyboard might reset it to library defaults
@@ -64,9 +55,7 @@ void hw_enable_keyboard()
 void hw_disable_keyboard()
 {
 #if defined(ARDUINO)
-#if defined(ARDUINO_T_DECK_V2)
-    instance.disableKeyboard();
-#elif defined(ARDUINO_T_LORA_PAGER)
+#if defined(ARDUINO_T_LORA_PAGER)
     instance.kb.end();
 #endif
 #endif
@@ -75,11 +64,6 @@ void hw_disable_keyboard()
 bool hw_has_keyboard()
 {
     return hw_get_device_online() & HW_KEYBOARD_ONLINE;
-}
-
-bool hw_has_indicator_led()
-{
-    return hw_get_device_online() & HW_LED_INDIC_ONLINE;
 }
 
 void hw_set_keyboard_read_callback(void(*read)(int state, char &c))

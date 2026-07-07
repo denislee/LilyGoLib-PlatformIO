@@ -12,8 +12,6 @@ uint8_t hw_get_disp_min_brightness();
 uint16_t hw_get_disp_max_brightness();
 
 void hw_set_kb_backlight(uint8_t level);
-void hw_set_led_backlight(uint8_t level);
-bool hw_has_indicator_led();
 
 void hw_enable_keyboard();
 void hw_disable_keyboard();

@@ -104,7 +104,6 @@ typedef enum {
 #define HW_QMC5883P_ONLINE          (_BV(17))
 #define HW_BMA423_ONLINE            (_BV(18))
 #define HW_QMI8658_ONLINE           (_BV(19))
-#define HW_LED_INDIC_ONLINE         (_BV(20))
 
 #else
 #include <WiFi.h>
@@ -182,7 +181,6 @@ typedef struct {
 typedef struct {
     uint8_t brightness_level;
     uint8_t keyboard_bl_level;
-    uint8_t led_indicator_level;
     uint8_t disp_timeout_second;
     uint16_t charger_current;
     uint8_t charger_enable;

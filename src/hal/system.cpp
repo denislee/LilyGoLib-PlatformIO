@@ -28,7 +28,10 @@ user_setting_params_t user_setting;
 //     Adding a new field to the *end* keeps the size check effective and is
 //     safe without a version bump — missing bytes keep their default values.
 static constexpr uint32_t SETTINGS_MAGIC   = 0x50414752u; // "PAGR"
-static constexpr uint16_t SETTINGS_VERSION = 10;
+// v11: dropped user_setting_params_t.led_indicator_level (removed LED slider).
+// A struct-layout change: the size guard in load already forces a clean
+// defaults-reset on upgrade, and the version bump makes that explicit.
+static constexpr uint16_t SETTINGS_VERSION = 11;
 
 struct SettingsHeader {
     uint32_t magic;
@@ -697,33 +700,6 @@ void hw_get_heap_info(uint32_t &total, uint32_t &free)
 
 
 
-
-using TrackballEventCallback = void(*)(uint8_t dir);
-using ButtonEventCallback = void(*)(uint8_t idx, uint8_t state);
-
-#if defined(ARDUINO) && defined(USING_TRACKBALL)
-
-static TrackballEventCallback _trackball_cb = NULL;
-static ButtonEventCallback    _button_cb = NULL;
-
-
-static void trackballEventCallback(DeviceEvent_t event, void *params, void *user_data)
-{
-    if (_trackball_cb && params) {
-        TrackballDir_t dir = *(static_cast < TrackballDir_t * > (params));
-        _trackball_cb(dir);
-    }
-}
-
-static void buttonEventCallback(DeviceEvent_t event, void *params, void *user_data)
-{
-    if (_button_cb && params) {
-        ButtonEventParam_t *p = static_cast < ButtonEventParam_t * > (params);
-        _button_cb(p->id, p->event);
-    }
-}
-
-#endif
 
 const char *hw_get_firmware_hash_string()
 {
