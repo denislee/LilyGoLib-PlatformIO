@@ -24,6 +24,17 @@ void hw_get_date_time(std::string &param);
 void hw_get_date_time(struct tm &timeinfo);
 void hw_set_date_time(struct tm &timeinfo);
 
+// Cheap wall-clock read for frequently-polled *display* use (status bar,
+// glance overlay — once per second). Reads the ESP32 system clock via
+// time()/localtime_r instead of hitting the external RTC over I2C, so it
+// does not contend the instance mutex with the 10 ms keyboard task. The
+// system clock is the correct source of truth here: hw_init() seeds it from
+// the RTC at boot, and NTP/GPS/manual sets keep both in step. This firmware
+// never deep-sleeps (fake/light sleep preserves the system clock), so the
+// value stays valid across sleep. Use hw_get_date_time() when the RTC is the
+// authority (settings, one-off timestamps).
+void hw_get_wall_clock(struct tm &timeinfo);
+
 // Non-blocking NTP sync. Starts SNTP (requires WiFi up) and returns
 // immediately; poll hw_get_time_sync_status() to detect completion. The
 // RTC write happens in factory.ino's SNTP notification callback, so no

@@ -40,8 +40,10 @@ static void glance_refresh(lv_timer_t *t) {
     (void)t;
     if (!s_glance_overlay) return;
 
+    // Once-per-second refresh: read the system clock, not the RTC over I2C
+    // (see hw_get_wall_clock).
     struct tm timeinfo;
-    hw_get_date_time(timeinfo);
+    hw_get_wall_clock(timeinfo);
     if (s_glance_time_lbl) {
         lv_label_set_text_fmt(s_glance_time_lbl, "%02d:%02d",
                               timeinfo.tm_hour, timeinfo.tm_min);

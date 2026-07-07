@@ -254,8 +254,13 @@ void hw_get_monitor_params(monitor_params_t &params)
     static monitor_params_t cached_params;
     static uint32_t last_refresh = 0;
 
-    // Refresh at most every 1 second to save power and I2C bandwidth
-    if (last_refresh != 0 && (millis() - last_refresh < 1000)) {
+    // Refresh at most once per second while charging (the status bar animates
+    // the bolt / rising percent), but back off to 5 s when discharging: the
+    // full sweep below is ~12 I2C gauge/PMU register reads under the instance
+    // mutex, and an idle battery percent barely moves second-to-second. A
+    // freshly-plugged charger is picked up within one 5 s tick.
+    uint32_t ttl_ms = cached_params.is_charging ? 1000 : 5000;
+    if (last_refresh != 0 && (millis() - last_refresh < ttl_ms)) {
         params = cached_params;
         return;
     }

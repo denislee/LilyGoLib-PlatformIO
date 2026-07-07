@@ -482,6 +482,20 @@ void hw_get_date_time(struct tm &timeinfo)
 #endif
 }
 
+void hw_get_wall_clock(struct tm &timeinfo)
+{
+    // See system.h: read the system clock, not the RTC over I2C. Same
+    // localtime_r fallback that hw_get_date_time uses when the RTC is
+    // offline — but here it is the primary path, and it holds the instance
+    // mutex for zero time.
+    time_t now;
+    time(&now);
+#ifndef ARDUINO
+    now += emu_time_offset;
+#endif
+    localtime_r(&now, &timeinfo);
+}
+
 void hw_set_date_time(struct tm &timeinfo)
 {
 #ifdef ARDUINO

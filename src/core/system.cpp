@@ -221,9 +221,10 @@ void System::setupGlobalUI() {
             }
         }
 
-        // Status bar update logic
+        // Status bar update logic. Use the system clock (not the RTC over
+        // I2C) for this once-per-second label — see hw_get_wall_clock.
         struct tm timeinfo;
-        hw_get_date_time(timeinfo);
+        hw_get_wall_clock(timeinfo);
         if (self._statTimeLabel) {
             lv_label_set_text_fmt(self._statTimeLabel, "%02d/%02d/%04d %02d:%02d", 
                                 timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900,
