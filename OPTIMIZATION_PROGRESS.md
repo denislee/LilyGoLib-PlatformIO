@@ -2,7 +2,8 @@
 
 Companion to `OPTIMIZATION_REPORT.md` (the analysis). This file tracks **what has
 been applied**, **what remains**, and — most importantly — **how to verify safely**
-before removing anything else. Last updated **2026-07-07** (§2.12 clock + gauge-TTL done).
+before removing anything else. Last updated **2026-07-07** (§2.12 clock + gauge-TTL done;
+§2.18 encoder consolidation done).
 
 > **Milestone: the entire §1 dead-code audit (§1.1–§1.7) and the §3 repo-hygiene are
 > complete.** §1.1 dead files, §1.2 ~60 never-called `hw_*` functions, §1.3 stale decls,
@@ -57,7 +58,7 @@ wrong: `ui_lock`/`ui_unlock`).
 | 2.15 | MP3 decode buffer → PSRAM | ✅ done |
 | 2.16 | `hw_http_request` double-buffer | ⊘ **deferred** (poor risk/reward — see below) |
 | 2.17 | Settings blocking HTTPS inline | ☐ not started (user-initiated) |
-| 2.18 | Consolidate duplicated helpers | ☐ not started (cleanup) |
+| 2.18 | Consolidate duplicated helpers | ◐ partial — **encoders done**: `json_escape` (was 3× — ui_chat, ui_notes_sync, hub), `b64_encode` (3×), `url_encode` (2× within ui_weather) hoisted into new `hal::str_encode` (`str_encode.{h,cpp}`); all call sites routed through it; orphaned `<mbedtls/base64.h>` includes dropped. **Remaining**: NVS `load/save_pref` triplets across ~5 files (persistence — own careful pass) and the weather/telegram UTF-8 sanitizers (**left by design** — shared decode skeleton but different downstream logic: `sanitize_ascii` drops symbols, `ascii_safe` checks font glyph coverage). |
 | 2.19 | Telegram notif-toggle NVS cache | ✅ done |
 | 3.1 | Font-picker trimming (~250–300 KB flash) | ◐ Montserrat 34–46 disabled; **picker-cap product decision remains** |
 | 3.2 | Unused image sources | ✅ done — removed **all 32** `src/images/*.png|jpg` (verified: zero `LV_IMG_DECLARE`/`&img_`/`lv_image_dsc_t` refs in compiled `src/`; no build/script references the dir; every file is recoverable from the vendor `examples/factory/images/` tree). Report said "25"; the earlier compiled-`img_*.c` removal had already orphaned the other 7. |
@@ -98,13 +99,17 @@ longer freezes ~1–2 s per poll or per voice-memo send.
 ## Completed commits (this effort)
 
 Perf (§2): `3b373da` `46686f3` `932eed0` `ba2a4ae` `c22a83e` `e897fe1` `37d67e5`
-`bc78d41` `c7ff2c2` `5c4ab5f` `590faf4` `9c60c5b` `c01a540` `f6d90ed` `e456232`
+`bc78d41` `c7ff2c2` `5c4ab5f` `590faf4` `9c60c5b` `c01a540` `f6d90ed` `e456232` `c7868e4`
 
-- **§2.12** status-bar RTC + gauge sweep (`e456232` / this docs commit): new
+- **§2.12** status-bar RTC + gauge sweep (`e456232` / `54c13e8`): new
   `hw_get_wall_clock()` (`system.{h,cpp}`) drives the two 1 Hz display ticks
   (`core/system.cpp`, `menu_glance.cpp`) off the ESP32 system clock instead of a
   per-second I2C RTC read; `hw_get_monitor_params` (`power.cpp`) backs its TTL off to 5 s
   when not charging. RTC-blocker resolved by analysis (see the §2.12 Deferred entry).
+- **§2.18** (partial) encoder consolidation (`c7868e4` / this docs commit): new
+  `hal::str_encode` module absorbs the 3× `json_escape`, 3× `b64_encode` and 2× `url_encode`
+  copies (ui_chat, ui_notes_sync, ui_weather, hub). −166 net lines in the consumers. NVS
+  `load/save_pref` triplet dedup + the by-design UTF-8-sanitizer decision are the leftovers.
 Build/hygiene (§3): `ab01a78` `0089c55`
 Dead code (§1) earlier: `e082021` `39a388a` `6449afa` `036d52a` `4db8948` `7fcda8d`
 `409be67` `0e0e0f2`
@@ -376,9 +381,14 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
   *history* — clone size only shrinks after a history rewrite (out of scope, disruptive).
 - ~~`src/images/` PNG/JPG orphans~~ ✅ all 32 removed (§3.2).
 - `test/test_desktop/test_main.cpp` — 26-line `2+2` placeholder (§3.5).
-- Duplicated helpers to consolidate (§2.18): `url_encode` twice within `ui_weather.cpp`;
-  `json_escape`/`b64_encode` duplicated between `ui_chat.cpp` and `hub.cpp`; NVS
-  `load/save_pref` triplets re-implemented across ~5 files.
+- Duplicated helpers to consolidate (§2.18): ~~`url_encode` twice within `ui_weather.cpp`;
+  `json_escape`/`b64_encode` duplicated across `ui_chat.cpp`, `ui_notes_sync.cpp` and
+  `hub.cpp`~~ ✅ done — hoisted into `hal::str_encode` (`c7868e4`). **Still open**: the NVS
+  `load/save_pref` triplets re-implemented across ~5 files (`ui_journal`, `ui_notes_sync`,
+  `ui_tasks`, `ui_telegram`, `ui_text_editor`; canonical pair likely belongs in
+  `storage.{h,cpp}`). Persistence-touching — do it as its own careful pass, ideally with a
+  device to confirm no NVS-namespace/key regressions. The weather/telegram UTF-8 sanitizers
+  are **left by design** (shared decode skeleton, genuinely different downstream logic).
 
 ---
 
@@ -388,10 +398,11 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 leftovers are deliberate, documented in Deferred). What remains, best-first:
 
 1. **Remaining §2 perf** — `§2.13` (audio busy-wait, needs care), `§2.17` (settings
-   blocking HTTPS, user-initiated), `§2.18` (helper dedup, safe cleanup). `§3.1`
-   font-picker cap is a product decision still open. (`§2.12` is now done — see the table
-   row; the write-only `monitor_params_t` §1.5 fields are still deferred to the hardware
-   pass, decoupled from §2.12.)
+   blocking HTTPS, user-initiated), `§2.18` NVS `load/save_pref` triplet dedup (the encoder
+   half of §2.18 is done — see the table row; the sanitizer half is left by design). `§3.1`
+   font-picker cap is a product decision still open. (`§2.12` is done; the write-only
+   `monitor_params_t` §1.5 fields are still deferred to the hardware pass, decoupled from
+   §2.12.)
 2. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
 3. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
    to validate the radio/audio passes, then optionally do the follow-up trims it lists.
