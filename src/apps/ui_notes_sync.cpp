@@ -42,6 +42,7 @@
 #include "../hal/secrets.h"
 #include "../hal/hub.h"
 #include "../hal/str_encode.h"
+#include "../hal/nvs.h"
 #include "../core/app.h"
 #include "../core/app_manager.h"
 #include "../core/system.h"
@@ -57,7 +58,6 @@
 #ifdef ARDUINO
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <Preferences.h>
 #include "../core/scoped_lock.h"
 extern "C" {
 #include "cJSON.h"
@@ -71,32 +71,10 @@ namespace {
 
 // --- NVS helpers ----------------------------------------------------------
 
-static std::string load_pref(const char *key, const char *dflt = "")
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(NSYNC_PREFS_NS, true)) return dflt ? dflt : "";
-    String v = p.getString(key, dflt ? dflt : "");
-    p.end();
-    return std::string(v.c_str());
-#else
-    (void)key;
-    return dflt ? dflt : "";
-#endif
-}
-
-static void save_pref(const char *key, const char *value)
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(NSYNC_PREFS_NS, false)) return;
-    if (value && *value) p.putString(key, value);
-    else p.remove(key);
-    p.end();
-#else
-    (void)key; (void)value;
-#endif
-}
+// Thin namespace-binding wrappers over the shared hal::nvs_* helpers; the
+// begin/get/put/end boilerplate (and its emulator stub) lives in hal/nvs.cpp.
+static std::string load_pref(const char *key, const char *dflt = "") { return hal::nvs_get_str(NSYNC_PREFS_NS, key, dflt); }
+static void        save_pref(const char *key, const char *value)     { hal::nvs_set_str(NSYNC_PREFS_NS, key, value); }
 
 // GitHub PAT persistence delegates to hal/secrets — same encrypted-NVS
 // wrapper the Telegram bearer uses, sharing the notes passphrase. A PAT

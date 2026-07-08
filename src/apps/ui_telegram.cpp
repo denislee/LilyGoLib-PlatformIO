@@ -40,6 +40,7 @@
 #include "../hal/notes_crypto.h"
 #include "../hal/secrets.h"
 #include "../hal/hub.h"
+#include "../hal/nvs.h"
 #include "../core/app.h"
 #include "../core/app_manager.h"
 #include "../core/notify.h"
@@ -55,7 +56,6 @@
 #ifdef ARDUINO
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <Preferences.h>
 #include "../core/scoped_lock.h"
 extern "C" {
 #include "cJSON.h"
@@ -73,58 +73,12 @@ namespace {
 
 // --- persisted config ------------------------------------------------------
 
-static std::string load_pref(const char *key)
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(TG_PREFS_NS, true)) return "";
-    String v = p.getString(key, "");
-    p.end();
-    return std::string(v.c_str());
-#else
-    (void)key;
-    return "";
-#endif
-}
-
-static void save_pref(const char *key, const char *value)
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(TG_PREFS_NS, false)) return;
-    if (value && *value) p.putString(key, value);
-    else p.remove(key);
-    p.end();
-#else
-    (void)key; (void)value;
-#endif
-}
-
-static bool load_bool_pref(const char *key, bool dflt)
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(TG_PREFS_NS, true)) return dflt;
-    bool v = p.getBool(key, dflt);
-    p.end();
-    return v;
-#else
-    (void)key;
-    return dflt;
-#endif
-}
-
-static void save_bool_pref(const char *key, bool value)
-{
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin(TG_PREFS_NS, false)) return;
-    p.putBool(key, value);
-    p.end();
-#else
-    (void)key; (void)value;
-#endif
-}
+// Thin namespace-binding wrappers over the shared hal::nvs_* helpers; the
+// begin/get/put/end boilerplate (and its emulator stub) lives in hal/nvs.cpp.
+static std::string load_pref(const char *key)            { return hal::nvs_get_str(TG_PREFS_NS, key); }
+static void        save_pref(const char *key, const char *value) { hal::nvs_set_str(TG_PREFS_NS, key, value); }
+static bool        load_bool_pref(const char *key, bool dflt)     { return hal::nvs_get_bool(TG_PREFS_NS, key, dflt); }
+static void        save_bool_pref(const char *key, bool value)    { hal::nvs_set_bool(TG_PREFS_NS, key, value); }
 
 // The bearer lives in NVS as `token_enc` (AES-256-CBC + PBKDF2, OpenSSL-enc
 // format) produced by notes_crypto. We piggyback on the notes passphrase —
