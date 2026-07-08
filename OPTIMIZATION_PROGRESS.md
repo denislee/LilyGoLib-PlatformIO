@@ -2,8 +2,8 @@
 
 Companion to `OPTIMIZATION_REPORT.md` (the analysis). This file tracks **what has
 been applied**, **what remains**, and — most importantly — **how to verify safely**
-before removing anything else. Last updated **2026-07-07** (§2.12 clock + gauge-TTL done;
-§2.18 encoder consolidation done; §2.13 audio stop busy-waits → bounded blocking waits done).
+before removing anything else. Last updated **2026-07-08** (§2.12 clock + gauge-TTL done;
+§2.18 encoder + NVS-triplet consolidation done; §2.13 audio stop busy-waits → bounded blocking waits done).
 
 > **Milestone: the entire §1 dead-code audit (§1.1–§1.7) and the §3 repo-hygiene are
 > complete.** §1.1 dead files, §1.2 ~60 never-called `hw_*` functions, §1.3 stale decls,
@@ -58,7 +58,7 @@ wrong: `ui_lock`/`ui_unlock`).
 | 2.15 | MP3 decode buffer → PSRAM | ✅ done |
 | 2.16 | `hw_http_request` double-buffer | ⊘ **deferred** (poor risk/reward — see below) |
 | 2.17 | Settings blocking HTTPS inline | ☐ not started (user-initiated) |
-| 2.18 | Consolidate duplicated helpers | ◐ partial — **encoders done**: `json_escape` (was 3× — ui_chat, ui_notes_sync, hub), `b64_encode` (3×), `url_encode` (2× within ui_weather) hoisted into new `hal::str_encode` (`str_encode.{h,cpp}`); all call sites routed through it; orphaned `<mbedtls/base64.h>` includes dropped. **Remaining**: NVS `load/save_pref` triplets across ~5 files (persistence — own careful pass) and the weather/telegram UTF-8 sanitizers (**left by design** — shared decode skeleton but different downstream logic: `sanitize_ascii` drops symbols, `ascii_safe` checks font glyph coverage). |
+| 2.18 | Consolidate duplicated helpers | ◐ partial — **encoders done**: `json_escape` (was 3× — ui_chat, ui_notes_sync, hub), `b64_encode` (3×), `url_encode` (2× within ui_weather) hoisted into new `hal::str_encode` (`str_encode.{h,cpp}`); all call sites routed through it; orphaned `<mbedtls/base64.h>` includes dropped. **NVS triplets done**: the single-key `load_pref`/`save_pref` (+ bool) begin/get/put/end boilerplate — the *actual* NVS duplication — hoisted into new `hal::nvs_{get,set}_{str,bool}` (`nvs.{h,cpp}`); `ui_telegram.cpp` + `ui_notes_sync.cpp` keep only thin namespace-binding one-liner wrappers (namespaces/keys/call-sites unchanged → no NVS-layout change); `<Preferences.h>` dropped from both. Multi-key configs (`ui_ssh`, `ui_weather`) **left by design** — they batch several keys per `begin/end`, so single-key helpers would multiply NVS cycles; `ui_time_sync`'s tz setter also left (its begin-failure early-return skips the TZ-env apply, a semantic a void-returning helper can't preserve). **Remaining**: the weather/telegram UTF-8 sanitizers (**left by design** — shared decode skeleton but different downstream logic: `sanitize_ascii` drops symbols, `ascii_safe` checks font glyph coverage). |
 | 2.19 | Telegram notif-toggle NVS cache | ✅ done |
 | 3.1 | Font-picker trimming (~250–300 KB flash) | ◐ Montserrat 34–46 disabled; **picker-cap product decision remains** |
 | 3.2 | Unused image sources | ✅ done — removed **all 32** `src/images/*.png|jpg` (verified: zero `LV_IMG_DECLARE`/`&img_`/`lv_image_dsc_t` refs in compiled `src/`; no build/script references the dir; every file is recoverable from the vendor `examples/factory/images/` tree). Report said "25"; the earlier compiled-`img_*.c` removal had already orphaned the other 7. |
@@ -100,7 +100,7 @@ longer freezes ~1–2 s per poll or per voice-memo send.
 
 Perf (§2): `3b373da` `46686f3` `932eed0` `ba2a4ae` `c22a83e` `e897fe1` `37d67e5`
 `bc78d41` `c7ff2c2` `5c4ab5f` `590faf4` `9c60c5b` `c01a540` `f6d90ed` `e456232` `c7868e4`
-`de08e09`
+`de08e09` `86615ec`
 
 - **§2.12** status-bar RTC + gauge sweep (`e456232` / `54c13e8`): new
   `hw_get_wall_clock()` (`system.{h,cpp}`) drives the two 1 Hz display ticks
@@ -117,6 +117,14 @@ Perf (§2): `3b373da` `46686f3` `932eed0` `ba2a4ae` `c22a83e` `e897fe1` `37d67e5
   `hal::str_encode` module absorbs the 3× `json_escape`, 3× `b64_encode` and 2× `url_encode`
   copies (ui_chat, ui_notes_sync, ui_weather, hub). −166 net lines in the consumers. NVS
   `load/save_pref` triplet dedup + the by-design UTF-8-sanitizer decision are the leftovers.
+- **§2.18** (partial) NVS-triplet consolidation (`86615ec` / this docs commit): new
+  `hal::nvs_{get,set}_{str,bool}` module (`nvs.{h,cpp}`) absorbs the single-key
+  `load_pref`/`save_pref`(+bool) begin/get/put/end boilerplate from `ui_telegram.cpp` and
+  `ui_notes_sync.cpp`; each keeps a thin namespace-binding one-liner (namespaces/keys/call
+  sites unchanged → no NVS-layout change), and both drop `<Preferences.h>`. −68 net lines.
+  No flash/RAM regression (2,952,929 B / 89,632 B). Multi-key `ui_ssh`/`ui_weather` and
+  `ui_time_sync`'s tz setter left by design (see the §2.18 table row). Only the by-design
+  UTF-8 sanitizers remain of §2.18.
 Build/hygiene (§3): `ab01a78` `0089c55`
 Dead code (§1) earlier: `e082021` `39a388a` `6449afa` `036d52a` `4db8948` `7fcda8d`
 `409be67` `0e0e0f2`
@@ -390,12 +398,16 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 - `test/test_desktop/test_main.cpp` — 26-line `2+2` placeholder (§3.5).
 - Duplicated helpers to consolidate (§2.18): ~~`url_encode` twice within `ui_weather.cpp`;
   `json_escape`/`b64_encode` duplicated across `ui_chat.cpp`, `ui_notes_sync.cpp` and
-  `hub.cpp`~~ ✅ done — hoisted into `hal::str_encode` (`c7868e4`). **Still open**: the NVS
-  `load/save_pref` triplets re-implemented across ~5 files (`ui_journal`, `ui_notes_sync`,
-  `ui_tasks`, `ui_telegram`, `ui_text_editor`; canonical pair likely belongs in
-  `storage.{h,cpp}`). Persistence-touching — do it as its own careful pass, ideally with a
-  device to confirm no NVS-namespace/key regressions. The weather/telegram UTF-8 sanitizers
-  are **left by design** (shared decode skeleton, genuinely different downstream logic).
+  `hub.cpp`~~ ✅ done — hoisted into `hal::str_encode` (`c7868e4`). ~~NVS `load/save_pref`
+  triplets~~ ✅ done — hoisted into `hal::nvs_*` (`86615ec`). **Correction to the earlier
+  "~5 files" claim:** the true single-key NVS triplets lived only in `ui_telegram.cpp` and
+  `ui_notes_sync.cpp`; `ui_journal`/`ui_tasks`/`ui_text_editor` use *file-based*
+  `hw_save_preferred_*`, not NVS Preferences, so they were never in scope. Home is a focused
+  `hal/nvs.{h,cpp}` module (matching the `str_encode` precedent) rather than
+  `storage.{h,cpp}` (which is strictly SD/FFat). Namespaces/keys preserved verbatim, so no
+  device was needed to confirm no NVS-namespace/key regression. The weather/telegram UTF-8
+  sanitizers are **left by design** (shared decode skeleton, genuinely different downstream
+  logic).
 
 ---
 
@@ -404,12 +416,13 @@ trios from the non-compiled chip files (`cc1101`/`lr1121`/`sx1280`, minding `lr1
 **The whole §1 dead-code audit (§1.1–§1.7) and §3 repo-hygiene are DONE** (the §1.4/§1.5/§1.6
 leftovers are deliberate, documented in Deferred). What remains, best-first:
 
-1. **Remaining §2 perf** — `§2.17` (settings blocking HTTPS, user-initiated), `§2.18` NVS
-   `load/save_pref` triplet dedup (the encoder half of §2.18 is done — see the table row; the
-   sanitizer half is left by design). `§3.1` font-picker cap is a product decision still open.
-   (`§2.12` and `§2.13` are done; the write-only `monitor_params_t` §1.5 fields are still
-   deferred to the hardware pass, decoupled from §2.12. `§2.13`'s recorder/codec stop paths
-   want the hardware smoke-test to confirm the bounded waits behave on-device.)
+1. **Remaining §2 perf** — `§2.17` (settings blocking HTTPS, user-initiated) is the only
+   code item left. (`§2.18` is now done bar the by-design UTF-8 sanitizers — both the encoder
+   and NVS-triplet halves are consolidated; see the table row. `§3.1` font-picker cap is a
+   product decision still open. `§2.12`/`§2.13` are done; the write-only `monitor_params_t`
+   §1.5 fields are still deferred to the hardware pass, decoupled from §2.12. `§2.13`'s
+   recorder/codec stop paths want the hardware smoke-test to confirm the bounded waits
+   behave on-device.)
 2. **§4 Go server** (`server/`) — independent codebase; A1/A3/B4/B5/B6 are the concrete items.
 3. **When hardware is available** — run the [smoke-test checklist](#hardware-smoke-test-checklist-do-before-trusting-the-radio--audio-fft-passes)
    to validate the radio/audio passes, then optionally do the follow-up trims it lists.
