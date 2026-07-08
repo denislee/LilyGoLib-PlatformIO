@@ -15,8 +15,11 @@ thread; §2.18 encoder + NVS-triplet consolidation done; §2.12 clock + gauge-TT
 > `monitor_params_t` gauge fields (§1.5 → rides with the §2.12 gauge sweep, since removing
 > them removes live per-second I2C reads); the `hw_devices[]` name-table slots and
 > non-compiled chip-file branches (§1.4, intentional structure); scattered v9 guards and
-> `HalResult` (§1.6, kept). **What's left is the remaining §2 perf items and the §4 Go
-> server.** See [Suggested next order](#suggested-next-order).
+> `HalResult` (§1.6, kept). **§2 perf is now code-complete too** (every item done or
+> deliberately deferred — §2.16 poor risk/reward, §2.18's UTF-8 sanitizers by-design).
+> **What's left is the §4 Go server plus non-code/hardware leftovers** (§3.1 font-picker
+> product decision, the §1.5 write-only gauge fields, and the hardware smoke-test for the
+> §2.13/§2.17 concurrency + radio/audio passes). See [Suggested next order](#suggested-next-order).
 >
 > ⚠️ **Several changes are compile+emulator-verified only, NOT hardware-tested** — the
 > **radio** and **audio-FFT** removals, plus the **§2.13 audio-stop** and **§2.17
@@ -82,19 +85,22 @@ Legend: ✅ done · ◐ partial · ⊘ deferred · ☐ not started
   deletions are build-time/hygiene wins, not flash.
 - **Internal RAM −4.6 KB**: MP3 decode frame buffer moved to PSRAM (`f6d90ed`) —
   94,232 → 89,648 B used. This is the scarce heap WiFi/TLS contend for.
-- Current image: RAM 27.4 % (89,624 B) · Flash 70.4 % (2,953,489 B) — **essentially
-  unchanged across the whole §1 audit**: everything removed was already
+- Current image (post-§2.17): RAM 27.4 % (89,696 B) · Flash 70.4 % (2,954,809 B) —
+  **essentially unchanged across the whole §1 audit**: everything removed was already
   `--gc-sections`-stripped (or an unreferenced macro / type / `#ifdef` branch contributing
   0 bytes), so those deletions are build-time + source-hygiene wins, not flash/RAM. The one
-  real flash win in this effort is still the MP3-blob removal above.
+  real flash win in this effort is still the MP3-blob removal above. The small flash *increase*
+  since (~+1.9 KB) is the §2.17 async-worker machinery — a deliberate perf-for-flash trade.
 - **Source reduction this session ≈ 1,550 lines**: ~1,200 (§1.2 — sensors/peripherals,
   core/apps, UI helpers, audio, radio) + ~90 (§1.5/§1.7 dead types/globals + redundant
   decls) + ~85 (§1.4 dead `#ifdef` branches + LED slider) + ~180 (§1.6 LVGL v8 theme
   branch). Repo tree also lighter: 32 orphan images deleted, ~96 MB of `firmware/*.bin`
   untracked (§3, still in history).
 
-The big *perceptual* wins are the §2.1/§2.4/§2.6 telegram+chat changes: the UI no
-longer freezes ~1–2 s per poll or per voice-memo send.
+The big *perceptual* wins are the off-the-LVGL-thread changes: §2.1/§2.4/§2.6 (telegram
+poll + voice-memo send no longer freeze the UI ~1–2 s) and now §2.17 (the Settings »
+Telegram » Favorites and Settings » Weather » Set-city fetches keep the back button live
+instead of freezing for the HTTPS round-trip).
 
 ---
 
