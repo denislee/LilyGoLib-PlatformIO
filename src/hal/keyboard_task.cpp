@@ -35,6 +35,7 @@
 #include "display.h"
 #include "system.h"
 #include "../core/scoped_lock.h"
+#include "../core/system_hooks.h"
 
 #ifdef USING_INPUT_DEV_KEYBOARD
 
@@ -51,6 +52,7 @@ constexpr uint32_t    kPollMs           = 10;  // Faster than the 100 ms fallbac
 constexpr UBaseType_t kQueueDepth       = 32;
 constexpr uint32_t    kRepeatDelayMs    = 500; // Hold time before auto-repeat kicks in.
 constexpr uint32_t    kRepeatIntervalMs = 90;  // ~11 Hz repeat rate once engaged.
+constexpr uint32_t    kFakeSleepIdleMs  = 200; // Fallback re-check cadence while display off.
 
 QueueHandle_t s_event_queue = nullptr;
 TaskHandle_t  s_task        = nullptr;
@@ -89,6 +91,24 @@ void keyboard_task_fn(void *)
 {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     for (;;) {
+        // While the display is off (fake-sleep) hw_power_down_all() cuts the
+        // keyboard rail and instance.kb.end() detaches the TCA8418 ISR, so
+        // this loop would take the instance mutex 100×/s and I2C-poll a dead
+        // chip — burning power and contending with LVGL/NFC exactly when we
+        // mean to be idle. Block on a task notify instead; ui_resume_timers()
+        // kicks us via hw_keyboard_task_notify_wake() so the first keypress
+        // after wake isn't delayed, and the timeout bounds latency if a
+        // notify is ever missed. Drop any held-key state so a key that was
+        // down before sleep can't fire a stale auto-repeat on wake, and reset
+        // xLastWakeTime so vTaskDelayUntil doesn't burst to "catch up" the
+        // ticks skipped while blocked.
+        if (ui_is_fake_sleep()) {
+            s_held_char = '\0';
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kFakeSleepIdleMs));
+            xLastWakeTime = xTaskGetTickCount();
+            continue;
+        }
+
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(kPollMs));
 
         if ((hw_get_device_online() & HW_KEYBOARD_ONLINE) == 0) {
@@ -241,6 +261,13 @@ void kb_read_cb(lv_indev_t *drv, lv_indev_data_t *data)
 
 }  // namespace
 
+void hw_keyboard_task_notify_wake()
+{
+    // Safe from any task context; a give while the task is running (not
+    // blocked) simply leaves the notification pending for the next take.
+    if (s_task) xTaskNotifyGive(s_task);
+}
+
 void hw_keyboard_task_start()
 {
     if (s_task) return;
@@ -272,11 +299,13 @@ void hw_keyboard_task_start()
 #else  // !USING_INPUT_DEV_KEYBOARD
 
 void hw_keyboard_task_start() {}
+void hw_keyboard_task_notify_wake() {}
 
 #endif  // USING_INPUT_DEV_KEYBOARD
 
 #else  // !ARDUINO
 
 void hw_keyboard_task_start() {}
+void hw_keyboard_task_notify_wake() {}
 
 #endif  // ARDUINO

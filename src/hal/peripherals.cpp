@@ -11,6 +11,7 @@
 #ifdef ARDUINO
 #include <LilyGoLib.h>
 #include "nfc_reader.h"
+#include "nfc_task.h"
 #include "../nfc_provision.h"
 #else
 #include <climits>
@@ -125,6 +126,9 @@ bool hw_start_nfc_discovery()
     instance.powerControl(POWER_NFC, true);
     bool ok = beginNFC(nrf_notify_callback, ndef_event_callback);
     g_discovery_active = ok;
+    // Kick the poller out of its idle block so it starts scanning at once,
+    // rather than after its next idle-timeout re-check.
+    if (ok) hw_nfc_task_notify_wake();
     return ok;
 #else
     return false;

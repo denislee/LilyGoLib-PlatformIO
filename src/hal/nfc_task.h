@@ -11,3 +11,8 @@
 #pragma once
 
 void hw_nfc_task_start();
+
+// Wake the NFC poller out of its idle block the instant discovery starts
+// (hw_start_nfc_discovery), so tag polling begins without waiting out the
+// idle timeout. No-op on builds without the ST25R3916 and on the emulator.
+void hw_nfc_task_notify_wake();

@@ -50,9 +50,11 @@ void ui_resume_timers()
     hw_power_up_all();
     enable_keyboard();
     lv_display_trigger_activity(NULL);
-    // Kick the LVGL task out of its fake-sleep block so the first frame after
-    // wake renders immediately rather than after the idle-poll fallback.
+    // Kick the LVGL and keyboard tasks out of their fake-sleep blocks so the
+    // first frame and the first keypress after wake happen immediately rather
+    // than after the idle-poll fallback.
     hw_lvgl_task_notify_wake();
+    hw_keyboard_task_notify_wake();
 }
 
 void ui_pause_timers()

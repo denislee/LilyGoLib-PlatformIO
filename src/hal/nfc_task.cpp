@@ -22,6 +22,7 @@
 #include "../core/scoped_lock.h"
 #include "../core/system_hooks.h"
 #include "nfc_reader.h"
+#include "peripherals.h"
 
 #if defined(USING_ST25R3916)
 
@@ -30,15 +31,27 @@ namespace {
 constexpr UBaseType_t kTaskPriority = configMAX_PRIORITIES - 3;
 constexpr BaseType_t  kTaskCore     = 0;
 constexpr uint32_t    kPollMs       = 20;
+constexpr uint32_t    kIdleMs       = 200;  // Cadence while NFC is off / asleep.
 
 TaskHandle_t s_task = nullptr;
 
 void nfc_task_fn(void *)
 {
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(kPollMs));
+        // NFC discovery is off by default. When it isn't running — or the
+        // display is in fake-sleep, where hw_power_down_all() cuts the NFC
+        // rail — loopNFCReader() would only early-return on !_nfc_running, so
+        // taking the instance mutex 50×/s to reach that return is pure
+        // contention with the keyboard/LVGL tasks. Block on a task notify
+        // instead; hw_start_nfc_discovery() kicks us via
+        // hw_nfc_task_notify_wake(), and the timeout bounds latency if a
+        // notify is ever missed (e.g. discovery already active on wake).
+        if (ui_is_fake_sleep() || !hw_nfc_discovery_active()) {
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kIdleMs));
+            continue;
+        }
 
-        if (ui_is_fake_sleep()) continue;
+        vTaskDelay(pdMS_TO_TICKS(kPollMs));
 
         core::ScopedInstanceLock lock;
         loopNFCReader();
@@ -46,6 +59,13 @@ void nfc_task_fn(void *)
 }
 
 }  // namespace
+
+void hw_nfc_task_notify_wake()
+{
+    // Safe from any task context; a give while the task is running (not
+    // blocked) simply leaves the notification pending for the next take.
+    if (s_task) xTaskNotifyGive(s_task);
+}
 
 void hw_nfc_task_start()
 {
@@ -63,11 +83,13 @@ void hw_nfc_task_start()
 #else  // !USING_ST25R3916
 
 void hw_nfc_task_start() {}
+void hw_nfc_task_notify_wake() {}
 
 #endif  // USING_ST25R3916
 
 #else  // !ARDUINO
 
 void hw_nfc_task_start() {}
+void hw_nfc_task_notify_wake() {}
 
 #endif  // ARDUINO
