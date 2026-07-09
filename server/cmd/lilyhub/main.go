@@ -50,6 +50,14 @@ func main() {
 		Addr:              *addr,
 		Handler:           httpx.Logger(mux),
 		ReadHeaderTimeout: 5 * time.Second,
+		// Bound how long a client may take to send a full request body and how
+		// long an idle keep-alive connection lingers — otherwise a slow-body
+		// sender (the endpoints accept up to 8 MiB) parks a goroutine forever.
+		// ReadTimeout is generous enough for an 8 MiB chat/notes upload over
+		// LAN. WriteTimeout is intentionally left off: the chat path can
+		// legitimately take up to ~60 s waiting on the upstream LLM.
+		ReadTimeout: 60 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
