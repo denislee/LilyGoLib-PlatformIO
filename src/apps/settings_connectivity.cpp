@@ -13,7 +13,12 @@
  */
 #include "../ui_define.h"
 #include "../hal/wireless.h"
+#include "../core/scoped_lock.h"
 #include "settings_internal.h"
+#ifdef ARDUINO
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
 
 namespace connectivity_cfg {
 
@@ -143,16 +148,11 @@ void wifi_networks_click_cb(lv_event_t *)
     ui_wifi_networks_open();
 }
 
-void internet_test_click_cb(lv_event_t *)
+// Render the internet-test outcome into the status label. Shared by the
+// async drain and the synchronous fallbacks (task-spawn failure, emulator).
+void show_internet_result(bool ok, uint32_t rtt_ms, const std::string &err)
 {
     if (!g_internet_test_status) return;
-    lv_label_set_text(g_internet_test_status, "Testing 1.1.1.1...");
-    lv_obj_set_style_text_color(g_internet_test_status, UI_COLOR_ACCENT, 0);
-    lv_refr_now(NULL);
-
-    uint32_t rtt_ms = 0;
-    std::string err;
-    bool ok = hw_ping_internet("1.1.1.1", 53, 3000, &rtt_ms, &err);
     if (ok) {
         char buf[48];
         snprintf(buf, sizeof(buf), LV_SYMBOL_OK " Online (%u ms)", (unsigned)rtt_ms);
@@ -167,6 +167,117 @@ void internet_test_click_cb(lv_event_t *)
     }
 }
 
+#ifdef ARDUINO
+// P2.3: hw_ping_internet blocks for up to 3 s; running it inline froze the
+// LVGL thread (dead back button/encoder) for the whole probe — exactly the
+// situation in which a user taps this button. Run it on a one-shot worker
+// and deliver the result via a drain timer, same lifecycle contract as the
+// weather city-search fetch (settings_weather.cpp): the worker touches only
+// heap state under the instance lock (never the widget tree), and
+// internet_test_teardown() kills the drain before the subpage widgets free.
+//
+// TODO(cleanup): this {task, drain-timer, volatile done, heap result*} scaffold
+// is now the ~5th hand-rolled copy of the same idiom (menu_app.cpp,
+// settings_weather.cpp, settings_telegram.cpp, ui_notes_sync.cpp,
+// ui_telegram.cpp). Retire them into one shared core::UiAsyncProbe<T> helper in
+// its own refactor. Kept deliberately verbatim-uniform with the weather twin
+// here so that extraction stays mechanical — do not tidy this copy in isolation.
+struct InternetTestResult {
+    bool ok = false;
+    uint32_t rtt_ms = 0;
+    std::string err;
+};
+TaskHandle_t        g_inet_test_task   = nullptr;   // single worker slot
+lv_timer_t         *g_inet_test_timer  = nullptr;
+volatile bool       g_inet_test_done   = false;
+InternetTestResult *g_inet_test_result = nullptr;   // heap; UI thread frees
+
+void internet_test_task(void *arg)
+{
+    (void)arg;
+    InternetTestResult *res = new InternetTestResult();
+    res->ok = hw_ping_internet("1.1.1.1", 53, 3000, &res->rtt_ms, &res->err);
+    {
+        core::ScopedInstanceLock lock;
+        if (g_inet_test_result) { delete g_inet_test_result; g_inet_test_result = nullptr; }
+        g_inet_test_result = res;
+        g_inet_test_done = true;
+        g_inet_test_task = nullptr;
+    }
+    vTaskDelete(NULL);
+}
+
+void internet_test_drain_tick(lv_timer_t *t)
+{
+    (void)t;
+    if (!g_inet_test_done) return;
+    g_inet_test_done = false;
+    InternetTestResult *res = g_inet_test_result;
+    g_inet_test_result = nullptr;
+    if (g_inet_test_timer) { lv_timer_del(g_inet_test_timer); g_inet_test_timer = nullptr; }
+    if (!res) return;
+    show_internet_result(res->ok, res->rtt_ms, res->err);
+    delete res;
+}
+
+void internet_test_teardown()
+{
+    if (g_inet_test_timer) { lv_timer_del(g_inet_test_timer); g_inet_test_timer = nullptr; }
+    if (g_inet_test_done) {
+        g_inet_test_done = false;
+        if (g_inet_test_result) { delete g_inet_test_result; g_inet_test_result = nullptr; }
+    }
+}
+#endif // ARDUINO
+
+void internet_test_click_cb(lv_event_t *)
+{
+    if (!g_internet_test_status) return;
+#ifdef ARDUINO
+    bool spawn;
+    {
+        core::ScopedInstanceLock lock;
+        spawn = (g_inet_test_task == nullptr);   // else a prior check is still running
+        if (spawn) g_inet_test_done = false;
+    }
+    if (!spawn) {
+        // A check is already in flight (e.g. page was exited/re-entered mid-
+        // probe, which tore down the old drain timer). Re-attach the drain
+        // so that worker's result still lands rather than stranding it.
+        if (!g_inet_test_timer)
+            g_inet_test_timer = lv_timer_create(internet_test_drain_tick, 100, nullptr);
+        lv_label_set_text(g_internet_test_status, "Still testing...");
+        lv_obj_set_style_text_color(g_internet_test_status, UI_COLOR_ACCENT, 0);
+        return;
+    }
+
+    lv_label_set_text(g_internet_test_status, "Testing 1.1.1.1...");
+    lv_obj_set_style_text_color(g_internet_test_status, UI_COLOR_ACCENT, 0);
+    if (xTaskCreate(internet_test_task, "inet_tst", 4096, nullptr, 1,
+                    &g_inet_test_task) != pdPASS) {
+        // Task slots exhausted — fall back to a synchronous probe so the
+        // button still works (pays the old up-to-3 s UI freeze).
+        g_inet_test_task = nullptr;
+        uint32_t rtt_ms = 0;
+        std::string err;
+        bool ok = hw_ping_internet("1.1.1.1", 53, 3000, &rtt_ms, &err);
+        show_internet_result(ok, rtt_ms, err);
+        return;
+    }
+    if (!g_inet_test_timer)
+        g_inet_test_timer = lv_timer_create(internet_test_drain_tick, 100, nullptr);
+#else
+    // Emulator: no FreeRTOS task; probe inline.
+    lv_label_set_text(g_internet_test_status, "Testing 1.1.1.1...");
+    lv_obj_set_style_text_color(g_internet_test_status, UI_COLOR_ACCENT, 0);
+    lv_refr_now(NULL);
+    uint32_t rtt_ms = 0;
+    std::string err;
+    bool ok = hw_ping_internet("1.1.1.1", 53, 3000, &rtt_ms, &err);
+    show_internet_result(ok, rtt_ms, err);
+#endif
+}
+
 } // anonymous namespace
 
 void reset_state()
@@ -179,6 +290,9 @@ void reset_state()
     g_internet_test_row    = nullptr;
     g_internet_test_btn    = nullptr;
     g_internet_test_status = nullptr;
+#ifdef ARDUINO
+    internet_test_teardown();
+#endif
 }
 
 void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
