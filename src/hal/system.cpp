@@ -45,9 +45,11 @@ struct SettingsHeader {
 #include <LilyGoLib.h>
 #include <esp_mac.h>
 #include <esp_sntp.h>
+#include <esp_heap_caps.h>
 #include <WiFi.h>
 #include <Preferences.h>
 #include "driver/rtc_io.h"
+#include "cJSON.h"
 
 static Preferences           prefs;
 
@@ -204,6 +206,30 @@ const uint8_t mic_gain = 10;
 void hw_init()
 {
 #ifdef ARDUINO
+    // P2.4: route all cJSON allocations to PSRAM. cJSON mints one small node
+    // plus duplicated strings per JSON element, and the Arduino-ESP32 unified
+    // allocator forces small allocations into internal DRAM — so a ~5 KB
+    // Open-Meteo / Telegram payload expands to ~15-30 KB of internal heap, and
+    // those spikes land on the network workers *while WiFi/TLS buffers are
+    // live*, i.e. at peak internal-heap pressure. JSON parsing is not a hot
+    // loop here, so PSRAM's higher latency is irrelevant. Prefer PSRAM but fall
+    // back to internal DRAM if PSRAM is momentarily exhausted, so a parse never
+    // fails outright; free() is heap-agnostic in the unified allocator, so one
+    // free hook releases either. Every parse site cJSON_Delete()s before
+    // returning, so nothing long-lived changes residence. Must run before any
+    // app parses JSON — hw_init() is called at boot ahead of every app.
+    // cJSON_InitHooks copies these two function pointers into its own globals,
+    // so the struct itself need not outlive the call. The lambda is captureless
+    // and decays to a plain function pointer.
+    cJSON_Hooks cjson_psram_hooks = {
+        [](size_t sz) -> void * {
+            void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
+            return p ? p : heap_caps_malloc(sz, MALLOC_CAP_8BIT);
+        },
+        free,
+    };
+    cJSON_InitHooks(&cjson_psram_hooks);
+
     if (instance.getDeviceProbe() & HW_RTC_ONLINE) {
         struct tm timeinfo;
         instance.rtc.getDateTime(&timeinfo);
