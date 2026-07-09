@@ -1,5 +1,9 @@
 # Optimization Progress & Handoff
 
+> **Phase 2 analysis exists:** `OPTIMIZATION_PHASE2.md` (2026-07-09) is the current
+> handoff — fresh findings (P2.x) plus the still-open §4 server items. Start there;
+> this file remains the phase-1 record and the methodology reference.
+
 Companion to `OPTIMIZATION_REPORT.md` (the analysis). This file tracks **what has
 been applied**, **what remains**, and — most importantly — **how to verify safely**
 before removing anything else. Last updated **2026-07-08** (§2.17 settings favorites/city-search HTTPS moved off the LVGL
