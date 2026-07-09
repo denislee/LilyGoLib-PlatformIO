@@ -41,7 +41,24 @@ void storage_progress_cb(int cur, int total, const char *name)
     } else {
         ui_loading_set_indeterminate(&storage_loader, name ? name : "Working...");
     }
-    lv_refr_now(NULL);
+
+    // Every bulk caller (copy-to-hub/SD, prune, encrypt/decrypt-all) runs the
+    // whole-corpus loop synchronously on the LVGL task and calls this cb once
+    // per file. On a large corpus that keeps IDLE0/IDLE1 off the CPU long
+    // enough to panic the task watchdog — not just stutter. Throttle the screen
+    // flush AND the IDLE yield to a >100 ms window, exactly like ui_journal.cpp's
+    // report(): the widget values above already update every call, so the bar
+    // stays accurate; vTaskDelay(1) costs one tick but guarantees IDLE runs and
+    // feeds the watchdog.
+    static uint32_t last_refr = 0;
+    uint32_t now = lv_tick_get();
+    if (lv_tick_elaps(last_refr) > 100) {
+        lv_refr_now(NULL);
+        last_refr = now;
+#ifdef ARDUINO
+        vTaskDelay(1);
+#endif
+    }
 }
 
 void show_storage_loader(const char *title)
