@@ -39,7 +39,7 @@ a device run for the phase-1 radio/audio/§2.13/§2.17 passes).
 | P2.7 | File browser: full dir re-scan per filter toggle; uncapped widgets | Freezes + heap on big dirs | Low–Med |
 | P2.8 | Bulk storage/crypto ops on UI thread with **no watchdog yield** | TWDT panic on large corpus | Low (1-line mitigation) |
 | P2.9 | Journal reconcile runs on the LVGL thread ("bg" = deferred, not off-thread) | Jank after dirty FS | Med |
-| P2.10 | Flash: drop `montserrat_40` (1 call site) + PNG/JPEG/BMP decoders | −129 KB, no feature loss | Low |
+| P2.10 | Flash: drop `montserrat_40` (1 call site) + PNG/JPEG/BMP decoders | −102 KB measured (est. −129 KB), no feature loss ✅ | Low |
 | P2.11 | Flash: font-picker cap / face trims (product decisions, now measured) | up to −150 KB more | Med |
 | P2.12 | WiFi power-save never configured; fake sleep keeps default PS | Sleep power | Product decision |
 | §4 | Go server: all phase-1 items still open **+ 2 new criticals** (SSRF, unbounded maps, path traversal) | Security + Pi OOM | Low fixes |
@@ -55,7 +55,8 @@ a device run for the phase-1 radio/audio/§2.13/§2.17 passes).
 | P2.2 | ✅ done (code) — `nfc_task_fn` (`src/hal/nfc_task.cpp`) now gates on `if (ui_is_fake_sleep() || !hw_nfc_discovery_active())` **before** taking the instance lock and blocks on `ulTaskNotifyTake(200 ms)` instead of spinning at 50 Hz. Reused the existing `hw_nfc_discovery_active()` accessor (reads `g_discovery_active`) — no new state. `hw_start_nfc_discovery()` (`hal/peripherals.cpp`) kicks the poller via the new `hw_nfc_task_notify_wake()` so enabling NFC starts scanning immediately instead of waiting out the 200 ms idle timeout; no-op stubs added for the `!USING_ST25R3916` and `!ARDUINO` branches. Removes ~50 pointless instance-lock acquisitions/s (the default-off common case) plus the 50×/s fake-sleep wakeups. Verified: `pio run -e tlora_pager` (RAM 27.4 %/89,712 B · Flash 70.5 %/2,955,937 B), `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. ⚠️ **HW-test-required** (touches a task loop) — added to the smoke-test checklist in `OPTIMIZATION_PROGRESS.md`. |
 | P2.1 | ✅ done (code) — `keyboard_task_fn` (`src/hal/keyboard_task.cpp`) now checks `ui_is_fake_sleep()` at the top of the loop and blocks on `ulTaskNotifyTake(200 ms)` instead of polling the TCA8418 at 100 Hz through fake-sleep. `ui_resume_timers()` (`ui_main.cpp`) kicks it via the new `hw_keyboard_task_notify_wake()` (alongside the existing `hw_lvgl_task_notify_wake()`) so the first keypress after wake isn't delayed. Two correctness guards beyond the doc snippet: `xLastWakeTime` is reset after the block so `vTaskDelayUntil` doesn't burst to "catch up" skipped ticks on wake, and `s_held_char` is cleared so a key held before sleep can't fire a stale auto-repeat on wake. Declared `hw_keyboard_task_notify_wake()` in `core/system_hooks.h`; added `#include "../core/system_hooks.h"` to the task TU; no-op stubs for the `!USING_INPUT_DEV_KEYBOARD` and `!ARDUINO` branches. Removes ~100 core-0 wakeups/s + I2C reads to a powered-off chip during fake-sleep. Verified: same three-target build/test pass as P2.2. ⚠️ **HW-test-required** (task loop + first-keypress latency) — on the smoke-test checklist. |
 | P2.8 | ✅ done (minimal mitigation) — `storage_progress_cb` (`src/apps/settings_storage.cpp`) is the single callback every bulk/crypto flow feeds one call per file (verified: `hw_copy_all_notes_to_hub`/`hw_copy_internal_to_sd` in `storage_bulk.cpp`, `hw_prune_internal_storage` in `storage.cpp:689`, and all four `notes_crypto_*` loops in `notes_crypto.cpp:715-867` call `cb(cur,total,name)` at the top of each iteration). It previously did an unconditional `lv_refr_now(NULL)` and **never yielded**, so a large corpus starved IDLE0/IDLE1 and could panic the TWDT (not just stutter). Now it throttles both the screen flush **and** a `vTaskDelay(1)` IDLE yield to a >100 ms window using `lv_tick_get()`/`lv_tick_elaps()` — the exact guard `ui_journal.cpp`'s `report()` uses. The progress widgets still update their value every call (bar stays accurate); only the flush+yield are throttled. `vTaskDelay(1)` is `#ifdef ARDUINO`-gated (emulator: LVGL-only, no FreeRTOS). Fixing the shared callback covers all seven flagged sites in one edit; no HAL/crypto loop bodies were touched. Verified: `pio run -e tlora_pager` (RAM 27.4 %/89,712 B · Flash 70.5 %/2,955,973 B), `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. Not a task-loop/ISR/boot change (established LVGL-thread pattern), so low-risk; still worth an on-device smoke check driving a large-corpus encrypt-all / copy-to-SD to confirm no TWDT panic. **Full fix (worker + drain for copy-to-hub network I/O) remains deferred** per the section. |
-| P2.5–P2.7, P2.9–P2.12, §4 | Not started — see sections below and the suggested execution order. |
+| P2.10 | ✅ done (items 1+2; flash, −102 KB) — **Item 1:** `lv_font_montserrat_40` had exactly one call site (verified) — the `LV_SYMBOL_WARNING` glyph on the USB "Unsafe to disconnect" screen (`core/system.cpp:367`). Retargeted to `montserrat_32` (already pinned by clock/audio code → zero flash cost, and it stays larger than the `_28` title below it), swapped the file's `LV_FONT_DECLARE(_40)` → `_32`, and set `LV_FONT_MONTSERRAT_40 0` in `lv_conf.h`. Flash 2,955,973 → 2,885,793 B (**−70,180 B**, matches the doc's −70,177 B estimate). **Item 2:** disabled the three unconditionally-registered, non-gc-able image decoders `LV_USE_LODEPNG`/`LV_USE_TJPGD`/`LV_USE_BMP`; also flipped `LV_USE_GIF`/`LV_USE_QRCODE` → 0 (already gc'd, 0 bytes — honesty). Verified the firmware never decodes a PNG/JPEG/BMP file: no `lv_qrcode`/`lv_gif`/`lv_bmp`/`lv_lodepng`/`lv_tjpgd` API refs and no `A:`/`S:` file-path image sources in `src/` (the only `.jpg` strings are emulator mock dir-listings in `storage.cpp`; the only `lv_img_set_src` takes `LV_SYMBOL_*` glyphs). Flash 2,885,793 → 2,853,693 B (**−32,100 B** — below the doc's −58,787 B `nm`-estimate, which over-counted shared/collectible code). Combined **−102,280 B** (70.5 % → 68.0 %); RAM unchanged (89,712 B). Two separate commits per the order. Verified: `pio run -e tlora_pager`, `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. Pure build-config/flash change — no HW test required (the USB-eject screen still renders, just with a 32 px warning glyph). |
+| P2.5–P2.7, P2.9, P2.11–P2.12, §4 | Not started — see sections below and the suggested execution order. |
 
 ---
 
@@ -245,16 +246,15 @@ Measured from the linked ELF (`xtensa-esp32s3-elf-nm`/`size` on
 `.pio/build/tlora_pager/firmware.elf`). Phase-1 flash work (Montserrat 34–46 off,
 demos off, dead lib_deps) is done; these are the genuinely untapped items.
 
-1. **Drop `lv_font_montserrat_40` — −70,177 B, LOW risk.** Exactly one call site:
-   `src/core/system.cpp:367` (warning glyph on the USB "unsafe to disconnect"
-   screen). Retarget to `_32` or `_28` (`_28` is used 5 lines below at :372), then
-   `LV_FONT_MONTSERRAT_40 0` in `lib/LilyGoLib/src/lv_conf.h:500`.
-2. **Disable unused image decoders — −58,787 B, LOW risk.** `lv_init()`
-   unconditionally registers lodepng/tjpgd/bmp (NOT gc-able); the app never decodes
-   PNG/JPEG/BMP (only `LV_SYMBOL_*` glyphs and C-array images).
-   `lv_conf.h:774 LV_USE_LODEPNG 0` (−52.2 KB), `:784 LV_USE_TJPGD 0` (−5.6 KB),
-   `:780 LV_USE_BMP 0` (−0.9 KB). Flip `LV_USE_GIF`/`LV_USE_QRCODE` to 0 too
-   (already gc'd, 0 bytes, honesty).
+1. ~~**Drop `lv_font_montserrat_40` — −70,177 B, LOW risk.**~~ ✅ **done — −70,180 B
+   measured.** Retargeted the sole call site (`core/system.cpp:367`, USB "unsafe to
+   disconnect" warning glyph) to `_32` and set `LV_FONT_MONTSERRAT_40 0` in
+   `lv_conf.h:500`.
+2. ~~**Disable unused image decoders — −58,787 B, LOW risk.**~~ ✅ **done — −32,100 B
+   measured** (the `nm`-estimate over-counted shared/collectible code). Set
+   `LV_USE_LODEPNG`/`LV_USE_TJPGD`/`LV_USE_BMP` → 0 and flipped `LV_USE_GIF`/
+   `LV_USE_QRCODE` → 0 (already gc'd). Confirmed the app decodes no PNG/JPEG/BMP
+   files (only `LV_SYMBOL_*` glyphs and C-array images).
 3. **Cap font picker at 24 — −74,873 B, MEDIUM (product decision).** Only `_26`
    (32,905 B) and `_30` (41,968 B) are picker-only; `_28`/`_32` are pinned by
    clock/audio code and **must stay** (the old "~118 KB" estimate is not reachable).
@@ -359,8 +359,8 @@ test).
 4. ~~**P2.8** minimal watchdog yield in the bulk storage/crypto loops (crash vector,
    ~1-line mitigation).~~ ✅ done (throttled flush+yield in the shared
    `storage_progress_cb`); full worker+drain for copy-to-hub still deferred.
-5. **P2.10 flash items 1+2** (montserrat_40 + decoders): −129 KB, low risk, one
-   commit each.
+5. ~~**P2.10 flash items 1+2** (montserrat_40 + decoders): −129 KB, low risk, one
+   commit each.~~ ✅ done — **−102 KB measured** (70.5 % → 68.0 % flash), one commit each.
 6. **§4 server pass** (items D1–D4 are each small; D1 and D3 are security).
 7. Then the product decisions (picker cap, mono face, GPS toggle, WiFi PS) and the
    optional deeper work (P2.7 file browser, P2.9 journal off-thread, D5 Git Data API).
