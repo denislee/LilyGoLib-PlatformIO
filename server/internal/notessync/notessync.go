@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,14 +38,14 @@ import (
 // same opaque bytes the device would have PUT directly — we don't decode or
 // re-encode the base64 payload so encrypted notes pass through verbatim.
 type SyncRequest struct {
-	Repo   string      `json:"repo"`
-	Branch string      `json:"branch"`
-	Token  string      `json:"token"`
-	Files  []SyncFile  `json:"files"`
+	Repo   string     `json:"repo"`
+	Branch string     `json:"branch"`
+	Token  string     `json:"token"`
+	Files  []SyncFile `json:"files"`
 }
 
 type SyncFile struct {
-	Name      string `json:"name"`
+	Name       string `json:"name"`
 	ContentB64 string `json:"content_b64"`
 }
 
@@ -53,9 +54,9 @@ type SyncFile struct {
 // The device renders this back to the user; per-file errors are listed so
 // they can be retried individually.
 type SyncResponse struct {
-	Uploaded int           `json:"uploaded"`
-	Already  int           `json:"already"`
-	Errors   []SyncError   `json:"errors,omitempty"`
+	Uploaded int         `json:"uploaded"`
+	Already  int         `json:"already"`
+	Errors   []SyncError `json:"errors,omitempty"`
 }
 
 type SyncError struct {
@@ -118,7 +119,7 @@ func (h *Handler) sync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Repo == "" || !strings.Contains(req.Repo, "/") {
+	if !validRepo(req.Repo) {
 		http.Error(w, "repo must be owner/name", http.StatusBadRequest)
 		return
 	}
@@ -152,10 +153,19 @@ func (h *Handler) runSync(ctx context.Context, req *SyncRequest) (*SyncResponse,
 		have[n] = true
 	}
 
+	out := &SyncResponse{}
 	var toUpload []SyncFile
 	already := 0
 	for _, f := range req.Files {
 		if f.Name == "" {
+			continue
+		}
+		// Reject traversal/odd names before they reach the GitHub URL path.
+		// safeName mirrors the /upload guard (no slash, NUL, or leading dot).
+		// Without it a name like "../secrets.txt" writes outside notes/ and
+		// bypasses the additive-only guard, which only enumerates notes/.
+		if _, ok := safeName(f.Name); !ok {
+			out.Errors = append(out.Errors, SyncError{Name: f.Name, Err: "invalid name"})
 			continue
 		}
 		if have[f.Name] {
@@ -164,8 +174,7 @@ func (h *Handler) runSync(ctx context.Context, req *SyncRequest) (*SyncResponse,
 		}
 		toUpload = append(toUpload, f)
 	}
-
-	out := &SyncResponse{Already: already}
+	out.Already = already
 
 	// Bounded parallel uploads. errors slice is built under a mutex so the
 	// final response order is deterministic-enough for the device's log.
@@ -205,9 +214,12 @@ func (h *Handler) runSync(ctx context.Context, req *SyncRequest) (*SyncResponse,
 // local file is a candidate. We only ask for names; SHAs aren't needed for
 // additive-only writes.
 func (h *Handler) listRemote(ctx context.Context, req *SyncRequest) ([]string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/contents/notes?ref=%s",
-		req.Repo, req.Branch)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// req.Repo is validated (validRepo) to owner/name with URL-safe chars and
+	// no "."/".." segments, so it interpolates directly. req.Branch is caller-
+	// controlled and unvalidated, so escape it before it lands in the query.
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/contents/notes?ref=%s",
+		req.Repo, url.QueryEscape(req.Branch))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -264,9 +276,12 @@ func (h *Handler) putFile(ctx context.Context, req *SyncRequest, name string, co
 	}
 	buf, _ := json.Marshal(body)
 
-	url := fmt.Sprintf("https://api.github.com/repos/%s/contents/notes/%s",
-		req.Repo, name)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(buf))
+	// name is safeName-validated in runSync (no slash/NUL/leading dot), but
+	// PathEscape it anyway: safeName still permits spaces, '?', '#', '%' etc.,
+	// which would otherwise inject into the URL path/query.
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/contents/notes/%s",
+		req.Repo, url.PathEscape(name))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(buf))
 	if err != nil {
 		return err
 	}
@@ -315,6 +330,36 @@ type UploadResponse struct {
 // the notes dir. Notes filenames are app-generated (YYYYMMDD_HHMMSS.txt or
 // similar), so the rules can be strict — anything containing a slash, NUL,
 // or starting with a dot is rejected.
+// validRepo enforces exactly "owner/name" with GitHub-legal characters and
+// rejects any "." or ".." segment, so req.Repo is safe to interpolate into the
+// api.github.com URL path. Without it, a repo like "../../x" — or a segment
+// "." / ".." — would traverse the API path, the sync-side equivalent of the
+// filename traversal safeName guards against on /upload.
+func validRepo(repo string) bool {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		return false
+	}
+	return validRepoSegment(owner) && validRepoSegment(name)
+}
+
+func validRepoSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= 'A' && c <= 'Z':
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case c == '.' || c == '-' || c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func safeName(name string) (string, bool) {
 	if name == "" {
 		return "", false
