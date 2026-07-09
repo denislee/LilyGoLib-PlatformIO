@@ -352,6 +352,11 @@ flash `pio run -e tlora_pager -t upload` and confirm:
       still recognized promptly; toggle **off** → detection stops. (Both P2.1 + P2.2 target
       idle-power/lock-contention during "sleep"; a serial or current-draw check that core-0
       wakeups drop during fake-sleep is the ideal confirmation if instrumented.)
+- [ ] **P2.8 bulk-op watchdog yield** — with a **large** notes corpus (hundreds of files),
+      run a whole-corpus flow behind the progress modal (Notes Security » Set/Change passphrase
+      = encrypt-all, or Storage » Copy Internal → SD / Prune Now): it **completes without a TWDT
+      panic** on serial and the progress bar still advances smoothly. (Low-risk UI-thread change
+      — the throttled `vTaskDelay(1)` in `storage_progress_cb` is the crash-vector fix.)
 
 If all pass, delete this checklist and the "compile-only" caveats above. If the radio
 boot is solid, the *optional* follow-up trims become safe: empty `hw_radio_begin`/
