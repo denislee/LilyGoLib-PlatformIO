@@ -52,13 +52,15 @@ a device run for the phase-1 radio/audio/§2.13/§2.17 passes).
 |---|---|
 | P2.3 | ✅ done — `internet_test_click_cb` (`settings_connectivity.cpp`) now spawns a one-shot `internet_test_task` worker + 100 ms `internet_test_drain_tick` timer, mirroring the weather city-search pattern (`settings_weather.cpp`) instead of the home-screen pill pattern (`menu_app.cpp`) since this is a subpage, not the always-alive menu app. In-flight-check re-click reattaches the drain and shows "Still testing…"; task-spawn failure falls back to the old synchronous probe; emulator has no FreeRTOS so stays inline. `internet_test_teardown()` wired into `reset_state()` so re-entering the subpage never leaks the timer. Verified: `pio run -e tlora_pager`, `pio run -e emulator_lora_pager`, `pio test -e native_test` all pass. No hardware test required (UI-thread-only change, same probe call, no ISR/task-loop/boot path touched). |
 | P2.4 | ✅ done — `hw_init()` (`src/hal/system.cpp`, top of the `#ifdef ARDUINO` block, ahead of RTC sync and every app) now installs a `cJSON_Hooks` routing cJSON allocation to PSRAM: `heap_caps_malloc(sz, MALLOC_CAP_SPIRAM)`, falling back to `MALLOC_CAP_8BIT` (internal DRAM) only if PSRAM is momentarily exhausted so a parse never fails outright. Free hook is stdlib `free`, which is heap-agnostic in the Arduino-ESP32 unified allocator — verified against the existing `free(req_str)` on the PSRAM-printed body in `ui_telegram.cpp:509` (the sole `cJSON_Print*` caller). Moves the ~15–30 KB internal-heap JSON spike (weather/telegram/chat/notes-sync parse sites) into PSRAM, off the internal heap WiFi/TLS contend for; all parse sites `cJSON_Delete` before returning, so nothing long-lived changes residence. Added `#include <esp_heap_caps.h>` + `#include "cJSON.h"` to the ARDUINO include block. Emulator/native: gated out by `#ifdef ARDUINO`. Verified: `pio run -e tlora_pager` (RAM 27.4 %/89,712 B, Flash 70.5 %/2,955,737 B), `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. No ISR/task-loop/boot-ordering change; worth an on-device smoke check that weather/telegram/chat still parse (they exercise the new allocator). |
-| P2.1, P2.2, P2.5–P2.12, §4 | Not started — see sections below and the suggested execution order. |
+| P2.2 | ✅ done (code) — `nfc_task_fn` (`src/hal/nfc_task.cpp`) now gates on `if (ui_is_fake_sleep() || !hw_nfc_discovery_active())` **before** taking the instance lock and blocks on `ulTaskNotifyTake(200 ms)` instead of spinning at 50 Hz. Reused the existing `hw_nfc_discovery_active()` accessor (reads `g_discovery_active`) — no new state. `hw_start_nfc_discovery()` (`hal/peripherals.cpp`) kicks the poller via the new `hw_nfc_task_notify_wake()` so enabling NFC starts scanning immediately instead of waiting out the 200 ms idle timeout; no-op stubs added for the `!USING_ST25R3916` and `!ARDUINO` branches. Removes ~50 pointless instance-lock acquisitions/s (the default-off common case) plus the 50×/s fake-sleep wakeups. Verified: `pio run -e tlora_pager` (RAM 27.4 %/89,712 B · Flash 70.5 %/2,955,937 B), `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. ⚠️ **HW-test-required** (touches a task loop) — added to the smoke-test checklist in `OPTIMIZATION_PROGRESS.md`. |
+| P2.1 | ✅ done (code) — `keyboard_task_fn` (`src/hal/keyboard_task.cpp`) now checks `ui_is_fake_sleep()` at the top of the loop and blocks on `ulTaskNotifyTake(200 ms)` instead of polling the TCA8418 at 100 Hz through fake-sleep. `ui_resume_timers()` (`ui_main.cpp`) kicks it via the new `hw_keyboard_task_notify_wake()` (alongside the existing `hw_lvgl_task_notify_wake()`) so the first keypress after wake isn't delayed. Two correctness guards beyond the doc snippet: `xLastWakeTime` is reset after the block so `vTaskDelayUntil` doesn't burst to "catch up" skipped ticks on wake, and `s_held_char` is cleared so a key held before sleep can't fire a stale auto-repeat on wake. Declared `hw_keyboard_task_notify_wake()` in `core/system_hooks.h`; added `#include "../core/system_hooks.h"` to the task TU; no-op stubs for the `!USING_INPUT_DEV_KEYBOARD` and `!ARDUINO` branches. Removes ~100 core-0 wakeups/s + I2C reads to a powered-off chip during fake-sleep. Verified: same three-target build/test pass as P2.2. ⚠️ **HW-test-required** (task loop + first-keypress latency) — on the smoke-test checklist. |
+| P2.5–P2.12, §4 | Not started — see sections below and the suggested execution order. |
 
 ---
 
 ## A. Firmware — concurrency & power (highest value)
 
-### P2.1 — Keyboard task polls at 100 Hz through fake sleep ⚠️ HW-test-required
+### P2.1 — Keyboard task polls at 100 Hz through fake sleep ⚠️ HW-test-required — ✅ done (code); see Status table
 
 `src/hal/keyboard_task.cpp:88-102` — the loop is `vTaskDelayUntil(10 ms)` and its only
 gate is `hw_get_device_online() & HW_KEYBOARD_ONLINE` (:94). It **never checks
@@ -85,7 +87,7 @@ Related (lower priority): even awake, 9 of 10 lock acquisitions guard a pure
 early-return (vendor driver only touches I2C every 100 ms). Raising `kPollMs` 10→20-30 ms
 halves/thirds the lock churn at no perceptible latency cost — separate, tiny commit.
 
-### P2.2 — NFC task: 50 locks/s for a no-op when NFC is disabled
+### P2.2 — NFC task: 50 locks/s for a no-op when NFC is disabled — ✅ done (code); see Status table
 
 `src/hal/nfc_task.cpp:36-46` — loop: `vTaskDelay(20 ms)` → fake-sleep `continue` →
 `core::ScopedInstanceLock` → `loopNFCReader()`, which immediately early-returns on
@@ -348,10 +350,11 @@ test).
 
 ## Suggested execution order
 
-1. **P2.3** settings ping off-thread (pattern exists 90 lines away — cleanest start).
-2. **P2.4** cJSON→PSRAM hook (4 lines, biggest internal-heap win).
-3. **P2.2** NFC lock gate, then **P2.1** keyboard fake-sleep gate (⚠️ both wants the
-   hardware smoke-test afterward; P2.1 also fixes the sleep-power story).
+1. ~~**P2.3** settings ping off-thread~~ ✅ done.
+2. ~~**P2.4** cJSON→PSRAM hook~~ ✅ done.
+3. ~~**P2.2** NFC lock gate, then **P2.1** keyboard fake-sleep gate~~ ✅ done (code) —
+   ⚠️ both still owe the hardware smoke-test (now on the checklist); P2.1 also fixes
+   the sleep-power story.
 4. **P2.8** minimal watchdog yield in the bulk storage/crypto loops (crash vector,
    ~1-line mitigation).
 5. **P2.10 flash items 1+2** (montserrat_40 + decoders): −129 KB, low risk, one

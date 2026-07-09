@@ -343,6 +343,15 @@ flash `pio run -e tlora_pager -t upload` and confirm:
 - [ ] **§2.17 Weather city-search (async)** — Settings » Weather » Set city, submit a query:
       "Searching..." shows, **back button stays live**, the picker opens on completion; a failed
       search shows the error; exiting settings mid-search does not crash.
+- [ ] **P2.1 keyboard fake-sleep gate** — long-press the rotary to enter fake-sleep (display
+      off), wait a few seconds, then wake: the **first keypress after wake registers
+      immediately** (no dropped or delayed first key) and **no key auto-repeats spuriously** on
+      wake. While awake, hold a letter to confirm normal auto-repeat and fast typing still work.
+- [ ] **P2.2 NFC lock gate** — with NFC **disabled** (default), scroll/keyboard/UI stay smooth
+      with no periodic hitching. Toggle Settings » Connectivity » NFC **on** → tapping a tag is
+      still recognized promptly; toggle **off** → detection stops. (Both P2.1 + P2.2 target
+      idle-power/lock-contention during "sleep"; a serial or current-draw check that core-0
+      wakeups drop during fake-sleep is the ideal confirmation if instrumented.)
 
 If all pass, delete this checklist and the "compile-only" caveats above. If the radio
 boot is solid, the *optional* follow-up trims become safe: empty `hw_radio_begin`/
