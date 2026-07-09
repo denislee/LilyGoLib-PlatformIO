@@ -42,7 +42,7 @@ a device run for the phase-1 radio/audio/§2.13/§2.17 passes).
 | P2.10 | Flash: drop `montserrat_40` (1 call site) + PNG/JPEG/BMP decoders | −102 KB measured (est. −129 KB), no feature loss ✅ | Low |
 | P2.11 | Flash: font-picker cap / face trims (product decisions, now measured) | up to −150 KB more | Med |
 | P2.12 | WiFi power-save never configured; fake sleep keeps default PS | Sleep power | Product decision |
-| §4 | Go server: all phase-1 items still open **+ 2 new criticals** (SSRF, unbounded maps, path traversal) | Security + Pi OOM | Low fixes |
+| §4 | Go server: D1–D4 ✅ done (SSRF, unbounded maps, path traversal, timeouts); D5 + A1/A2 cosmetics remain | Security + Pi OOM | Low fixes |
 
 ---
 
@@ -56,7 +56,8 @@ a device run for the phase-1 radio/audio/§2.13/§2.17 passes).
 | P2.1 | ✅ done (code) — `keyboard_task_fn` (`src/hal/keyboard_task.cpp`) now checks `ui_is_fake_sleep()` at the top of the loop and blocks on `ulTaskNotifyTake(200 ms)` instead of polling the TCA8418 at 100 Hz through fake-sleep. `ui_resume_timers()` (`ui_main.cpp`) kicks it via the new `hw_keyboard_task_notify_wake()` (alongside the existing `hw_lvgl_task_notify_wake()`) so the first keypress after wake isn't delayed. Two correctness guards beyond the doc snippet: `xLastWakeTime` is reset after the block so `vTaskDelayUntil` doesn't burst to "catch up" skipped ticks on wake, and `s_held_char` is cleared so a key held before sleep can't fire a stale auto-repeat on wake. Declared `hw_keyboard_task_notify_wake()` in `core/system_hooks.h`; added `#include "../core/system_hooks.h"` to the task TU; no-op stubs for the `!USING_INPUT_DEV_KEYBOARD` and `!ARDUINO` branches. Removes ~100 core-0 wakeups/s + I2C reads to a powered-off chip during fake-sleep. Verified: same three-target build/test pass as P2.2. ⚠️ **HW-test-required** (task loop + first-keypress latency) — on the smoke-test checklist. |
 | P2.8 | ✅ done (minimal mitigation) — `storage_progress_cb` (`src/apps/settings_storage.cpp`) is the single callback every bulk/crypto flow feeds one call per file (verified: `hw_copy_all_notes_to_hub`/`hw_copy_internal_to_sd` in `storage_bulk.cpp`, `hw_prune_internal_storage` in `storage.cpp:689`, and all four `notes_crypto_*` loops in `notes_crypto.cpp:715-867` call `cb(cur,total,name)` at the top of each iteration). It previously did an unconditional `lv_refr_now(NULL)` and **never yielded**, so a large corpus starved IDLE0/IDLE1 and could panic the TWDT (not just stutter). Now it throttles both the screen flush **and** a `vTaskDelay(1)` IDLE yield to a >100 ms window using `lv_tick_get()`/`lv_tick_elaps()` — the exact guard `ui_journal.cpp`'s `report()` uses. The progress widgets still update their value every call (bar stays accurate); only the flush+yield are throttled. `vTaskDelay(1)` is `#ifdef ARDUINO`-gated (emulator: LVGL-only, no FreeRTOS). Fixing the shared callback covers all seven flagged sites in one edit; no HAL/crypto loop bodies were touched. Verified: `pio run -e tlora_pager` (RAM 27.4 %/89,712 B · Flash 70.5 %/2,955,973 B), `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. Not a task-loop/ISR/boot change (established LVGL-thread pattern), so low-risk; still worth an on-device smoke check driving a large-corpus encrypt-all / copy-to-SD to confirm no TWDT panic. **Full fix (worker + drain for copy-to-hub network I/O) remains deferred** per the section. |
 | P2.10 | ✅ done (items 1+2; flash, −102 KB) — **Item 1:** `lv_font_montserrat_40` had exactly one call site (verified) — the `LV_SYMBOL_WARNING` glyph on the USB "Unsafe to disconnect" screen (`core/system.cpp:367`). Retargeted to `montserrat_32` (already pinned by clock/audio code → zero flash cost, and it stays larger than the `_28` title below it), swapped the file's `LV_FONT_DECLARE(_40)` → `_32`, and set `LV_FONT_MONTSERRAT_40 0` in `lv_conf.h`. Flash 2,955,973 → 2,885,793 B (**−70,180 B**, matches the doc's −70,177 B estimate). **Item 2:** disabled the three unconditionally-registered, non-gc-able image decoders `LV_USE_LODEPNG`/`LV_USE_TJPGD`/`LV_USE_BMP`; also flipped `LV_USE_GIF`/`LV_USE_QRCODE` → 0 (already gc'd, 0 bytes — honesty). Verified the firmware never decodes a PNG/JPEG/BMP file: no `lv_qrcode`/`lv_gif`/`lv_bmp`/`lv_lodepng`/`lv_tjpgd` API refs and no `A:`/`S:` file-path image sources in `src/` (the only `.jpg` strings are emulator mock dir-listings in `storage.cpp`; the only `lv_img_set_src` takes `LV_SYMBOL_*` glyphs). Flash 2,885,793 → 2,853,693 B (**−32,100 B** — below the doc's −58,787 B `nm`-estimate, which over-counted shared/collectible code). Combined **−102,280 B** (70.5 % → 68.0 %); RAM unchanged (89,712 B). Two separate commits per the order. Verified: `pio run -e tlora_pager`, `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. Pure build-config/flash change — no HW test required (the USB-eject screen still renders, just with a 32 px warning glyph). |
-| P2.5–P2.7, P2.9, P2.11–P2.12, §4 | Not started — see sections below and the suggested execution order. |
+| §4 (D1–D4) | ✅ done — the Go-server security + OOM pass, verified with `gofmt -l` (clean), `go vet` (clean), and `go test -race` (all packages green). **D1** (`telegram.go`): replaced the `HasPrefix(url,"http")` SSRF hole with an `allowedTelegramURL` allowlist (scheme `https` + host `api.telegram.org`, case-insensitive; userinfo/suffix tricks rejected via `Hostname()`), and now relays Telegram's status+JSON body verbatim instead of flattening non-200s to a text/plain 502; dropped the now-unused `fmt`/`truncate`. **D3** (`notessync.go`): strict `validRepo` (owner/name, no `.`/`..` segment) replacing `Contains("/")`, `safeName` applied per-file in `runSync` (invalid → per-file error, additive/retry-safe), and `url.PathEscape`(name)/`url.QueryEscape`(branch) when building the GitHub URLs. **D2** (`cache.go`/`weather.go`/`chat.go`): 512-entry cap + eviction on the weather cache (expired-first, else nearest-expiry; RWMutex read path untouched) plus canonicalized keys (forecast lat/lon rounded 2dp + params sorted, keeping every response-affecting param so no collisions; geosearch lowercased), and a 256-session LRU cap on chat (`evictSessionsLocked`, oldest `updated`; new session stamped before the check so it's never its own victim). **D4** (`main.go`): added `ReadTimeout` 60s + `IdleTimeout` 120s (WriteTimeout left off for the ≤60s chat upstream). Added regression tests for all four (SSRF allowlist, repo/name traversal, cache bound, session eviction) — the `cache`/`telegram`/`notessync` packages had none. **Singleflight (thundering-herd, part of D2a) intentionally deferred** — the entry cap already closes the OOM vector and a hand-rolled singleflight is more surface than this pass warranted; noted in §D. Four commits (one per item). |
+| P2.5–P2.7, P2.9, P2.11–P2.12, §4-D5/A1/A2 | Not started — see sections below and the suggested execution order. |
 
 ---
 
@@ -288,36 +289,37 @@ RadioLib already pared via `RADIOLIB_EXCLUDE_*`.
 
 ## D. Go server (`server/`) — all phase-1 §4 items verified still open, plus 2 new
 
-`gofmt -l` still flags `chat.go`, `notessync.go`, `telegram.go`; `go vet` clean;
-tests exist only for chat/httpx/weather (notessync + telegram — the sensitive ones —
-are untested). Fix order:
+**D1–D4 are ✅ done** (see the §4 Status row; `gofmt -l` now clean, `go vet` clean,
+`go test -race` green, and the `cache`/`telegram`/`notessync` packages gained their
+first tests). Items 5–6 (Git Data API + cosmetics) remain. Fix order:
 
-1. **B6 — telegram proxy is an open SSRF relay** (`internal/telegram/telegram.go:47`):
-   validation is `strings.HasPrefix(req.URL, "http")` — any LAN client can make the
-   hub GET/POST to any host (metadata endpoints, localhost admin ports…) with a
-   caller-supplied bearer attached. Also flattens Telegram's structured JSON errors
-   into `text/plain` 502s (:86-89). **Fix:** allowlist scheme `https` + host
-   `api.telegram.org`; pass upstream status + JSON body through verbatim. Trivial.
-2. **NEW — unbounded maps = Pi OOM vectors.**
-   (a) Weather cache (`internal/cache/cache.go`): no entry cap, no LRU; keys are the
-   **verbatim query string** (`weather.go:80,94`) so junk params mint unlimited
-   distinct entries + upstream fetches (≤1 MiB each, pinned for TTL). No request
-   coalescing on miss (thundering herd vs open-meteo). Fix: canonicalize keys (parse,
-   keep known params, sort, round lat/lon), cap entries, add singleflight.
-   (b) Chat sessions (`internal/chat/chat.go:119,305-309,463-470`): keyed by
-   caller-controlled `device_id`, reaped only on >1 h idle — a burst of fresh IDs
-   grows without bound (~80 KiB each). Fix: cap session count with LRU eviction.
-3. **B5 — sync path is a path traversal, worse than phase-1 reported**
-   (`internal/notessync/notessync.go:267-268`): `putFile` interpolates `req.Repo` and
-   `name` unescaped; a name like `../secrets.txt` writes **outside `notes/`** and
-   bypasses the additive-only guard (which only enumerates `notes/`). `safeName`
-   (:318) is applied only in `upload` (:350). Fix: `safeName` + `url.PathEscape` per
-   segment in `runSync`; validate `req.Repo` as exactly `owner/name`; escape
-   `req.Branch` (:209).
-4. **B4 — no `ReadTimeout`/`IdleTimeout`** (`cmd/lilyhub/main.go:49-53`; only
-   `ReadHeaderTimeout: 5s`) while accepting 8 MiB bodies — slow-body DoS parks
-   goroutines forever. Add ReadTimeout ~30–60 s + IdleTimeout ~60–120 s; leave
-   `WriteTimeout` off (the chat path legitimately takes up to 60 s upstream).
+1. ✅ **done — B6 telegram proxy SSRF** (`internal/telegram/telegram.go`): was
+   `strings.HasPrefix(req.URL, "http")` — any LAN client could relay to any host
+   (metadata endpoints, localhost admin ports…) with a caller-supplied bearer. Now
+   an `allowedTelegramURL` allowlist (scheme `https` + host `api.telegram.org`,
+   case-insensitive; userinfo/suffix tricks rejected via `Hostname()`), and upstream
+   status + JSON body relayed verbatim instead of flattened to a text/plain 502.
+2. ✅ **done (except singleflight) — unbounded maps = Pi OOM vectors.**
+   (a) Weather cache (`internal/cache/cache.go`): now a **512-entry cap** with eviction
+   (expired-first, else nearest-expiry; no per-`Get` bookkeeping so the RWMutex read
+   path is unchanged) + **canonicalized keys** (`weather.go`): forecast lat/lon rounded
+   to 2dp and params sorted — **all** response-affecting params kept, so no cache
+   collisions — geosearch lowercased. Upstream URL still uses the raw query.
+   ⚠️ **singleflight (thundering-herd coalescing) deferred**: the cap already closes the
+   OOM vector, thundering herd on a single-device LAN hub is low-risk, and a correct
+   hand-rolled singleflight (no external deps allowed — pure-stdlib module) is more
+   surface than this pass warranted. Revisit if open-meteo rate-limits in practice.
+   (b) Chat sessions (`internal/chat/chat.go`): now a **256-session LRU cap**
+   (`evictSessionsLocked`, evict oldest `updated`); the new session is stamped before
+   the cap check so it is never its own victim.
+3. ✅ **done — B5 sync path traversal** (`internal/notessync/notessync.go`): `putFile`/
+   `listRemote` interpolated `req.Repo`/`name`/`req.Branch` unescaped; `safeName` was
+   only on `/upload`. Now strict `validRepo` (owner/name, no `.`/`..` segment)
+   replacing `Contains("/")`, `safeName` per-file in `runSync` (invalid → per-file
+   error), and `url.PathEscape`(name)/`url.QueryEscape`(branch) on the GitHub URLs.
+4. ✅ **done — B4 timeouts** (`cmd/lilyhub/main.go`): added `ReadTimeout` 60 s +
+   `IdleTimeout` 120 s; `WriteTimeout` left off (chat path legitimately ≤60 s upstream,
+   and `ReadTimeout` doesn't bound the handler once the body is read).
 5. **B3 + A3** — one commit + serial round-trip per file per sync
    (`notessync.go:255-288`, `maxParallel` hardwired 1 at :98). Move to the Git Data
    API (blobs → tree → one commit → ref) — batches, removes the parent-ref race that
@@ -361,7 +363,9 @@ test).
    `storage_progress_cb`); full worker+drain for copy-to-hub still deferred.
 5. ~~**P2.10 flash items 1+2** (montserrat_40 + decoders): −129 KB, low risk, one
    commit each.~~ ✅ done — **−102 KB measured** (70.5 % → 68.0 % flash), one commit each.
-6. **§4 server pass** (items D1–D4 are each small; D1 and D3 are security).
+6. ~~**§4 server pass** (items D1–D4 are each small; D1 and D3 are security).~~ ✅ done
+   — D1 SSRF, D2 map caps (singleflight deferred), D3 path traversal, D4 timeouts; four
+   commits + tests. **D5 (Git Data API) and A1/A2 cosmetics remain.**
 7. Then the product decisions (picker cap, mono face, GPS toggle, WiFi PS) and the
    optional deeper work (P2.7 file browser, P2.9 journal off-thread, D5 Git Data API).
 
