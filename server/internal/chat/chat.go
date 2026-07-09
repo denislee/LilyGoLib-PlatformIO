@@ -36,11 +36,12 @@ const (
 	systemPrompt = "You are a concise assistant on a small pager screen. " +
 		"Answer in plain text, no markdown, ≤120 words unless asked."
 
-	maxHistory       = 20             // messages, dropping oldest pairs
-	maxContent       = 4 * 1024       // per-message cap before we trim
-	maxRequestBytes  = 8 << 20        // 8 MiB JSON envelope
-	maxRespBytes     = 1 << 20        // 1 MiB upstream response cap
-	sessionIdleLimit = time.Hour      // sessions idle this long are reaped
+	maxHistory       = 20        // messages, dropping oldest pairs
+	maxContent       = 4 * 1024  // per-message cap before we trim
+	maxRequestBytes  = 8 << 20   // 8 MiB JSON envelope
+	maxRespBytes     = 1 << 20   // 1 MiB upstream response cap
+	sessionIdleLimit = time.Hour // sessions idle this long are reaped
+	maxSessions      = 256       // hard cap on live sessions (LRU-evicted)
 	clientTimeout    = 60 * time.Second
 )
 
@@ -308,11 +309,20 @@ func (h *Handler) complete(ctx context.Context, deviceID, prompt string) (string
 		h.sessions[deviceID] = s
 	}
 	// Mark the session active before we release the lock for the network call.
+	// (Also, stamping now first means the just-created session is the newest,
+	// so the LRU cap below never evicts it.)
 	// A newly created session (updated == zero) — or one whose last activity is
 	// older than the idle cutoff — would otherwise be evictable by a concurrent
 	// reapLocked() while this call is in flight, and the reply plus this turn's
 	// history get silently dropped when we re-lock below.
 	s.updated = now
+	if !ok {
+		// A new session grew the map — enforce the cap so a burst of unique
+		// device_ids can't balloon memory (each session is up to ~80 KiB)
+		// before the 1h idle reaper runs. Evicting by `updated` (LRU) after the
+		// stamp above guarantees this session is never the victim.
+		h.evictSessionsLocked(maxSessions)
+	}
 	s.msgs = append(s.msgs, message{Role: "user", Content: clip(prompt, maxContent)})
 	if len(s.msgs) > maxHistory {
 		s.msgs = s.msgs[len(s.msgs)-maxHistory:]
@@ -466,6 +476,29 @@ func (h *Handler) reapLocked(now time.Time) {
 		if s.updated.Before(cutoff) {
 			delete(h.sessions, k)
 		}
+	}
+}
+
+// evictSessionsLocked drops least-recently-used sessions (oldest `updated`)
+// until at most `limit` remain. The idle reaper alone can't bound memory: a
+// burst of unique device_ids inside the idle window grows the map unchecked.
+// O(n) per eviction, but evictions only fire at the cap and n is small. Caller
+// holds h.mu. An evicted session that is mid-flight elsewhere is handled
+// gracefully — the in-flight call re-locks, finds it gone, and skips the store.
+func (h *Handler) evictSessionsLocked(limit int) {
+	for len(h.sessions) > limit {
+		var oldestKey string
+		var oldestTime time.Time
+		first := true
+		for k, s := range h.sessions {
+			if first || s.updated.Before(oldestTime) {
+				oldestKey, oldestTime, first = k, s.updated, false
+			}
+		}
+		if first {
+			return
+		}
+		delete(h.sessions, oldestKey)
 	}
 }
 

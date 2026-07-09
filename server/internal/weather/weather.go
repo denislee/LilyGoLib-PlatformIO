@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lilygo/lilyhub/internal/cache"
@@ -77,7 +79,11 @@ func (h *Handler) geoSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	upstream := "https://geocoding-api.open-meteo.com/v1/search?name=" +
 		url.QueryEscape(q) + "&count=" + url.QueryEscape(count) + "&format=json"
-	httpx.Proxy(h.cache, h.client, w, r, "geosearch:"+q+":"+count, upstream, 24*time.Hour, nil)
+	// Normalize the query for the key so "Paris" / "paris " / " PARIS" share
+	// one entry (open-meteo geocoding is case-insensitive), instead of each
+	// spelling minting a distinct 24h-pinned entry.
+	key := "geosearch:" + strings.ToLower(strings.TrimSpace(q)) + ":" + count
+	httpx.Proxy(h.cache, h.client, w, r, key, upstream, 24*time.Hour, nil)
 }
 
 // forecast — pass-through of api.open-meteo.com/v1/forecast. We forward the
@@ -86,10 +92,31 @@ func (h *Handler) geoSearch(w http.ResponseWriter, r *http.Request) {
 // follows whatever set of fields was requested.
 func (h *Handler) forecast(w http.ResponseWriter, r *http.Request) {
 	qs := r.URL.RawQuery
-	if qs == "" || r.URL.Query().Get("latitude") == "" || r.URL.Query().Get("longitude") == "" {
+	q := r.URL.Query()
+	if qs == "" || q.Get("latitude") == "" || q.Get("longitude") == "" {
 		http.Error(w, "missing latitude/longitude", http.StatusBadRequest)
 		return
 	}
 	upstream := "https://api.open-meteo.com/v1/forecast?" + qs
-	httpx.Proxy(h.cache, h.client, w, r, "forecast:"+qs, upstream, 10*time.Minute, nil)
+	httpx.Proxy(h.cache, h.client, w, r, forecastCacheKey(q), upstream, 10*time.Minute, nil)
+}
+
+// forecastCacheKey builds a stable cache key from the forecast query so param
+// reordering and sub-~1km coordinate jitter don't mint distinct entries (which
+// would churn the cache and re-hit open-meteo needlessly). Every response-
+// affecting param is kept — only latitude/longitude are rounded to 2 decimals
+// — so two requests share a cached body only when they'd get the same forecast.
+// The upstream URL still uses the raw query, so the fetched data stays exact.
+func forecastCacheKey(q url.Values) string {
+	canon := url.Values{}
+	for k, vs := range q {
+		if (k == "latitude" || k == "longitude") && len(vs) > 0 {
+			if f, err := strconv.ParseFloat(vs[0], 64); err == nil {
+				canon.Set(k, strconv.FormatFloat(f, 'f', 2, 64))
+				continue
+			}
+		}
+		canon[k] = vs
+	}
+	return "forecast:" + canon.Encode()
 }
