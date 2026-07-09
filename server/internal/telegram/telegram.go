@@ -2,9 +2,9 @@ package telegram
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -32,6 +32,18 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/telegram/proxy", h.proxy)
 }
 
+// allowedTelegramURL reports whether raw is a URL this proxy may fetch. Only
+// https://api.telegram.org (any case, any path/port) is permitted; the host
+// match is the SSRF boundary since we forward the caller's bearer token. Host
+// comparison is case-insensitive (DNS is), but userinfo tricks like
+// "https://api.telegram.org@evil.com" resolve to Hostname()=="evil.com" and
+// are correctly rejected.
+func allowedTelegramURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" &&
+		strings.ToLower(u.Hostname()) == "api.telegram.org"
+}
+
 func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
@@ -44,8 +56,13 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.URL == "" || !strings.HasPrefix(req.URL, "http") {
-		http.Error(w, "valid url required", http.StatusBadRequest)
+	// SSRF guard: this proxy attaches the caller-supplied bearer token to the
+	// upstream request, so it must only ever reach Telegram. The old check
+	// (HasPrefix(req.URL, "http")) let any LAN client relay to cloud metadata
+	// endpoints, localhost admin ports, or any internal host — with the token
+	// attached.
+	if !allowedTelegramURL(req.URL) {
+		http.Error(w, "url must be https://api.telegram.org/...", http.StatusBadRequest)
 		return
 	}
 	if req.Method != "GET" && req.Method != "POST" {
@@ -83,19 +100,15 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream read: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, fmt.Sprintf("upstream %d: %s", resp.StatusCode, truncate(string(respBody), 200)), http.StatusBadGateway)
-		return
+	// Relay Telegram's status and JSON body verbatim. Telegram reports errors
+	// as structured JSON ({"ok":false,"error_code":...,"description":...}); the
+	// old code flattened every non-200 into a text/plain 502, discarding the
+	// payload the device needs to render a useful message.
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "application/json"
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", ct)
+	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBody)
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }
