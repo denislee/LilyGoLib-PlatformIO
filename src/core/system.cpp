@@ -14,7 +14,7 @@
 
 LV_FONT_DECLARE(lv_font_montserrat_18);
 LV_FONT_DECLARE(lv_font_montserrat_28);
-LV_FONT_DECLARE(lv_font_montserrat_40);
+LV_FONT_DECLARE(lv_font_montserrat_32);
 
 // Definition of global UI objects
 lv_group_t *menu_g = nullptr;
@@ -364,7 +364,7 @@ void System::setupGlobalUI() {
             lv_obj_t *icon = lv_label_create(box);
             lv_label_set_text(icon, LV_SYMBOL_WARNING);
             lv_obj_set_style_text_color(icon, lv_palette_main(LV_PALETTE_RED), 0);
-            lv_obj_set_style_text_font(icon, &lv_font_montserrat_40, 0);
+            lv_obj_set_style_text_font(icon, &lv_font_montserrat_32, 0);
 
             lv_obj_t *title = lv_label_create(box);
             lv_label_set_text(title, "Unsafe to\ndisconnect");
