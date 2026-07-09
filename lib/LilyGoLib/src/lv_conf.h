@@ -771,24 +771,31 @@
 #endif
 
 /*LODEPNG decoder library*/
-#define LV_USE_LODEPNG 1
+/* Disabled: the app renders only LV_SYMBOL_* glyphs and compiled-in
+ * C-array images (lv_image_dsc_t) — it never decodes a PNG/JPEG/BMP file
+ * (no A:/S: file-path image sources exist). lv_init() registers these
+ * decoders unconditionally and they are not gc-able, so disabling reclaims
+ * ~31 KB of flash (measured; less than the doc's ~59 KB nm-estimate, which
+ * over-counted shared/collectible code). See OPTIMIZATION_PHASE2.md P2.10. */
+#define LV_USE_LODEPNG 0
 
 /*PNG decoder(libpng) library*/
 #define LV_USE_LIBPNG 0
 
 /*BMP decoder library*/
-#define LV_USE_BMP 1
+#define LV_USE_BMP 0
 
 /* JPG + split JPG decoder library.
  * Split JPG is a custom format optimized for embedded systems. */
-#define LV_USE_TJPGD 1
+#define LV_USE_TJPGD 0
 
 /* libjpeg-turbo decoder library.
  * Supports complete JPEG specifications and high-performance JPEG decoding. */
 #define LV_USE_LIBJPEG_TURBO 0
 
 /*GIF decoder library*/
-#define LV_USE_GIF 1
+/* Already gc'd out of the image (no GIF sources); set to 0 for honesty. */
+#define LV_USE_GIF 0
 #if LV_USE_GIF
     /*GIF decoder accelerate*/
     #define LV_GIF_CACHE_DECODE_DATA 0
@@ -802,7 +809,8 @@
 #define LV_USE_RLE 0
 
 /*QR code library*/
-#define LV_USE_QRCODE 1
+/* Already gc'd out of the image (no QR usage); set to 0 for honesty. */
+#define LV_USE_QRCODE 0
 
 /*Barcode code library*/
 #define LV_USE_BARCODE 0
