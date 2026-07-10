@@ -75,9 +75,19 @@ static StorageSource current_source = SOURCE_INTERNAL;
 static FileFilter current_filter = FILTER_TXT;
 static std::string current_dir = "/";
 
+// Raw directory listing as read from disk — source/dir scoped and
+// filter-independent (the HAL is called with filter_ext=nullptr). Cached so a
+// filter-button toggle re-filters in place instead of re-scanning the disk
+// (which, on SD, holds the SPI lock for the whole openNextFile walk).
+static std::vector<HwDirEntry> raw_cache;
 static std::vector<Entry> all_entries;
 // Backing storage for button user_data — keeps c_str() stable while list is shown.
 static std::vector<std::string> path_store;
+
+// Cap on rendered rows: each entry spawns ~3 LVGL objects, and a huge dir would
+// otherwise freeze the UI (and stall the SPI-lock-held flush) building them all.
+// Entries are dir-first then mtime-desc sorted, so the cap keeps the newest.
+static const int kMaxRenderedRows = 200;
 
 static std::string join_path(const std::string &dir, const std::string &leaf)
 {
@@ -96,18 +106,13 @@ static std::string parent_of(const std::string &dir)
     return d.substr(0, slash);
 }
 
-static void load_entries()
+// Rebuild the display list from the cached raw listing, applying the current
+// filter + sort. No disk access — this is what the filter buttons call.
+static void apply_filter()
 {
     all_entries.clear();
 
-    std::vector<HwDirEntry> raw;
-    if (current_source == SOURCE_INTERNAL) {
-        hw_list_internal_entries(raw, nullptr, current_dir.c_str());
-    } else {
-        hw_list_sd_entries(raw, nullptr, current_dir.c_str());
-    }
-
-    for (const auto &r : raw) {
+    for (const auto &r : raw_cache) {
         // Hide tasks.txt bookkeeping file from the browser.
         if (!r.is_dir && (r.path == "tasks.txt" || r.path == "/tasks.txt")) continue;
 
@@ -126,6 +131,20 @@ static void load_entries()
                   if (a.mtime != b.mtime) return a.mtime > b.mtime;
                   return a.path < b.path;
               });
+}
+
+// Scan the current dir from disk into raw_cache, then rebuild the display list.
+// Call on source/dir change and after mutations (delete); filter toggles use
+// apply_filter() to avoid a redundant re-scan of the same directory.
+static void load_entries()
+{
+    raw_cache.clear();
+    if (current_source == SOURCE_INTERNAL) {
+        hw_list_internal_entries(raw_cache, nullptr, current_dir.c_str());
+    } else {
+        hw_list_sd_entries(raw_cache, nullptr, current_dir.c_str());
+    }
+    apply_filter();
 }
 
 static std::string format_size(uint32_t bytes)
@@ -229,6 +248,7 @@ static void refresh_ui()
     path_store.clear();
 
     int total = (int)all_entries.size();
+    int render_count = total > kMaxRenderedRows ? kMaxRenderedRows : total;
     bool show_parent = (current_dir != "/" && !current_dir.empty());
 
     style_toggle_btn(src_btn_int,        current_source == SOURCE_INTERNAL);
@@ -238,7 +258,8 @@ static void refresh_ui()
     style_toggle_btn(filter_btn_all,     current_filter == FILTER_ALL);
 
     // Reserve up-front so c_str() pointers stay stable across push_backs.
-    path_store.reserve(total + (show_parent ? 1 : 0));
+    // Only rendered rows carry user_data; the ".." button has none.
+    path_store.reserve(render_count);
 
     if (show_parent) {
         lv_obj_t *btn = lv_list_add_btn(file_list, LV_SYMBOL_LEFT, "..");
@@ -255,11 +276,11 @@ static void refresh_ui()
         lv_obj_set_style_pad_all(empty, 16, 0);
     } else {
         // Pre-size path_store so c_str() pointers stay valid for user_data.
-        for (int i = 0; i < total; ++i) {
+        for (int i = 0; i < render_count; ++i) {
             path_store.push_back(join_path(current_dir, all_entries[i].path));
         }
 
-        for (int i = 0; i < total; ++i) {
+        for (int i = 0; i < render_count; ++i) {
             const Entry &ent = all_entries[i];
             std::string label = display_name(ent.path);
             const char *icon = ent.is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_FILE;
@@ -296,6 +317,17 @@ static void refresh_ui()
                 lv_obj_set_style_pad_left(size_lbl, 8, 0);
             }
         }
+
+        // Non-focusable footer when the directory exceeds the render cap.
+        if (total > render_count) {
+            lv_obj_t *more = lv_label_create(file_list);
+            lv_label_set_text_fmt(more, "%d more (narrow the filter)",
+                                  total - render_count);
+            lv_obj_set_style_text_color(more, UI_COLOR_MUTED, 0);
+            lv_obj_set_style_text_align(more, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_width(more, LV_PCT(100));
+            lv_obj_set_style_pad_all(more, 8, 0);
+        }
     }
 
     lv_obj_t *to_focus = NULL;
@@ -325,7 +357,7 @@ static void filter_click_cb(lv_event_t *e)
     FileFilter f = (FileFilter)(uintptr_t)lv_event_get_user_data(e);
     if (current_filter != f) {
         current_filter = f;
-        load_entries();
+        apply_filter();   // re-filter the cached listing; no disk re-scan
     }
     refresh_ui();
 }
@@ -557,6 +589,7 @@ void ui_file_browser_exit(lv_obj_t *parent)
     filter_btn_all = NULL;
     path_store.clear();
     all_entries.clear();
+    raw_cache.clear();
 }
 
 } // namespace
