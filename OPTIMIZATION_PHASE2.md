@@ -36,7 +36,7 @@ a device run for the phase-1 radio/audio/§2.13/§2.17 passes).
 | P2.4 | cJSON has no allocator hooks → every JSON parse lands in internal heap | ~15–30 KB internal spikes during TLS | Low |
 | P2.5 | GPS rail + UART held on 24/7 when `gps_enable` set, no consumer | Tens of mA continuous | Product decision |
 | P2.6 | `playerTask` 8 KB internal stack reserved at boot, forever | 3–8 KB internal RAM | Low |
-| P2.7 | File browser: full dir re-scan per filter toggle; uncapped widgets | Freezes + heap on big dirs | Low–Med |
+| P2.7 | File browser: full dir re-scan per filter toggle; uncapped widgets | Freezes + heap on big dirs — items 1+2 done ✅ | Low–Med |
 | P2.8 | Bulk storage/crypto ops on UI thread with **no watchdog yield** | TWDT panic on large corpus | Low (1-line mitigation) |
 | P2.9 | Journal reconcile runs on the LVGL thread ("bg" = deferred, not off-thread) | Jank after dirty FS | Med |
 | P2.10 | Flash: drop `montserrat_40` (1 call site) + PNG/JPEG/BMP decoders | −102 KB measured (est. −129 KB), no feature loss ✅ | Low |
@@ -57,7 +57,8 @@ a device run for the phase-1 radio/audio/§2.13/§2.17 passes).
 | P2.8 | ✅ done (minimal mitigation) — `storage_progress_cb` (`src/apps/settings_storage.cpp`) is the single callback every bulk/crypto flow feeds one call per file (verified: `hw_copy_all_notes_to_hub`/`hw_copy_internal_to_sd` in `storage_bulk.cpp`, `hw_prune_internal_storage` in `storage.cpp:689`, and all four `notes_crypto_*` loops in `notes_crypto.cpp:715-867` call `cb(cur,total,name)` at the top of each iteration). It previously did an unconditional `lv_refr_now(NULL)` and **never yielded**, so a large corpus starved IDLE0/IDLE1 and could panic the TWDT (not just stutter). Now it throttles both the screen flush **and** a `vTaskDelay(1)` IDLE yield to a >100 ms window using `lv_tick_get()`/`lv_tick_elaps()` — the exact guard `ui_journal.cpp`'s `report()` uses. The progress widgets still update their value every call (bar stays accurate); only the flush+yield are throttled. `vTaskDelay(1)` is `#ifdef ARDUINO`-gated (emulator: LVGL-only, no FreeRTOS). Fixing the shared callback covers all seven flagged sites in one edit; no HAL/crypto loop bodies were touched. Verified: `pio run -e tlora_pager` (RAM 27.4 %/89,712 B · Flash 70.5 %/2,955,973 B), `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. Not a task-loop/ISR/boot change (established LVGL-thread pattern), so low-risk; still worth an on-device smoke check driving a large-corpus encrypt-all / copy-to-SD to confirm no TWDT panic. **Full fix (worker + drain for copy-to-hub network I/O) remains deferred** per the section. |
 | P2.10 | ✅ done (items 1+2; flash, −102 KB) — **Item 1:** `lv_font_montserrat_40` had exactly one call site (verified) — the `LV_SYMBOL_WARNING` glyph on the USB "Unsafe to disconnect" screen (`core/system.cpp:367`). Retargeted to `montserrat_32` (already pinned by clock/audio code → zero flash cost, and it stays larger than the `_28` title below it), swapped the file's `LV_FONT_DECLARE(_40)` → `_32`, and set `LV_FONT_MONTSERRAT_40 0` in `lv_conf.h`. Flash 2,955,973 → 2,885,793 B (**−70,180 B**, matches the doc's −70,177 B estimate). **Item 2:** disabled the three unconditionally-registered, non-gc-able image decoders `LV_USE_LODEPNG`/`LV_USE_TJPGD`/`LV_USE_BMP`; also flipped `LV_USE_GIF`/`LV_USE_QRCODE` → 0 (already gc'd, 0 bytes — honesty). Verified the firmware never decodes a PNG/JPEG/BMP file: no `lv_qrcode`/`lv_gif`/`lv_bmp`/`lv_lodepng`/`lv_tjpgd` API refs and no `A:`/`S:` file-path image sources in `src/` (the only `.jpg` strings are emulator mock dir-listings in `storage.cpp`; the only `lv_img_set_src` takes `LV_SYMBOL_*` glyphs). Flash 2,885,793 → 2,853,693 B (**−32,100 B** — below the doc's −58,787 B `nm`-estimate, which over-counted shared/collectible code). Combined **−102,280 B** (70.5 % → 68.0 %); RAM unchanged (89,712 B). Two separate commits per the order. Verified: `pio run -e tlora_pager`, `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. Pure build-config/flash change — no HW test required (the USB-eject screen still renders, just with a 32 px warning glyph). |
 | §4 (D1–D4) | ✅ done — the Go-server security + OOM pass, verified with `gofmt -l` (clean), `go vet` (clean), and `go test -race` (all packages green). **D1** (`telegram.go`): replaced the `HasPrefix(url,"http")` SSRF hole with an `allowedTelegramURL` allowlist (scheme `https` + host `api.telegram.org`, case-insensitive; userinfo/suffix tricks rejected via `Hostname()`), and now relays Telegram's status+JSON body verbatim instead of flattening non-200s to a text/plain 502; dropped the now-unused `fmt`/`truncate`. **D3** (`notessync.go`): strict `validRepo` (owner/name, no `.`/`..` segment) replacing `Contains("/")`, `safeName` applied per-file in `runSync` (invalid → per-file error, additive/retry-safe), and `url.PathEscape`(name)/`url.QueryEscape`(branch) when building the GitHub URLs. **D2** (`cache.go`/`weather.go`/`chat.go`): 512-entry cap + eviction on the weather cache (expired-first, else nearest-expiry; RWMutex read path untouched) plus canonicalized keys (forecast lat/lon rounded 2dp + params sorted, keeping every response-affecting param so no collisions; geosearch lowercased), and a 256-session LRU cap on chat (`evictSessionsLocked`, oldest `updated`; new session stamped before the check so it's never its own victim). **D4** (`main.go`): added `ReadTimeout` 60s + `IdleTimeout` 120s (WriteTimeout left off for the ≤60s chat upstream). Added regression tests for all four (SSRF allowlist, repo/name traversal, cache bound, session eviction) — the `cache`/`telegram`/`notessync` packages had none. **Singleflight (thundering-herd, part of D2a) intentionally deferred** — the entry cap already closes the OOM vector and a hand-rolled singleflight is more surface than this pass warranted; noted in §D. Four commits (one per item). |
-| P2.5–P2.7, P2.9, P2.11–P2.12, §4-D5/A1/A2 | Not started — see sections below and the suggested execution order. |
+| P2.7 | ✅ done (items 1+2) — file browser no longer re-scans disk on a filter toggle and caps its rendered rows. **Item 1:** split `load_entries()` (`src/apps/ui_file_browser.cpp`) into a disk read + a new `apply_filter()`; the HAL is called with `filter_ext=nullptr` so the raw `HwDirEntry` listing is filter-independent and cached in a static `raw_cache`. `filter_click_cb` now calls `apply_filter()` (re-filter in place, **zero disk access**) instead of `load_entries()`; source/dir change (`source_click_cb`/`folder_click_cb`/`parent_click_cb`) and post-delete (`delete_msgbox_cb`) still re-scan, so cache freshness is guaranteed by which function each path calls — no validity flag needed. Kills the redundant full `openNextFile()` walk that, on SD, held `core::ScopedSpiLock` for its entire duration (`storage.cpp:621`) and stalled display flush. **Item 2:** `refresh_ui()` caps rendered rows at `kMaxRenderedRows` (200; entries are dir-first/mtime-desc sorted so the cap keeps the newest) with a non-focusable "N more (narrow the filter)" footer — a huge dir previously spawned ~3 LVGL objects/entry with no bound. `path_store` reserve + both build loops now use `render_count`; the delete handler still matches against `all_entries` (focused button is always within the rendered rows, so the match holds). `raw_cache` cleared in the exit path alongside `all_entries`/`path_store`. **Item 3 (worker+drain for `load_entries`) intentionally deferred** — navigation is user-initiated and items 1+2 remove the two real stalls, exactly as the section predicted; the adjacent `ui_audio_notes.cpp:reload_notes` was left alone ("leave unless it shows up in practice"). Verified: `pio run -e tlora_pager` (RAM 27.4 %/89,728 B · Flash 68.0 %/2,853,941 B), `pio run -e emulator_lora_pager`, `pio test -e native_test` (19/19) all pass. UI-thread-only refactor + a render cap (no ISR/task-loop/boot path) — no hardware test required. |
+| P2.5–P2.6, P2.9, P2.11–P2.12, §4-D5/A1/A2 | Not started — see sections below and the suggested execution order. |
 
 ---
 
@@ -172,24 +173,24 @@ recorder. (a) is the safe first step. ⚠️ verify playback on hardware after t
 
 ## B. Firmware — UI-thread & memory (medium)
 
-### P2.7 — File browser: redundant disk re-scans + uncapped widget build
+### P2.7 — File browser: redundant disk re-scans + uncapped widget build — ✅ items 1+2 done; see Status table
 
 `src/apps/ui_file_browser.cpp`:
-1. `filter_click_cb` (:323) calls `load_entries()` (:328) — a **full SD/FFat directory
-   re-scan** (holding `ScopedSpiLock` for the whole `openNextFile()` loop,
-   `storage.cpp:547/614`) — just to re-apply a client-side filter (:115-119) to data it
-   already had. Cache the raw listing for the current dir; make the filter buttons
-   re-filter + `refresh_ui()` only.
-2. `refresh_ui` (:262-296) creates ~3 LVGL objects per entry with **no cap**; LVGL's
-   object heap is PSRAM-backed on this build (`LV_Helper_v9.cpp:434-436`) so this is
-   mostly a latency problem, but hundreds of entries = hundreds of ms frozen while
-   holding the SPI lock (which also stalls display flush). Cap rendered rows (e.g.
-   first 200 by the existing mtime sort) with a "… N more" footer.
+1. ✅ **done** — `filter_click_cb` (:323) called `load_entries()` — a **full SD/FFat
+   directory re-scan** (holding `ScopedSpiLock` for the whole `openNextFile()` loop on
+   SD, `storage.cpp:621`) — just to re-apply a client-side filter to data it already
+   had. Now `load_entries()` reads disk into a cached `raw_cache`, and a new
+   `apply_filter()` rebuilds the display list from that cache with no disk access; the
+   filter buttons call `apply_filter()`, source/dir change + delete still re-scan.
+2. ✅ **done** — `refresh_ui` created ~3 LVGL objects per entry with **no cap**. Now
+   capped at `kMaxRenderedRows` (200, keeping the newest via the existing dir-first/
+   mtime-desc sort) with a "N more (narrow the filter)" footer.
 3. Bigger (optional): move `load_entries` to a worker + drain like `weather_bg_task`.
-   Navigation is user-initiated, so items 1–2 may be enough.
+   Navigation is user-initiated, so items 1–2 may be enough. **Deferred** — items 1+2
+   removed both real stalls.
 
 Same class, lower priority: `ui_audio_notes.cpp:134` (`reload_notes`) scans on the UI
-thread — usually one small dir, leave unless it shows up in practice.
+thread — usually one small dir, leave unless it shows up in practice. **Left alone.**
 
 ### P2.8 — Bulk storage/crypto ops: no watchdog yield (crash vector) — ✅ minimal fix done; see Status table
 
@@ -366,8 +367,11 @@ test).
 6. ~~**§4 server pass** (items D1–D4 are each small; D1 and D3 are security).~~ ✅ done
    — D1 SSRF, D2 map caps (singleflight deferred), D3 path traversal, D4 timeouts; four
    commits + tests. **D5 (Git Data API) and A1/A2 cosmetics remain.**
-7. Then the product decisions (picker cap, mono face, GPS toggle, WiFi PS) and the
-   optional deeper work (P2.7 file browser, P2.9 journal off-thread, D5 Git Data API).
+7. ~~**P2.7 file browser** (cache listing + cap rendered rows): low-risk UI-thread
+   engineering win, no product decision.~~ ✅ done (items 1+2; worker+drain item 3
+   deferred).
+8. Then the product decisions (picker cap, mono face, GPS toggle, WiFi PS) and the
+   remaining optional deeper work (P2.9 journal off-thread, D5 Git Data API).
 
 Per repo convention: one `<code>` commit + one `<docs>` commit per item, update the
 status table you'll inevitably add to this file, and keep
