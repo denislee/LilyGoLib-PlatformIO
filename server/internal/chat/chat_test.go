@@ -1,9 +1,14 @@
 package chat
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -128,6 +133,94 @@ func TestCompleteGivesUpAfterRetryStorm(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&attempts); n != 3 {
 		t.Fatalf("attempts=%d, want 3 (maxAttempts)", n)
+	}
+}
+
+// transcribe must decode audioB64 straight into the multipart body without
+// ever materializing the full decoded []byte itself — this checks the
+// upstream actually receives the right bytes, not just that no error occurs.
+func TestTranscribeStreamsDecodedAudio(t *testing.T) {
+	want := bytes.Repeat([]byte("RIFFfakewavdata"), 100)
+	var gotAudio []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mr, err := r.MultipartReader()
+		if err != nil {
+			t.Errorf("MultipartReader: %v", err)
+			http.Error(w, "bad multipart", http.StatusBadRequest)
+			return
+		}
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Errorf("NextPart: %v", err)
+				return
+			}
+			if part.FormName() == "file" {
+				b, err := io.ReadAll(part)
+				if err != nil {
+					t.Errorf("read file part: %v", err)
+					return
+				}
+				gotAudio = b
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"text":"hello world"}`))
+	}))
+	defer srv.Close()
+	h := testHandler(srv.URL)
+
+	text, err := h.transcribe(context.Background(), base64.StdEncoding.EncodeToString(want))
+	if err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
+	if text != "hello world" {
+		t.Fatalf("text=%q, want %q", text, "hello world")
+	}
+	if !bytes.Equal(gotAudio, want) {
+		t.Fatalf("upstream received %d bytes, want %d bytes matching the original audio", len(gotAudio), len(want))
+	}
+}
+
+// Invalid base64 must fail before any upstream request is made, and the
+// error must be identifiable as caller-input (not upstream) so chat() can
+// return 400 rather than 502.
+func TestTranscribeBadBase64ReturnsErrBadAudio(t *testing.T) {
+	var called int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&called, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	h := testHandler(srv.URL)
+
+	_, err := h.transcribe(context.Background(), "not-valid-base64!!")
+	if err == nil {
+		t.Fatal("want error for invalid base64")
+	}
+	var badAudio *errBadAudio
+	if !errors.As(err, &badAudio) {
+		t.Fatalf("err=%v (%T), want *errBadAudio", err, err)
+	}
+	if n := atomic.LoadInt32(&called); n != 0 {
+		t.Fatalf("upstream called %d times, want 0 (should fail decoding before the HTTP request)", n)
+	}
+}
+
+// End-to-end through the handler: a device that sends garbage audio_b64
+// should see 400, not the 502 an upstream STT failure would produce.
+func TestChatBadAudioBase64Returns400(t *testing.T) {
+	h := testHandler("http://unused.invalid")
+	h.apiKey = "test-key"
+	body := `{"device_id":"dev","audio_b64":"not-valid-base64!!"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.chat(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want %d; body=%s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
 }
 

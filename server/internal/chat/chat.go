@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -182,16 +183,17 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	// `text`. We still return the transcript so the device can show
 	// what we heard.
 	if req.AudioB64 != "" {
-		audio, err := base64.StdEncoding.DecodeString(req.AudioB64)
-		if err != nil {
+		log.Printf("chat: device=%s stt start (audio_bytes~%d)",
+			req.DeviceID, base64.StdEncoding.DecodedLen(len(req.AudioB64)))
+		sttStart := time.Now()
+		t, err := h.transcribe(r.Context(), req.AudioB64)
+		req.AudioB64 = "" // stream-decoded already; drop the ~6 MiB string before the LLM call below
+		var badAudio *errBadAudio
+		if errors.As(err, &badAudio) {
 			log.Printf("chat: device=%s bad audio_b64: %v", req.DeviceID, err)
 			http.Error(w, "bad audio_b64", http.StatusBadRequest)
 			return
 		}
-		log.Printf("chat: device=%s stt start (audio_bytes=%d)",
-			req.DeviceID, len(audio))
-		sttStart := time.Now()
-		t, err := h.transcribe(r.Context(), audio)
 		if err != nil {
 			log.Printf("chat: device=%s stt FAIL after %s: %v",
 				req.DeviceID, time.Since(sttStart).Round(time.Millisecond), err)
@@ -231,13 +233,24 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		req.DeviceID, time.Since(start).Round(time.Millisecond))
 }
 
+// errBadAudio marks a failure to base64-decode the caller's audio, as
+// opposed to an upstream STT failure — chat() uses it to pick the right
+// HTTP status code.
+type errBadAudio struct{ err error }
+
+func (e *errBadAudio) Error() string { return "bad audio_b64: " + e.err.Error() }
+func (e *errBadAudio) Unwrap() error { return e.err }
+
 // transcribe sends the WAV bytes to Groq's Whisper endpoint as multipart
-// form data. We name the file with a .wav extension so Groq's content-
-// sniffer doesn't reject it on extension grounds — the actual audio
-// format is detected from the bytes.
-func (h *Handler) transcribe(ctx context.Context, audio []byte) (string, error) {
+// form data. audioB64 is decoded straight into the multipart writer so the
+// base64 string, the decoded bytes, and the multipart buffer are never all
+// live at once — only the string and the (smaller) multipart buffer are.
+// We name the file with a .wav extension so Groq's content-sniffer doesn't
+// reject it on extension grounds — the actual audio format is detected
+// from the bytes.
+func (h *Handler) transcribe(ctx context.Context, audioB64 string) (string, error) {
 	var buf bytes.Buffer
-	buf.Grow(len(audio) + 512) // avoid doubling reallocs through ~4.5 MiB of writes
+	buf.Grow(base64.StdEncoding.DecodedLen(len(audioB64)) + 512) // avoid doubling reallocs through ~4.5 MiB of writes
 	mw := multipart.NewWriter(&buf)
 	if err := mw.WriteField("model", sttModel); err != nil {
 		return "", err
@@ -259,8 +272,9 @@ func (h *Handler) transcribe(ctx context.Context, audio []byte) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if _, err := fw.Write(audio); err != nil {
-		return "", err
+	dec := base64.NewDecoder(base64.StdEncoding, strings.NewReader(audioB64))
+	if _, err := io.Copy(fw, dec); err != nil {
+		return "", &errBadAudio{err}
 	}
 	if err := mw.Close(); err != nil {
 		return "", err
