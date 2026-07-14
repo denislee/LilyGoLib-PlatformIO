@@ -50,7 +50,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.10 | `recorderTask` prio 12, unpinned — can preempt LVGL on core 1 | Frame drops while recording | Low fix / ⚠️ HW |
 | P3.11 | `hub_probe` spawn failure leaks args + wedges `hub_probe_running` forever | Hub status indicator stuck for the session | ✅ Done |
 | P3.12 | SD rail stays powered through fake sleep (board can cut it via XL9555) | ~0.5–1 mA for hours of sleep | Med / ⚠️ HW |
-| P3.13 | Rotary task fake-sleep branch polls (`vTaskDelay`) instead of notify-blocking | 5 wakeups/s asleep (peers already fixed) | Very low |
+| P3.13 | Rotary task fake-sleep branch polls (`vTaskDelay`) instead of notify-blocking | 5 wakeups/s asleep (peers already fixed) | Very low ✅ Done |
 | P3.14 | `ble_kb_ka` 3 KB stack, wants a watermark check first | ~1.5 KB RAM | Very low / ⚠️ HW (measure first) |
 | P3.15 | NFC callback statics in BSS | ~116 B + hygiene | Very low ✅ Done |
 | P3.16 | Double `setCpuFrequencyMhz` at boot | ~0.5 ms boot | Very low ✅ Done |
@@ -62,7 +62,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.23 | Emulator defines Montserrat 21 + 40 that firmware doesn't build | Emulator masks font-fallback bugs | ✅ Done |
 | P3.24 | NimBLE heap in internal SRAM (`MEM_ALLOC_MODE_INTERNAL`) | 30–60 KB internal DRAM reclaimable | Med / ⚠️ HW |
 | P3.25 | BHI260 **Klio ML firmware blob = 123.7 KB of flash**; app uses no Klio features | up to −120 KB flash *if* GPIO variant works | High / ⚠️ HW, investigate only |
-| P3.26 | `test_desktop` is a 2+2 placeholder; `hal/str_encode` untested | Regression-safety, zero cost | Zero |
+| P3.26 | `test_desktop` is a 2+2 placeholder; `hal/str_encode` untested | Regression-safety, zero cost | Zero ✅ Done |
 | P3.27 | Partition rebalance (OTA 4→3 MiB, +2 MiB FFat) — only after size plateau | +2 MiB user storage | Deferred |
 | D6 | Server chat/transcribe holds audio in ~3 simultaneous copies (~15 MiB peak on Pi) | Pi RSS spike per voice message | ✅ Done |
 | D7 | Notes-sync: no retry on GitHub 429/transient 5xx (chat already has the pattern) | Whole sync aborts on one blip | ✅ Done |
@@ -344,7 +344,7 @@ reliability and write-in-flight corruption need care. ⚠️ HW-test-required: s
 SD mounted, wake, verify FS intact. Bench-measure the actual mA first to confirm the
 win justifies the remount complexity.
 
-### P3.13 — Rotary task fake-sleep branch still polls (LOW)
+### P3.13 — Rotary task fake-sleep branch still polls (LOW) ✅ Done
 
 `src/hal/rotary_task.cpp:69–70` — the fake-sleep branch is
 `vTaskDelay(kFakeSleepIdleMs)` where keyboard/NFC/charge/lvgl all use
@@ -352,6 +352,26 @@ win justifies the remount complexity.
 sleep. **Fix:** mirror `keyboard_task`: add `hw_rotary_task_notify_wake()`, call it
 from `ui_resume_timers()` (`ui_main.cpp`), block on notify. Risk: very low; no HW
 test needed beyond the existing checklist's wake-latency item.
+
+**Fixed:** re-verified the file:line and the "peers already fixed" premise against
+current source before editing — `keyboard_task.cpp`'s fake-sleep branch was the
+exact pattern to mirror (`ulTaskNotifyTake` + reset, no `xLastWakeTime` bookkeeping
+needed here since `rotary_task_fn`, unlike `keyboard_task_fn`, has no
+`vTaskDelayUntil` cadence outside fake-sleep — it just calls the blocking
+`instance.getRotary()` directly). Added `hw_rotary_task_notify_wake()` (mirrors
+`hw_keyboard_task_notify_wake()`: `if (s_task) xTaskNotifyGive(s_task);`, plus
+no-op stubs in the `!USING_INPUT_DEV_ROTARY` and `!ARDUINO` branches), declared it
+in `core/system_hooks.h` alongside its keyboard/LVGL siblings, and swapped the
+fake-sleep branch's `vTaskDelay(kFakeSleepIdleMs)` for
+`ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kFakeSleepIdleMs))`. `ui_resume_timers()`
+(`ui_main.cpp`) now also calls `hw_rotary_task_notify_wake()` alongside the
+existing LVGL/keyboard wake kicks. `pio run -e tlora_pager` (RAM 27.4% / 89,824 B,
+Flash 66.7% / 2,796,653 B — in line with baseline) + `pio run -e
+emulator_lora_pager` (unaffected — `rotary_task.cpp` is `#ifdef ARDUINO`-only) +
+`pio test -e native_test` all pass. ⚠️ Wake-latency verification (first scroll/
+click after fake-sleep wake registers immediately) needs real hardware — added to
+`OPTIMIZATION_PROGRESS.md`'s smoke-test checklist alongside the existing P2.1
+keyboard check it mirrors. `commit 08d3b93`.
 
 ### P3.14 — `ble_kb_ka` stack 3 KB for a 1-line loop (LOW)
 
@@ -616,12 +636,31 @@ decision. **Do not swap blindly.** Dedicated investigation: build with
 backlight, SD) still switches; measure the size delta. Potential −100–120 KB;
 bricking-adjacent if wrong.
 
-### P3.26 — Native test gap: `test_desktop` is a placeholder; `hal/str_encode` untested (quality)
+### P3.26 — Native test gap: `test_desktop` is a placeholder; `hal/str_encode` untested (quality) ✅ Done
 
 `test/test_desktop/test_main.cpp` asserts 2+2 (phase-1 §3.5 leftover). The phase-2
 `hal/str_encode.cpp` (json_escape/b64/url_encode — pure logic, three consumers) has
 no tests. Replace the placeholder with a str_encode round-trip suite and add
 `+<hal/str_encode.cpp>` to the `native_test` build_src_filter. Zero risk.
+
+**Fixed — 2 of 3 functions, not b64.** Re-verified the "pure logic" premise before
+writing tests: `hal::base64_encode` (`hal/str_encode.cpp:53`) is `#ifdef
+ARDUINO`-gated (implemented via `mbedtls_base64_encode`) and every call site is
+itself under `#ifdef ARDUINO` — it has no portable form and mbedtls isn't linked
+into `native_test`, so it stays untested by construction (documented in the new
+test file's header, not silently dropped). `json_escape` and `url_encode` have no
+such gate and are genuinely pure. Replaced `test_desktop`'s 2+2 placeholder with 11
+Unity cases: `json_escape` (empty, plain passthrough, quote/backslash, named
+control chars `\n\r\t`, the `\u00XX` fallback for other control bytes, UTF-8 bytes
+passing through un-escaped) and `url_encode` (empty, unreserved-charset
+passthrough, space/reserved-char percent-encoding, UTF-8 byte-by-byte
+percent-encoding, uppercase hex digits). Added `+<hal/str_encode.cpp>` to
+`[env:native_test]`'s `build_src_filter` in `platformio.ini`. `pio test -e
+native_test` — 28 cases total (11 new + the existing 17) all pass; `pio run -e
+tlora_pager` + `pio run -e emulator_lora_pager` also re-verified green (this change
+doesn't touch firmware source, only test infra + build config, but re-ran per this
+doc's standing build discipline). Zero HW dependency, zero behavioral risk — test-
+only change. `commit 9ff3df8`.
 
 ### P3.27 — Partition rebalance (DEFERRED until flash plateau)
 
@@ -792,9 +831,15 @@ Park until a firmware change wants it.
 5. **Internal-RAM levers with measurement:** P3.15 ✅, P3.16 ✅ (both pure code, no
    HW dependency). P3.7 (watermark → shrink loopTask) and P3.14 (ble_kb_ka watermark)
    re-confirmed blocked 2026-07-14 — no LilyGo device attached to this machine
-   (`pio device list`/`lsusb` checked); do not guess the numbers. **Next up: a
-   hardware session** (step 6) — it now gates P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all
-   at once, so batch them into one bench pass rather than trickling in.
+   (`pio device list`/`lsusb` checked); do not guess the numbers. Picked up the two
+   remaining pure-code, zero/very-low-risk, no-HW-to-*land* items instead: P3.13 ✅
+   (rotary fake-sleep notify-block — verification of wake latency itself still
+   wants hardware, added to the smoke-test checklist, but the code change needed
+   none to write or build) and P3.26 ✅ (test_desktop → str_encode round-trip
+   suite — pure test infra, zero risk). Re-confirmed again same session
+   (2026-07-14): still no device attached. **Next up: a hardware session**
+   (step 6) — it now gates P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all at once, so batch
+   them into one bench pass rather than trickling in.
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
    P3.7/9/10/12/24 verifications), then the P3.12 SD-rail bench and the P3.25 Klio
    investigation on a sacrificial device.

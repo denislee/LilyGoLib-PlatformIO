@@ -374,6 +374,14 @@ flash `pio run -e tlora_pager -t upload` and confirm:
       Cycle a few more large bursts back-to-back with no crash and no garbled text —
       this exercises the rewritten in-place cut-point scan replacing the old
       copy-whole-buffer-then-erase trim.
+- [ ] **P3.13 rotary fake-sleep notify-block** — long-press the rotary to enter
+      fake-sleep (display off), wait a few seconds, then wake by scrolling or the
+      center-press: the **first scroll notch / click after wake registers
+      immediately** (no dropped or delayed first event) — mirrors the P2.1 keyboard
+      check, now that `rotary_task_fn`'s fake-sleep branch blocks on
+      `ulTaskNotifyTake` (kicked by `ui_resume_timers()` via
+      `hw_rotary_task_notify_wake()`) instead of a 200 ms `vTaskDelay` poll. While
+      awake, confirm normal scroll/click and Alt+scroll word-jump still work.
 
 If all pass, delete this checklist and the "compile-only" caveats above. If the radio
 boot is solid, the *optional* follow-up trims become safe: empty `hw_radio_begin`/
