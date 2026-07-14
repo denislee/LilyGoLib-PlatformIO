@@ -19,6 +19,12 @@
  * LVGL task is blocked on the mutex, our reader keeps filling the
  * queue; as soon as LVGL runs again, it drains everything in one
  * timer cycle (via `continue_reading`).
+ *
+ * While the display is off (fake-sleep), this task blocks on a task notify
+ * instead of polling — mirroring keyboard_task's fake-sleep handling.
+ * ui_resume_timers() kicks it via hw_rotary_task_notify_wake() so the first
+ * scroll/click after wake isn't delayed, and the timeout bounds latency if a
+ * notify is ever missed.
  */
 #include "rotary_task.h"
 
@@ -63,11 +69,14 @@ void rotary_task_fn(void *)
     for (;;) {
         // While the display is off (fake-sleep) the vendor rotaryTask drops
         // every scroll notch and never enqueues a center-press, so getRotary()
-        // would just wake us at 20 Hz to receive nothing. Idle at a slower
-        // cadence instead — hold-to-wake is detected by the vendor task, not
-        // here, so resuming a little later after wake costs nothing.
+        // would just wake us at 20 Hz to receive nothing. Block on a task
+        // notify instead of polling — ui_resume_timers() kicks us via
+        // hw_rotary_task_notify_wake() so the first scroll/click after wake
+        // isn't delayed, and the timeout bounds latency if a notify is ever
+        // missed. Hold-to-wake is detected by the vendor task, not here, so
+        // resuming a little later after wake costs nothing.
         if (ui_is_fake_sleep()) {
-            vTaskDelay(pdMS_TO_TICKS(kFakeSleepIdleMs));
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kFakeSleepIdleMs));
             continue;
         }
 
@@ -218,6 +227,13 @@ void rotary_read_cb(lv_indev_t *drv, lv_indev_data_t *data)
 
 }  // namespace
 
+void hw_rotary_task_notify_wake()
+{
+    // Safe from any task context; a give while the task is running (not
+    // blocked) simply leaves the notification pending for the next take.
+    if (s_task) xTaskNotifyGive(s_task);
+}
+
 void hw_rotary_task_start()
 {
     if (s_task) return;
@@ -249,11 +265,13 @@ void hw_rotary_task_start()
 #else  // !USING_INPUT_DEV_ROTARY
 
 void hw_rotary_task_start() {}
+void hw_rotary_task_notify_wake() {}
 
 #endif  // USING_INPUT_DEV_ROTARY
 
 #else  // !ARDUINO
 
 void hw_rotary_task_start() {}
+void hw_rotary_task_notify_wake() {}
 
 #endif  // ARDUINO
