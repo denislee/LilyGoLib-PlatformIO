@@ -68,7 +68,8 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | D7 | Notes-sync: no retry on GitHub 429/transient 5xx (chat already has the pattern) | Whole sync aborts on one blip | ✅ Done |
 | D8–D10 | Server memory trims: `buf.Grow`, release `ContentB64` after decode, `putFile` marshal copy | MiB-scale peak-RSS cuts, trivial–low | D8/D9 ✅ Done, D10 deferred |
 | D11 | Graceful-shutdown window 5 s < 30–60 s upstream timeouts | In-flight sync killed on `systemctl stop` | ✅ Done |
-| D12–D14 | Server cosmetics: `time.After` in retry, geoSearch trim, `Cache-Control` toward device | Small | Low |
+| D12 | Server: `time.After` retry-sleep timer not stopped on ctx-done | Small | Low ✅ Done |
+| D13, D14 | Server cosmetics: geoSearch trim, `Cache-Control` toward device | Small | Low |
 
 ---
 
@@ -752,10 +753,20 @@ can be allowed to die — history is in-memory anyway.
 
 **Fixed:** `Shutdown` context raised from 5s to 35s in `main()`. `commit d3d78f6`.
 
-### D12 — Retry sleep uses `time.After` (LOW, idiomatic fix)
+### D12 — Retry sleep uses `time.After` (LOW, idiomatic fix) ✅ Done
 
 `chat.go:419` — un-stoppable timer lingers ≤2 s per cancelled retry. Swap for
 `time.NewTimer` + `Stop()` in the select.
+
+**Fixed — both copies of the pattern.** Re-verified before editing: the same
+`select { case <-time.After(d): case <-req.Context().Done(): ... }` shape
+exists twice — `chat.go`'s `do()` (:434, the one this entry names) and
+`notessync.go`'s `doWithRetry` (:68, D7's deliberate mirror of `chat.go`'s
+retry pattern, per its own header comment). Fixed both for consistency: each
+now does `timer := time.NewTimer(d)`, selects on `timer.C`, and calls
+`timer.Stop()` in the context-done branch before returning. `gofmt -l .` +
+`go vet ./...` + `go build ./...` + `go test ./...` all clean/pass across all
+six packages. `commit 026a947`.
 
 ### D13 — geoSearch relays ~60 % dead payload to the device (LOW, optional)
 
@@ -816,8 +827,10 @@ Park until a firmware change wants it.
    (hub_probe guard), P3.22 ✅ (board variant field), P3.23 ✅ (emulator font drift).
    One commit each.
 2. ✅ **Server quick wins (independent codebase):** D8, D9, D11 (trivial); then D6
-   (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style.
-   D10 remains deliberately deferred (§ D10).
+   (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style;
+   D12 ✅ (retry-sleep timer leak — fixed in both `chat.go` and `notessync.go`'s
+   mirrored copy of the pattern). D10, D13, D14 remain deliberately
+   deferred/optional (see their entries).
 3. ✅ **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 ✅ (chat mkdir), P3.1 ✅
    (tasks debounce), P3.5 ✅ (telegram sanitize-at-parse), P3.3 ✅ (audio-notes
    worker+drain), P3.4 ✅ (SSH trim — done, deviated from the literal fix; see its
@@ -837,9 +850,14 @@ Park until a firmware change wants it.
    wants hardware, added to the smoke-test checklist, but the code change needed
    none to write or build) and P3.26 ✅ (test_desktop → str_encode round-trip
    suite — pure test infra, zero risk). Re-confirmed again same session
-   (2026-07-14): still no device attached. **Next up: a hardware session**
-   (step 6) — it now gates P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all at once, so batch
-   them into one bench pass rather than trickling in.
+   (2026-07-14): still no device attached (checked a third time this same day,
+   in a follow-up session — `pio device list`/`lsusb` unchanged). Picked up
+   D12 (§2, above) as another pure-code, zero-HW item while still blocked.
+   **Next up: a hardware session** (step 6) — it now gates
+   P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all at once, so batch them into one bench
+   pass rather than trickling in. If no hardware session materializes, D13/D14
+   (both optional/low, §D) and the P2.11 font product decisions (step 7) are
+   the only remaining non-HW work in this doc.
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
    P3.7/9/10/12/24 verifications), then the P3.12 SD-rail bench and the P3.25 Klio
    investigation on a sacrificial device.
