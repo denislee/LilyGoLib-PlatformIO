@@ -357,6 +357,16 @@ flash `pio run -e tlora_pager -t upload` and confirm:
       = encrypt-all, or Storage » Copy Internal → SD / Prune Now): it **completes without a TWDT
       panic** on serial and the progress bar still advances smoothly. (Low-risk UI-thread change
       — the throttled `vTaskDelay(1)` in `storage_progress_cb` is the crash-vector fix.)
+- [ ] **P3.3 audio-notes background scan (async)** — Recorder / Settings » Recordings, with
+      several `.wav` notes on the SD card: entering the list shows the existing notes
+      immediately (or briefly "Loading..." if the list was empty going in), then settles once
+      the background scan drains — **the back button and any other input stay live** during
+      that ~100 ms window (this is a plain `xTaskCreate` + `lv_timer` drain, same shape as the
+      already-verified §2.17 async subpages). Record a new note, return to the list, confirm it
+      appears. Delete a note from the playback view: it disappears from the list immediately
+      (no flash-then-vanish) and stays gone after the background rescan lands. Cycle
+      record → stop → browse → delete a few times back-to-back with no crash, no stuck
+      "Loading..." state, and no ghost/duplicate entries.
 
 If all pass, delete this checklist and the "compile-only" caveats above. If the radio
 boot is solid, the *optional* follow-up trims become safe: empty `hw_radio_begin`/

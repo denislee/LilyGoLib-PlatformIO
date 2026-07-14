@@ -40,7 +40,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 |---|---|---|---|
 | P3.1 | Tasks app: file write + re-read on **every checkbox toggle**, on the LVGL thread | 20–400 ms freeze per toggle | Low ✅ Done |
 | P3.2 | Notes-sync log: `lv_refr_now` per drained line; log string unbounded per run | 100–600 ms stacked flushes per drain tick | Low ✅ Done |
-| P3.3 | Audio-notes: SD scan + `SD.exists/mkdir` on LVGL thread at every list entry | 50–200 ms freeze per view transition | Med |
+| P3.3 | Audio-notes: SD scan + `SD.exists/mkdir` on LVGL thread at every list entry | 50–200 ms freeze per view transition | Med ✅ Done |
 | P3.4 | SSH terminal trim copies ~8 KB into a `std::string` in internal DRAM per overflow | Heap churn under verbose output | Low |
 | P3.5 | Telegram `ascii_safe` re-walks font glyph tables on every re-render | 100s of glyph lookups per new-message render | Low ✅ Done |
 | P3.6 | Chat: `SD.exists` SPI probe on every mic press | 5–20 ms freeze per press | Very low ✅ Done |
@@ -121,7 +121,7 @@ tick, not per line); `log_append` no longer calls `lv_refr_now` and now caps
 `ui_chat.cpp`'s `log_append`. `pio run -e tlora_pager` + `pio run -e
 emulator_lora_pager` + `pio test -e native_test` all pass. `commit 434bc93`.
 
-### P3.3 — Audio-notes: SD scan on the LVGL thread at every list entry (HIGH)
+### P3.3 — Audio-notes: SD scan on the LVGL thread at every list entry (HIGH) ✅ Done
 
 `src/apps/ui_audio_notes.cpp:117` (`ensure_notes_dir`: `SD.exists` + `SD.mkdir`
 under `ScopedSpiLock`) and `:138` (`reload_notes` → `hw_list_sd_entries`, holding
@@ -137,6 +137,40 @@ cycling.
 Phase-2 note: P2.7's file-browser analysis called this file "leave unless it shows
 up in practice" for the *one-off* scan; the new observation is that it re-fires on
 **every** view transition, which is a materially worse profile.
+
+**Fixed:** split the directory walk out of `reload_notes()` into a pure
+`scan_notes(std::vector<Note>&)` that touches only its argument (not the
+`notes` global), so it can run off the LVGL thread. Added
+`notes_scan_task`/`notes_scan_drain_tick` (one-shot `xTaskCreate` + 100 ms
+`lv_timer`, `s_notes_scan_task`/`s_notes_scan_timer`/`s_notes_scan_result`
+state) mirroring `weather_bg_task`/`weather_drain_tick` exactly, including the
+"adopt the in-flight task instead of double-spawning" and
+"leave the task to finish on its own, drop any undelivered result" exit
+handling. `kick_notes_reload()` wraps the spawn (falling back to a
+synchronous `reload_notes()` if `xTaskCreate` fails so the list isn't stuck
+empty) and a new `show_list_view()` centralizes the platform split: on
+ARDUINO it paints immediately with whatever `notes` already holds (a
+"Loading..." row replaces "No notes yet" while a scan is pending) and
+refreshes when the background scan drains; the emulator has no real SD or
+background-task infra, so it keeps the original synchronous
+scan-then-render order. `ensure_notes_dir()` (the one-time mkdir at
+`onStart`) was left alone — it doesn't re-fire per transition, so it wasn't
+part of the actual hot path. Also fixed a pre-existing double-scan on
+delete (`pb_delete_cb` called `reload_notes()` itself and then `enter_list()`,
+which called it again): delete now erases the entry from the in-memory
+`notes` vector directly (same "render from memory" idiom as P3.1) so the
+deleted file can't flash back into view while the async rescan is in
+flight. Verified: `pio run -e tlora_pager` (Flash 68.1% / 2,855,433 B, RAM
+27.5% — in line with baseline) + `pio run -e emulator_lora_pager` + `pio
+test -e native_test` all pass. Manually drove the emulator under Xvfb
+(mouse/keyboard via `xdotool`, screenshots via `import`): opened Settings →
+Recordings, confirmed the list view renders ("No notes yet" — the
+emulator's `hw_list_sd_entries` stub never returns entries for
+`/mental_notes`, so this path was already unexercisable pre-fix), backed
+out to the home screen and re-entered twice with no crash and no stale
+state in the log. The async task/timer path itself (`#ifdef ARDUINO`-only)
+and the record/stop/delete cycling remain ⚠️ **hardware-test-required** —
+carried into the smoke-test checklist. `commit <pending>`.
 
 ### P3.4 — SSH terminal trim: ~8 KB `std::string` copy in internal DRAM (MED)
 
@@ -590,8 +624,8 @@ Park until a firmware change wants it.
    (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style.
    D10 remains deliberately deferred (§ D10).
 3. **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 ✅ (chat mkdir), P3.1 ✅
-   (tasks debounce), P3.5 ✅ (telegram sanitize-at-parse), then P3.3
-   (audio-notes worker+drain — the only refactor-sized one, next up), P3.4 (SSH trim).
+   (tasks debounce), P3.5 ✅ (telegram sanitize-at-parse), P3.3 ✅ (audio-notes
+   worker+drain), then P3.4 (SSH trim — next up).
 4. **lv_conf/flash batch:** P3.17 + P3.21 together, P3.18, P3.20 (one commit each,
    rebuild both targets + emulator screen sweep); P3.19 last with an explicit
    emulator render pass.
