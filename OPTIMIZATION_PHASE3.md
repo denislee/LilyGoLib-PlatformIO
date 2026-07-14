@@ -170,7 +170,7 @@ emulator's `hw_list_sd_entries` stub never returns entries for
 out to the home screen and re-entered twice with no crash and no stale
 state in the log. The async task/timer path itself (`#ifdef ARDUINO`-only)
 and the record/stop/delete cycling remain ⚠️ **hardware-test-required** —
-carried into the smoke-test checklist. `commit <pending>`.
+carried into the smoke-test checklist. `commit fce0e8e`.
 
 ### P3.4 — SSH terminal trim: ~8 KB `std::string` copy in internal DRAM (MED)
 
