@@ -126,6 +126,11 @@ struct Message {
     std::string media_type;
     int media_w;
     int media_h;
+    // Font-filtered (ascii_safe) copies of from/text, computed once at parse
+    // time on the fetch worker (see tg_parse_msgs) instead of on every
+    // render_msgs() call.
+    std::string safe_from;
+    std::string safe_text;
 };
 
 static lv_obj_t *s_root = nullptr;
@@ -618,7 +623,7 @@ static void render_msgs()
 
         if (!it->out && !it->from.empty()) {
             lv_obj_t *from = lv_label_create(row);
-            lv_label_set_text(from, ascii_safe(it->from).c_str());
+            lv_label_set_text(from, it->safe_from.c_str());
             lv_obj_set_style_text_color(from, UI_COLOR_ACCENT, 0);
             lv_obj_set_style_text_font(from, get_telegram_font(), 0);
         }
@@ -646,7 +651,7 @@ static void render_msgs()
         if (!it->text.empty()) {
             lv_obj_t *t = lv_label_create(row);
             lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
-            lv_label_set_text(t, ascii_safe(it->text).c_str());
+            lv_label_set_text(t, it->safe_text.c_str());
             lv_obj_set_width(t, lv_pct(100));
             lv_obj_set_style_text_color(t, UI_COLOR_FG, 0);
             lv_obj_set_style_text_font(t, get_telegram_font(), 0);
@@ -708,6 +713,11 @@ static int tg_parse_msgs(cJSON *arr, FgResult *res)
             if (jmw && cJSON_IsNumber(jmw)) m.media_w = (int)jmw->valuedouble;
             if (jmh && cJSON_IsNumber(jmh)) m.media_h = (int)jmh->valuedouble;
         }
+        // Sanitize once here (worker thread) instead of on every render_msgs()
+        // call — glyph-table lookups are the same cost either way, but this
+        // way they happen once per fetch instead of once per render.
+        m.safe_from = ascii_safe(m.from);
+        m.safe_text = ascii_safe(m.text);
         if (m.id > newest_id) newest_id = m.id;
         res->msgs.push_back(std::move(m));
     }
