@@ -54,7 +54,8 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.14–16 | Small: `ble_kb_ka` 3 KB stack; NFC callback statics in BSS; double `setCpuFrequencyMhz` at boot | ~1.7 KB RAM + hygiene | Very low |
 | P3.17, P3.21 | lv_conf trims: 10/11 unused widgets (arc stays — spinner dependency) + `LV_USE_FLOAT` | −26.5 KB flash (measured) | Low ✅ Done |
 | P3.18 | Unused themes SIMPLE + MONO — flags flipped, but dead-code-eliminated already | 0 B measured (est. was wrong) | Low ✅ Done |
-| P3.19–20 | lv_conf/build trims still open: I1/AL88 blends, NimBLE roles | −12–27 KB flash total (est., unverified) | Low–Med |
+| P3.19 | lv_conf trim still open: I1/AL88 blends | −7.3 KB flash (est., unverified) | Med |
+| P3.20 | NimBLE compiled all four BLE roles; only PERIPHERAL used | −13.5 KB flash (measured) | Low ✅ Done |
 | P3.22 | `boards/lilygo-t-lora-pager.json` declares `"variant": "lilygo_twatch_ultra"` | Wrong USB PID/pins if framework rebuilds | ✅ Done |
 | P3.23 | Emulator defines Montserrat 21 + 40 that firmware doesn't build | Emulator masks font-fallback bugs | ✅ Done |
 | P3.24 | NimBLE heap in internal SRAM (`MEM_ALLOC_MODE_INTERNAL`) | 30–60 KB internal DRAM reclaimable | Med / ⚠️ HW |
@@ -464,12 +465,33 @@ RGB565; fonts are 4-bpp). Risk is that some LVGL feature blends into these forma
 internally — verify with a full emulator pass (all screens) after flipping; revert on
 any render corruption.
 
-### P3.20 — NimBLE compiles all four BLE roles; only PERIPHERAL is used (−5–15 KB + RAM, LOW)
+### P3.20 — NimBLE compiles all four BLE roles; only PERIPHERAL is used (−5–15 KB + RAM, LOW) ✅ Done
 
 No `_DISABLED` role flags anywhere in build config; `src/hal/wireless.cpp` uses only
 the HID-peripheral API (no `NimBLEClient`/`NimBLEScan` hits in `src/`). Add to
 `[env:tlora_pager]` build_flags: `-D CONFIG_BT_NIMBLE_ROLE_CENTRAL_DISABLED` and
 `-D CONFIG_BT_NIMBLE_ROLE_OBSERVER_DISABLED` (the officially supported trim).
+
+**Fixed — landed in `env_arduino`, not `env:tlora_pager`.** Re-verified the
+no-client/no-scan premise before editing: grepped `src/` (only `NimBLEDevice`/
+`NimBLEServer`/`NimBLEConnInfo` includes and calls in `wireless.cpp`) and the
+vendored `.pio/libdeps/tlora_pager/ESP32 BLE Keyboard Fork` sources (no
+`NimBLEScan`/`NimBLEClient`/`NimBLEAdvertisedDevice`/`createClient` hits either)
+— confirmed peripheral-only. `wireless.cpp`'s NimBLE usage isn't gated by any
+`ARDUINO_T_*` board macro, so both flags went into `[env_arduino]`'s shared
+`build_flags` (same block as the `RADIOLIB_EXCLUDE_*` list) rather than
+`tlora_pager`-only, covering all three hardware targets from one edit. Checked
+`nimconfig.h` directly to confirm `CONFIG_BT_NIMBLE_ROLE_CENTRAL_DISABLED` /
+`_OBSERVER_DISABLED` are the actual guard macros the header checks (not just
+inferred from the doc). Measured: `tlora_pager` flash 2,828,921 B → 2,815,401 B
+(−13,520 B), RAM unchanged. `pio run -e tlora_pager` + `pio run -e
+emulator_lora_pager` (unaffected — the SDL2 build has no BLE stack at all) +
+`pio test -e native_test` all pass. `twatchs3` was spot-checked too but fails to
+build for unrelated pre-existing reasons (`settings_imu_debug.cpp`
+`BoschSensorInfo`/`info` out of scope, `ui_ssh.cpp` missing `libssh_esp32.h`),
+reproduced identically with this change stashed out — confirmed not a
+regression, and `twatchs3` isn't part of this repo's stated build-discipline
+loop anyway. `commit ce570c2`.
 
 ### P3.21 — `LV_USE_FLOAT` only feeds the (unused) arc widget (−1–2 KB, LOW after P3.17) ✅ Done
 
@@ -701,9 +723,10 @@ Park until a firmware change wants it.
    entry). Step complete.
 4. **lv_conf/flash batch:** P3.17 + P3.21 together ✅ (arc stayed enabled — spinner
    dependency; see P3.17's entry), P3.18 ✅ (0 B measured — see its entry for why
-   the estimate was wrong), **P3.20 next up**, then P3.19 last with an explicit
-   emulator render pass (one commit each, rebuild both targets + emulator screen
-   sweep).
+   the estimate was wrong), P3.20 ✅ (−13.5 KB measured, landed in `env_arduino`
+   — see its entry), **P3.19 next up** (I1/AL88 blend removal — needs an explicit
+   full emulator render pass per its entry before landing, since it risks render
+   corruption if some LVGL internal path blends into those formats).
 5. **Internal-RAM levers with measurement:** P3.7 (watermark → shrink loopTask),
    P3.14, P3.15, P3.16; then P3.9/P3.24 (need HW), P3.10 pinning (needs HW).
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
