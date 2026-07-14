@@ -52,7 +52,8 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.12 | SD rail stays powered through fake sleep (board can cut it via XL9555) | ~0.5–1 mA for hours of sleep | Med / ⚠️ HW |
 | P3.13 | Rotary task fake-sleep branch polls (`vTaskDelay`) instead of notify-blocking | 5 wakeups/s asleep (peers already fixed) | Very low |
 | P3.14–16 | Small: `ble_kb_ka` 3 KB stack; NFC callback statics in BSS; double `setCpuFrequencyMhz` at boot | ~1.7 KB RAM + hygiene | Very low |
-| P3.17–21 | lv_conf/build trims: 11 unused widgets, 2 unused themes, I1/AL88 blends, NimBLE roles, `LV_USE_FLOAT` | **−35–50 KB flash** total | Low–Med |
+| P3.17, P3.21 | lv_conf trims: 10/11 unused widgets (arc stays — spinner dependency) + `LV_USE_FLOAT` | −26.5 KB flash (measured) | Low ✅ Done |
+| P3.18–20 | lv_conf/build trims still open: 2 unused themes, I1/AL88 blends, NimBLE roles | −20–35 KB flash total (est.) | Low–Med |
 | P3.22 | `boards/lilygo-t-lora-pager.json` declares `"variant": "lilygo_twatch_ultra"` | Wrong USB PID/pins if framework rebuilds | ✅ Done |
 | P3.23 | Emulator defines Montserrat 21 + 40 that firmware doesn't build | Emulator masks font-fallback bugs | ✅ Done |
 | P3.24 | NimBLE heap in internal SRAM (`MEM_ALLOC_MODE_INTERNAL`) | 30–60 KB internal DRAM reclaimable | Med / ⚠️ HW |
@@ -403,7 +404,7 @@ All lv_conf edits are in `lib/LilyGoLib/src/lv_conf.h` (vendored — changes liv
 this repo's copy). Sizes measured via `xtensa-esp32s3-elf-nm --size-sort` + the
 linker map on the current `.pio/build/tlora_pager/firmware.elf`.
 
-### P3.17 — 11 LVGL widgets enabled and unused; 8 of them cannot be gc'd (−15–20 KB, LOW)
+### P3.17 — 11 LVGL widgets enabled and unused; 8 of them cannot be gc'd (−15–20 KB, LOW) ✅ Done
 
 Zero `lv_{arc,calendar,chart,led,line,roller,scale,win,animimg,imagebutton,canvas}_create`
 call sites in `src/` (grep-verified), yet arc/calendar/chart/led/line/roller/scale/win
@@ -413,6 +414,23 @@ objects (confirmed in firmware.map; `lv_chart_event` alone is 3.6 KB, nm-visible
 CANVAS/CHART/ANIMIMG/IMAGEBUTTON/LED/LINE/ROLLER/SCALE/WIN` → 0. Note LVGL's dropdown
 does **not** depend on the roller flag (own internal class). Canvas/animimg/
 imagebutton are already gc'd — flipping them is hygiene only.
+
+**Fixed — 10 of 11, not arc.** Re-verifying the zero-call-site premise against current
+source before editing (per this doc's own methodology) surfaced a dependency the
+original grep missed: `lv_spinner.h` has a hard `#if LV_USE_ARC == 0 / #error` — and
+`lv_spinner_create` **is** called, twice, in `ui_tools.cpp` (the shared loading-popup
+widget every app uses via `ui_loading_t`). Flipping `LV_USE_ARC` to 0 fails the build
+immediately (`pio run -e tlora_pager`). `LV_USE_ARC` stays `1` with a comment
+explaining why; the other 10 (`CALENDAR/CANVAS/CHART/ANIMIMG/IMAGEBUTTON/LED/LINE/
+ROLLER/SCALE/WIN`) went to 0 as planned — none of them are transitively required by
+anything else enabled. `pio run -e tlora_pager` + `pio run -e emulator_lora_pager`
+(emulator doesn't read `lv_conf.h` at all — `LV_CONF_SKIP` + `lv_conf_simple.h` in
+`[env_emulator]` — so it's structurally unaffected; rebuilt clean anyway) + `pio test
+-e native_test` all pass. Manually swept the emulator under Xvfb (mouse/keyboard via
+`xdotool`, screenshots via `import`): main menu, Settings list, Display & Backlight
+(slider), Connectivity (switches + WiFi-On sub-rows), Storage (list rows + result
+modal) all render with no corruption. `commit d54184b` (combined with P3.21 below,
+same commit — both are one lv_conf.h edit pass per the execution-order note).
 
 ### P3.18 — Unused themes SIMPLE + MONO linked via `lv_init` deinit refs (−8.4 KB, LOW)
 
@@ -435,11 +453,21 @@ the HID-peripheral API (no `NimBLEClient`/`NimBLEScan` hits in `src/`). Add to
 `[env:tlora_pager]` build_flags: `-D CONFIG_BT_NIMBLE_ROLE_CENTRAL_DISABLED` and
 `-D CONFIG_BT_NIMBLE_ROLE_OBSERVER_DISABLED` (the officially supported trim).
 
-### P3.21 — `LV_USE_FLOAT` only feeds the (unused) arc widget (−1–2 KB, LOW after P3.17)
+### P3.21 — `LV_USE_FLOAT` only feeds the (unused) arc widget (−1–2 KB, LOW after P3.17) ✅ Done
 
 `lv_conf.h:469`. `lv_arc.c.o` is the sole puller of `__divsf3` (map-verified). After
 P3.17 removes arc, set `LV_USE_FLOAT 0` (`lv_value_precise_t` → int32). Do it in the
 same pass as P3.17, not before.
+
+**Fixed — arc stayed enabled (see P3.17), set anyway.** `lv_arc.c` uses
+`lv_value_precise_t` throughout but only two blocks are actually `#if LV_USE_FLOAT`-
+guarded (checked against the vendored source before flipping) — the type is just an
+`int32_t`/`float` typedef, arc has no hard requirement on which. No file in `src/`
+references `LV_USE_FLOAT` or `lv_value_precise_t` directly. `LV_USE_MATRIX` (the only
+other consumer, requires `LV_USE_FLOAT=1`) was already `0`, so no conflict. Set to
+`0`. Combined flash delta for P3.17+P3.21 together: 2,855,457 B → 2,828,921 B
+(−26,536 B) on `tlora_pager`; RAM unchanged. Same build/emulator verification as
+P3.17. `commit d54184b`.
 
 ### P3.22 — Pager board JSON declares the T-Watch-Ultra variant (BUG, fix regardless) ✅ Done
 
@@ -653,9 +681,10 @@ Park until a firmware change wants it.
    (tasks debounce), P3.5 ✅ (telegram sanitize-at-parse), P3.3 ✅ (audio-notes
    worker+drain), P3.4 ✅ (SSH trim — done, deviated from the literal fix; see its
    entry). Step complete.
-4. **lv_conf/flash batch (next up):** P3.17 + P3.21 together, P3.18, P3.20 (one
-   commit each, rebuild both targets + emulator screen sweep); P3.19 last with an
-   explicit emulator render pass.
+4. **lv_conf/flash batch:** P3.17 + P3.21 together ✅ (arc stayed enabled — spinner
+   dependency; see P3.17's entry), **P3.18 next up**, then P3.20 (one commit each,
+   rebuild both targets + emulator screen sweep); P3.19 last with an explicit
+   emulator render pass.
 5. **Internal-RAM levers with measurement:** P3.7 (watermark → shrink loopTask),
    P3.14, P3.15, P3.16; then P3.9/P3.24 (need HW), P3.10 pinning (needs HW).
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
