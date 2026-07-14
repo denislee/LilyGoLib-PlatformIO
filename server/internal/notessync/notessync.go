@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -32,6 +33,69 @@ import (
 	"sync"
 	"time"
 )
+
+// maxRespBytes caps how much of a GitHub API response body we ever read.
+const maxRespBytes = 1 << 20
+
+// baseBackoff, retryableStatus, backoff, and doWithRetry mirror
+// internal/chat's retry pattern for GitHub's 429/transient 5xx: sync is
+// additive/idempotent, so retrying is safe, and one flaky call shouldn't
+// abort the whole (serial) device sync.
+var baseBackoff = 200 * time.Millisecond
+
+func retryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= 500
+}
+
+func backoff(attempt int) time.Duration {
+	shift := max(attempt-2, 0)
+	return min(baseBackoff<<shift, 2*time.Second)
+}
+
+// doWithRetry runs req, retrying on 429/5xx up to maxAttempts times with
+// chat.go's 200ms-doubling backoff. Unlike chat.go's do(), the final HTTP
+// status is returned rather than turned into an error — callers here have
+// status-specific handling (listRemote treats 404 as "no notes yet", not a
+// failure).
+func (h *Handler) doWithRetry(req *http.Request, maxAttempts int) ([]byte, int, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			d := backoff(attempt)
+			log.Printf("notessync: %s %s retry %d/%d after %s (%v)",
+				req.Method, req.URL.Path, attempt, maxAttempts, d, lastErr)
+			select {
+			case <-time.After(d):
+			case <-req.Context().Done():
+				return nil, 0, req.Context().Err()
+			}
+			if req.GetBody != nil {
+				b, err := req.GetBody()
+				if err != nil {
+					return nil, 0, err
+				}
+				req.Body = b
+			}
+		}
+		resp, err := h.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if retryableStatus(resp.StatusCode) && attempt < maxAttempts {
+			lastErr = fmt.Errorf("github %d: %s", resp.StatusCode, truncate(string(body), 200))
+			continue
+		}
+		return body, resp.StatusCode, nil
+	}
+	return nil, 0, lastErr
+}
 
 // SyncRequest is the body of POST /api/notes/sync. The token is a GitHub PAT
 // with `contents:write` scope; we never log it or persist it. Files carry the
@@ -227,21 +291,15 @@ func (h *Handler) listRemote(ctx context.Context, req *SyncRequest) ([]string, e
 	httpReq.Header.Set("Accept", "application/vnd.github+json")
 	httpReq.Header.Set("User-Agent", "lilyhub/1.0")
 
-	resp, err := h.client.Do(httpReq)
+	body, status, err := h.doWithRetry(httpReq, 2) // one retry
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
+	if status == http.StatusNotFound {
 		return nil, nil
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github %d: %s", resp.StatusCode, truncate(string(body), 200))
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("github %d: %s", status, truncate(string(body), 200))
 	}
 
 	var entries []struct {
@@ -290,14 +348,12 @@ func (h *Handler) putFile(ctx context.Context, req *SyncRequest, name string, co
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("User-Agent", "lilyhub/1.0")
 
-	resp, err := h.client.Do(httpReq)
+	respBody, status, err := h.doWithRetry(httpReq, 3) // chat.go's full retry pattern
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("github %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+	if status/100 != 2 {
+		return fmt.Errorf("github %d: %s", status, truncate(string(respBody), 200))
 	}
 	return nil
 }
