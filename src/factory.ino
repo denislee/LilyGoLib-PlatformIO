@@ -74,7 +74,12 @@ void setup()
     user_setting_params_t settings;
     hw_get_user_setting(settings);
 
-    setCpuFrequencyMhz(settings.cpu_freq_mhz);
+    // Line 67 already set 240 MHz for a fast, deterministic boot before
+    // settings were loaded; skip the redundant PLL re-init when the saved
+    // setting agrees (the common case) instead of re-applying the same freq.
+    if (settings.cpu_freq_mhz != 240) {
+        setCpuFrequencyMhz(settings.cpu_freq_mhz);
+    }
 
     uint32_t disable_flags = 0;
     // The vendor begin() I2C scan is a debug aid that costs ~100+ ms of I2C
