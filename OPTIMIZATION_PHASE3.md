@@ -406,7 +406,7 @@ Makefile/tools clean; coredump partition sized right.
 timeouts) verified still in place; outbound contexts/body-closing/goroutines
 re-checked clean; `http.Client` reuse confirmed in all four handlers.
 
-### D6 — Voice chat holds the audio in ~3 copies simultaneously (~15 MiB peak, HIGH for a Pi)
+### D6 — Voice chat holds the audio in ~3 copies simultaneously (~15 MiB peak, HIGH for a Pi) ✅ Done
 
 `internal/chat/chat.go:185` (`DecodeString` of `req.AudioB64`), `:239` (multipart
 `bytes.Buffer`), `:261` (`fw.Write(audio)`). For a near-max upload: base64 string
@@ -416,6 +416,15 @@ stream-decode straight into the multipart writer via
 `io.Copy(fw, base64.NewDecoder(base64.StdEncoding, strings.NewReader(audioB64)))`;
 zero `req.AudioB64 = ""` right after. Cuts peak by ~a third; combined with D8 the
 buffer is also single-allocation.
+
+**Fixed:** `transcribe` now takes the base64 string and stream-decodes into the
+multipart writer as prescribed; `chat()` zeroes `req.AudioB64` right after the
+call; `buf.Grow` (D8) re-derives its size from the base64 length via
+`base64.StdEncoding.DecodedLen`. Invalid base64 now surfaces mid-copy instead of
+up front, so it's wrapped in a new `errBadAudio` type (`errors.As`-checked in
+`chat()`) to keep the existing 400-vs-502 split intact. `commit 9d33b16`, with
+tests covering the streamed bytes, the bad-base64 path, and the end-to-end
+handler status code.
 
 ### D7 — Notes-sync has no retry on GitHub 429/transient 5xx (MED)
 
