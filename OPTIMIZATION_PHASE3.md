@@ -59,10 +59,10 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.25 | BHI260 **Klio ML firmware blob = 123.7 KB of flash**; app uses no Klio features | up to −120 KB flash *if* GPIO variant works | High / ⚠️ HW, investigate only |
 | P3.26 | `test_desktop` is a 2+2 placeholder; `hal/str_encode` untested | Regression-safety, zero cost | Zero |
 | P3.27 | Partition rebalance (OTA 4→3 MiB, +2 MiB FFat) — only after size plateau | +2 MiB user storage | Deferred |
-| D6 | Server chat/transcribe holds audio in ~3 simultaneous copies (~15 MiB peak on Pi) | Pi RSS spike per voice message | Low–Med |
-| D7 | Notes-sync: no retry on GitHub 429/transient 5xx (chat already has the pattern) | Whole sync aborts on one blip | Low |
-| D8–D10 | Server memory trims: `buf.Grow`, release `ContentB64` after decode, `putFile` marshal copy | MiB-scale peak-RSS cuts, trivial–low | Low |
-| D11 | Graceful-shutdown window 5 s < 30–60 s upstream timeouts | In-flight sync killed on `systemctl stop` | Trivial |
+| D6 | Server chat/transcribe holds audio in ~3 simultaneous copies (~15 MiB peak on Pi) | Pi RSS spike per voice message | ✅ Done |
+| D7 | Notes-sync: no retry on GitHub 429/transient 5xx (chat already has the pattern) | Whole sync aborts on one blip | ✅ Done |
+| D8–D10 | Server memory trims: `buf.Grow`, release `ContentB64` after decode, `putFile` marshal copy | MiB-scale peak-RSS cuts, trivial–low | D8/D9 ✅ Done, D10 deferred |
+| D11 | Graceful-shutdown window 5 s < 30–60 s upstream timeouts | In-flight sync killed on `systemctl stop` | ✅ Done |
 | D12–D14 | Server cosmetics: `time.After` in retry, geoSearch trim, `Cache-Control` toward device | Small | Low |
 
 ---
@@ -426,13 +426,21 @@ up front, so it's wrapped in a new `errBadAudio` type (`errors.As`-checked in
 tests covering the streamed bytes, the bad-base64 path, and the end-to-end
 handler status code.
 
-### D7 — Notes-sync has no retry on GitHub 429/transient 5xx (MED)
+### D7 — Notes-sync has no retry on GitHub 429/transient 5xx (MED) ✅ Done
 
 `internal/notessync/notessync.go` `listRemote`/`putFile` are single-attempt while
 `chat.do()` already implements 3-attempt context-aware backoff for exactly these
 codes. One GitHub blip aborts the whole (serial) sync back to the device. **Fix:**
 reuse the chat backoff pattern (200→400→800 ms) on 429/5xx for `putFile`, one retry
 for `listRemote`. Low risk; sync is additive/idempotent.
+
+**Fixed:** added `doWithRetry`, mirroring `chat.go`'s backoff/`GetBody`-replay
+pattern but returning the final status instead of an error, since `listRemote`
+needs to treat 404 as "no notes yet" rather than a failure. `putFile` uses the
+full 3-attempt pattern; `listRemote` uses `maxAttempts=2` (one retry). `commit
+21451a6`, with tests against `doWithRetry` directly (`listRemote`/`putFile`
+hardcode the `api.github.com` URL, unlike `chat.go`'s injectable `baseURL`, so
+they aren't independently server-mockable).
 
 ### D8 — `transcribe` buffer not pre-sized (TRIVIAL) ✅ Done
 
@@ -531,8 +539,9 @@ Park until a firmware change wants it.
 1. **Bug fixes first, tiny and safe:** P3.8 ✅ (tg_bg stack — one number), P3.11 ✅
    (hub_probe guard), P3.22 ✅ (board variant field), P3.23 ✅ (emulator font drift).
    One commit each.
-2. **Server quick wins (independent codebase):** D8, D9, D11 (trivial); then D6
+2. ✅ **Server quick wins (independent codebase):** D8, D9, D11 (trivial); then D6
    (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style.
+   D10 remains deliberately deferred (§ D10).
 3. **UI-thread stalls:** P3.2 (notes-sync log — small), P3.6 (chat mkdir), P3.1
    (tasks debounce), P3.5 (telegram sanitize-at-parse), then P3.3 (audio-notes
    worker+drain — the only refactor-sized one), P3.4 (SSH trim).
