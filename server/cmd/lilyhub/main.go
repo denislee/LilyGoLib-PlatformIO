@@ -72,7 +72,10 @@ func main() {
 
 	<-ctx.Done()
 	log.Print("shutting down")
-	sd, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Notes-sync's http.Client timeout is 30s (notessync.go); give it margin to
+	// finish an in-flight GitHub call instead of getting cancelled mid-sync.
+	// Chat's up-to-60s upstream wait is allowed to die — history is in-memory.
+	sd, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(sd)
 }
