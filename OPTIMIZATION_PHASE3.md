@@ -434,10 +434,13 @@ for `listRemote`. Low risk; sync is additive/idempotent.
 in `transcribe()`. `commit 5724dfb`. Superseded in part by D6, which changes what
 `transcribe` receives and re-derives the grow size from the base64 length.
 
-### D9 — `/upload` keeps base64 + decoded bytes both live through the file write (TRIVIAL)
+### D9 — `/upload` keeps base64 + decoded bytes both live through the file write (TRIVIAL) ✅ Done
 
 `notessync.go` upload handler: set `req.ContentB64 = ""` immediately after
 `DecodeString` so GC can drop the ~1.33× string before `os.WriteFile` runs.
+
+**Fixed:** `req.ContentB64 = ""` added right after the `DecodeString` call
+in `upload()`. `commit ae4f83e`.
 
 ### D10 — `putFile` `json.Marshal` duplicates the file's base64 once more (LOW)
 
