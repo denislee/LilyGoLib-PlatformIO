@@ -295,21 +295,27 @@ void System::setupGlobalUI() {
                     hub_tick = 0;
                     hub_probe_running = true;
 #ifdef ARDUINO
-                    xTaskCreate([](void *arg) {
-                        bool res = hal::hub_is_reachable();
-                        hal::hub_note_reachable(res);   // publish for non-blocking readers
-                        bool *reachable_ptr = (bool*)((void**)arg)[0];
-                        bool *running_ptr = (bool*)((void**)arg)[1];
-                        *reachable_ptr = res;
-                        *running_ptr = false;
-                        free(arg);
-                        vTaskDelete(NULL);
-                    }, "hub_probe", 3072, [&](){
-                        void **args = (void**)malloc(2 * sizeof(void*));
+                    void **args = (void**)malloc(2 * sizeof(void*));
+                    if (args == nullptr) {
+                        hub_probe_running = false;
+                    } else {
                         args[0] = (void*)&hub_reachable;
                         args[1] = (void*)&hub_probe_running;
-                        return args;
-                    }(), 1, NULL);
+                        BaseType_t spawned = xTaskCreate([](void *arg) {
+                            bool res = hal::hub_is_reachable();
+                            hal::hub_note_reachable(res);   // publish for non-blocking readers
+                            bool *reachable_ptr = (bool*)((void**)arg)[0];
+                            bool *running_ptr = (bool*)((void**)arg)[1];
+                            *reachable_ptr = res;
+                            *running_ptr = false;
+                            free(arg);
+                            vTaskDelete(NULL);
+                        }, "hub_probe", 3072, args, 1, NULL);
+                        if (spawned != pdPASS) {
+                            free(args);
+                            hub_probe_running = false;
+                        }
+                    }
 #else
                     hub_reachable = hal::hub_is_reachable();
                     hal::hub_note_reachable(hub_reachable);
