@@ -54,7 +54,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.14–16 | Small: `ble_kb_ka` 3 KB stack; NFC callback statics in BSS; double `setCpuFrequencyMhz` at boot | ~1.7 KB RAM + hygiene | Very low |
 | P3.17, P3.21 | lv_conf trims: 10/11 unused widgets (arc stays — spinner dependency) + `LV_USE_FLOAT` | −26.5 KB flash (measured) | Low ✅ Done |
 | P3.18 | Unused themes SIMPLE + MONO — flags flipped, but dead-code-eliminated already | 0 B measured (est. was wrong) | Low ✅ Done |
-| P3.19 | lv_conf trim still open: I1/AL88 blends | −7.3 KB flash (est., unverified) | Med |
+| P3.19 | lv_conf trim: I1/AL88 blends | −18.8 KB flash (measured) | Low ✅ Done |
 | P3.20 | NimBLE compiled all four BLE roles; only PERIPHERAL used | −13.5 KB flash (measured) | Low ✅ Done |
 | P3.22 | `boards/lilygo-t-lora-pager.json` declares `"variant": "lilygo_twatch_ultra"` | Wrong USB PID/pins if framework rebuilds | ✅ Done |
 | P3.23 | Emulator defines Montserrat 21 + 40 that firmware doesn't build | Emulator masks font-fallback bugs | ✅ Done |
@@ -457,13 +457,44 @@ and forth and rebuilding both ways). `pio run -e tlora_pager` + `pio run -e
 emulator_lora_pager` (unaffected — doesn't read `lv_conf.h`) + `pio test -e
 native_test` all pass. `commit 34efdf2`.
 
-### P3.19 — I1 + AL88 software-blend paths unused (−7.3 KB, MED)
+### P3.19 — I1 + AL88 software-blend paths unused (−18.8 KB, LOW) ✅ Done
 
 `lv_conf.h:152,154`. `blend_image_to_i1` (4.4 KB) + `blend_image_to_al88` (2.9 KB)
 are in the ELF; no I1/AL88 image source or descriptor exists in `src/` (display is
 RGB565; fonts are 4-bpp). Risk is that some LVGL feature blends into these formats
 internally — verify with a full emulator pass (all screens) after flipping; revert on
 any render corruption.
+
+**Fixed.** Re-verified before editing: grepped for `LV_COLOR_FORMAT_I1`/`AL88`/`L8`
+consumers across the vendored LVGL source — the only non-blend consumers are
+`lv_qrcode.c`/`lv_barcode.c` (I1 draw buffers) and `lv_canvas.c` (I1 support), and
+`LV_USE_QRCODE`/`LV_USE_BARCODE`/`LV_USE_CANVAS` are all already `0` in this repo's
+`lv_conf.h`; the one AL88-producing path (`lv_draw_sw_img.c`'s image-transform
+helper, `L8 → AL88` intermediate for rotate/zoom) only fires for `LV_COLOR_FORMAT_L8`
+source images, and `src/` has zero `lv_image_dsc_t`/`lv_img_dsc_t` bitmap assets at
+all (only generated fonts) — confirmed with a repo-wide grep before touching the
+flags. Set both `LV_DRAW_SW_SUPPORT_AL88` and `LV_DRAW_SW_SUPPORT_I1` to `0`.
+Measured: `tlora_pager` flash 2,815,401 B → 2,796,645 B (−18,756 B, better than the
+−7.3 KB estimate — the estimate only counted the two `blend_to_*.c` object files,
+not the extra AL88/I1 case arms compiled into every *other* `blend_to_*.c` TU), RAM
+unchanged. `pio run -e tlora_pager` + `pio run -e emulator_lora_pager` (unaffected —
+`LV_CONF_SKIP` means the emulator never reads this `lv_conf.h`) + `pio test -e
+native_test` all pass.
+
+Did the required full emulator render pass (Xvfb + `xdotool` + `import`, mouse-driven):
+main menu, Settings list, Display & Backlight (slider), Connectivity (toggles),
+Weather (icons), Storage (copy/upload/trash icons), Fonts — all render with no
+corruption. Mid-pass hit a real SDL segfault, tracked down via an isolated A/B
+rebuild (toggling *only* `lv_conf.h` while holding everything else fixed) to
+**`src/apps/ui_settings.cpp`'s pre-existing uncommitted settings-tile
+keyboard-shortcut diff** (the one this doc's intro "Worktree note" already flags as
+unrelated feature work in flight) — reproduces identically with `lv_conf.h` at
+baseline (`LV_DRAW_SW_SUPPORT_I1/AL88 = 1`), so it is **not** a P3.19 regression.
+Repro: from the main menu, open Settings, jump into a subpage via its keyboard-
+shortcut hotkey (e.g. `d` for Display & Backlight), then click the back arrow —
+crashes intermittently within a couple of back-navigations. Left unfixed
+(out of scope for this optimization pass, and it's the user's own in-flight code);
+flagged to the user directly rather than silently patched. `commit daeba61`.
 
 ### P3.20 — NimBLE compiles all four BLE roles; only PERIPHERAL is used (−5–15 KB + RAM, LOW) ✅ Done
 
@@ -721,14 +752,14 @@ Park until a firmware change wants it.
    (tasks debounce), P3.5 ✅ (telegram sanitize-at-parse), P3.3 ✅ (audio-notes
    worker+drain), P3.4 ✅ (SSH trim — done, deviated from the literal fix; see its
    entry). Step complete.
-4. **lv_conf/flash batch:** P3.17 + P3.21 together ✅ (arc stayed enabled — spinner
+4. ✅ **lv_conf/flash batch:** P3.17 + P3.21 together ✅ (arc stayed enabled — spinner
    dependency; see P3.17's entry), P3.18 ✅ (0 B measured — see its entry for why
    the estimate was wrong), P3.20 ✅ (−13.5 KB measured, landed in `env_arduino`
-   — see its entry), **P3.19 next up** (I1/AL88 blend removal — needs an explicit
-   full emulator render pass per its entry before landing, since it risks render
-   corruption if some LVGL internal path blends into those formats).
-5. **Internal-RAM levers with measurement:** P3.7 (watermark → shrink loopTask),
-   P3.14, P3.15, P3.16; then P3.9/P3.24 (need HW), P3.10 pinning (needs HW).
+   — see its entry), P3.19 ✅ (−18.8 KB measured — see its entry; also surfaced an
+   unrelated pre-existing crash bug in the in-flight `ui_settings.cpp` keyboard-
+   shortcut diff, flagged to the user, not fixed here). Step complete.
+5. **Internal-RAM levers with measurement — next up:** P3.7 (watermark → shrink
+   loopTask), P3.14, P3.15, P3.16; then P3.9/P3.24 (need HW), P3.10 pinning (needs HW).
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
    P3.7/9/10/12/24 verifications), then the P3.12 SD-rail bench and the P3.25 Klio
    investigation on a sacrificial device.
