@@ -53,7 +53,8 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.13 | Rotary task fake-sleep branch polls (`vTaskDelay`) instead of notify-blocking | 5 wakeups/s asleep (peers already fixed) | Very low |
 | P3.14–16 | Small: `ble_kb_ka` 3 KB stack; NFC callback statics in BSS; double `setCpuFrequencyMhz` at boot | ~1.7 KB RAM + hygiene | Very low |
 | P3.17, P3.21 | lv_conf trims: 10/11 unused widgets (arc stays — spinner dependency) + `LV_USE_FLOAT` | −26.5 KB flash (measured) | Low ✅ Done |
-| P3.18–20 | lv_conf/build trims still open: 2 unused themes, I1/AL88 blends, NimBLE roles | −20–35 KB flash total (est.) | Low–Med |
+| P3.18 | Unused themes SIMPLE + MONO — flags flipped, but dead-code-eliminated already | 0 B measured (est. was wrong) | Low ✅ Done |
+| P3.19–20 | lv_conf/build trims still open: I1/AL88 blends, NimBLE roles | −12–27 KB flash total (est., unverified) | Low–Med |
 | P3.22 | `boards/lilygo-t-lora-pager.json` declares `"variant": "lilygo_twatch_ultra"` | Wrong USB PID/pins if framework rebuilds | ✅ Done |
 | P3.23 | Emulator defines Montserrat 21 + 40 that firmware doesn't build | Emulator masks font-fallback bugs | ✅ Done |
 | P3.24 | NimBLE heap in internal SRAM (`MEM_ALLOC_MODE_INTERNAL`) | 30–60 KB internal DRAM reclaimable | Med / ⚠️ HW |
@@ -432,11 +433,28 @@ anything else enabled. `pio run -e tlora_pager` + `pio run -e emulator_lora_page
 modal) all render with no corruption. `commit d54184b` (combined with P3.21 below,
 same commit — both are one lv_conf.h edit pass per the execution-order note).
 
-### P3.18 — Unused themes SIMPLE + MONO linked via `lv_init` deinit refs (−8.4 KB, LOW)
+### P3.18 — Unused themes SIMPLE + MONO linked via `lv_init` deinit refs (−8.4 KB, LOW) ✅ Done (0 B measured — premise was wrong)
 
 `lv_conf.h:694,697`. Only `lv_theme_default_init` is called (`ui_theme.cpp:71`); mono
 (~5.2 KB) + simple (~3.2 KB) are retained because `lv_init.c.o` references their
 deinit functions unconditionally. Set both to 0.
+
+**Fixed, but the estimate doesn't hold.** Re-verified the file:line before editing
+(per this doc's own methodology) and the "unconditionally referenced" premise
+doesn't survive: `lv_init.c`'s `lv_deinit()` does call `lv_theme_simple_deinit()` /
+`lv_theme_mono_deinit()` under `#if LV_USE_THEME_SIMPLE` / `#if LV_USE_THEME_MONO`
+guards — but `lv_deinit()` itself is never called anywhere in `src/` or the vendored
+lib (grep-verified). With `-ffunction-sections`/`--gc-sections` in effect, the whole
+deinit chain — `lv_theme_default_deinit` included — is already unreachable dead code
+and was being stripped by the linker regardless of these flags (confirmed via `nm
+--size-sort` on `firmware.elf`: no `theme_default_deinit`/`theme_simple_deinit`/
+`theme_mono_deinit`/`lv_deinit` symbols present even with both flags at `1`). Set
+both to 0 anyway — harmless, and it removes the dead premise so a future pass
+doesn't re-derive the same wrong estimate — but measured flash delta is **0 bytes**
+(2,828,921 B before and after, byte-for-byte, confirmed by toggling the flags back
+and forth and rebuilding both ways). `pio run -e tlora_pager` + `pio run -e
+emulator_lora_pager` (unaffected — doesn't read `lv_conf.h`) + `pio test -e
+native_test` all pass. `commit 34efdf2`.
 
 ### P3.19 — I1 + AL88 software-blend paths unused (−7.3 KB, MED)
 
@@ -682,9 +700,10 @@ Park until a firmware change wants it.
    worker+drain), P3.4 ✅ (SSH trim — done, deviated from the literal fix; see its
    entry). Step complete.
 4. **lv_conf/flash batch:** P3.17 + P3.21 together ✅ (arc stayed enabled — spinner
-   dependency; see P3.17's entry), **P3.18 next up**, then P3.20 (one commit each,
-   rebuild both targets + emulator screen sweep); P3.19 last with an explicit
-   emulator render pass.
+   dependency; see P3.17's entry), P3.18 ✅ (0 B measured — see its entry for why
+   the estimate was wrong), **P3.20 next up**, then P3.19 last with an explicit
+   emulator render pass (one commit each, rebuild both targets + emulator screen
+   sweep).
 5. **Internal-RAM levers with measurement:** P3.7 (watermark → shrink loopTask),
    P3.14, P3.15, P3.16; then P3.9/P3.24 (need HW), P3.10 pinning (needs HW).
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
