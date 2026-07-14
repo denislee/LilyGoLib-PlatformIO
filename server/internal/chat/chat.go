@@ -237,6 +237,7 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 // format is detected from the bytes.
 func (h *Handler) transcribe(ctx context.Context, audio []byte) (string, error) {
 	var buf bytes.Buffer
+	buf.Grow(len(audio) + 512) // avoid doubling reallocs through ~4.5 MiB of writes
 	mw := multipart.NewWriter(&buf)
 	if err := mw.WriteField("model", sttModel); err != nil {
 		return "", err
