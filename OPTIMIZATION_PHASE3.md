@@ -48,7 +48,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.8 | `tg_bg` worker stack **6 KB < the 8 KB TLS floor its own fg twin documents** | Latent stack overflow → heap corruption | ✅ Done |
 | P3.9 | `ssh_app` task: 32 KB internal stack per session | 32 KB internal DRAM during TLS-heavy use | Med |
 | P3.10 | `recorderTask` prio 12, unpinned — can preempt LVGL on core 1 | Frame drops while recording | Low fix / ⚠️ HW |
-| P3.11 | `hub_probe` spawn failure leaks args + wedges `hub_probe_running` forever | Hub status indicator stuck for the session | **Bug fix** |
+| P3.11 | `hub_probe` spawn failure leaks args + wedges `hub_probe_running` forever | Hub status indicator stuck for the session | ✅ Done |
 | P3.12 | SD rail stays powered through fake sleep (board can cut it via XL9555) | ~0.5–1 mA for hours of sleep | Med / ⚠️ HW |
 | P3.13 | Rotary task fake-sleep branch polls (`vTaskDelay`) instead of notify-blocking | 5 wakeups/s asleep (peers already fixed) | Very low |
 | P3.14–16 | Small: `ble_kb_ka` 3 KB stack; NFC callback statics in BSS; double `setCpuFrequencyMhz` at boot | ~1.7 KB RAM + hygiene | Very low |
@@ -199,7 +199,7 @@ shape as known-open P2.6 `playerTask` at `:328` — treat the two together.)
 watermark and consider 8 KB → 4–6 KB. Risk: low for pinning. ⚠️ HW: record while an
 animated screen renders; verify no dropped frames/garbled audio.
 
-### P3.11 — `hub_probe` spawn failure wedges the hub indicator + leaks 8 B (BUG)
+### P3.11 — `hub_probe` spawn failure wedges the hub indicator + leaks 8 B (BUG) ✅ Done
 
 `src/core/system.cpp:296–313` — `hub_probe_running = true` is set, then the args are
 `malloc`'d in an immediately-invoked lambda **inside the `xTaskCreate` argument
@@ -502,7 +502,7 @@ Park until a firmware change wants it.
 
 ## Suggested execution order
 
-1. **Bug fixes first, tiny and safe:** P3.8 ✅ (tg_bg stack — one number), P3.11
+1. **Bug fixes first, tiny and safe:** P3.8 ✅ (tg_bg stack — one number), P3.11 ✅
    (hub_probe guard), P3.22 (board variant field), P3.23 (emulator font drift).
    One commit each.
 2. **Server quick wins (independent codebase):** D8, D9, D11 (trivial); then D6
