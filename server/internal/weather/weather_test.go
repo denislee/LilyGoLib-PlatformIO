@@ -1,6 +1,10 @@
 package weather
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestIPAPIStatusOK(t *testing.T) {
 	cases := []struct {
@@ -24,5 +28,69 @@ func TestIPAPIStatusOK(t *testing.T) {
 				t.Fatal("want reject, got nil error (would be cached as success)")
 			}
 		})
+	}
+}
+
+// A realistic open-meteo geocoding result, trimmed of everything the two
+// device parsers (fetch_geo_city, weather_search_cities in ui_weather.cpp)
+// don't read.
+func TestTrimGeoSearchDropsUnusedFields(t *testing.T) {
+	in := `{
+		"results": [{
+			"id": 2988507, "name": "Paris", "latitude": 48.85341, "longitude": 2.3488,
+			"elevation": 42.0, "feature_code": "PPLC", "country_code": "FR",
+			"admin1_id": 3012874, "admin1": "Île-de-France", "country": "France",
+			"country_id": 3017382, "population": 2138551, "timezone": "Europe/Paris",
+			"postcodes": ["75000","75001"]
+		}],
+		"generationtime_ms": 0.5
+	}`
+	out, err := trimGeoSearch([]byte(in))
+	if err != nil {
+		t.Fatalf("trimGeoSearch: %v", err)
+	}
+
+	var parsed struct {
+		Results []geoSearchResult `json:"results"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("output not valid JSON: %v", err)
+	}
+	if len(parsed.Results) != 1 {
+		t.Fatalf("got %d results, want 1", len(parsed.Results))
+	}
+	got := parsed.Results[0]
+	want := geoSearchResult{Name: "Paris", Latitude: 48.85341, Longitude: 2.3488, Country: "France", Admin1: "Île-de-France"}
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+
+	// Dropped fields must not survive as unrecognized-but-present keys.
+	for _, dead := range []string{"elevation", "feature_code", "country_code", "admin1_id", "country_id", "population", "timezone", "postcodes", "generationtime_ms", "\"id\""} {
+		if strings.Contains(string(out), dead) {
+			t.Fatalf("trimmed output still contains %q: %s", dead, out)
+		}
+	}
+}
+
+func TestTrimGeoSearchEmptyResults(t *testing.T) {
+	out, err := trimGeoSearch([]byte(`{"generationtime_ms": 0.1}`))
+	if err != nil {
+		t.Fatalf("trimGeoSearch: %v", err)
+	}
+	var parsed struct {
+		Results []geoSearchResult `json:"results"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("output not valid JSON: %v", err)
+	}
+	if len(parsed.Results) != 0 {
+		t.Fatalf("got %d results, want 0", len(parsed.Results))
+	}
+}
+
+func TestTrimGeoSearchInvalidJSON(t *testing.T) {
+	if _, err := trimGeoSearch([]byte(`not json`)); err == nil {
+		t.Fatal("want error for invalid upstream JSON, got nil")
 	}
 }

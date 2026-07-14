@@ -25,8 +25,12 @@ func upstream(t *testing.T, status int, body string, hits *int) *httptest.Server
 }
 
 func call(c *cache.Cache, client *http.Client, key, url string, validate func([]byte) error) *httptest.ResponseRecorder {
+	return callT(c, client, key, url, validate, nil)
+}
+
+func callT(c *cache.Cache, client *http.Client, key, url string, validate func([]byte) error, transform func([]byte) ([]byte, error)) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	Proxy(c, client, rec, httptest.NewRequest(http.MethodGet, "/", nil), key, url, time.Minute, validate)
+	Proxy(c, client, rec, httptest.NewRequest(http.MethodGet, "/", nil), key, url, time.Minute, validate, transform)
 	return rec
 }
 
@@ -119,6 +123,44 @@ func TestProxyValidatePassesIsCached(t *testing.T) {
 	}
 	if _, ok := c.Get("k"); !ok {
 		t.Fatal("validated body should be cached")
+	}
+}
+
+// A transform's output — not the raw upstream body — is what's cached and
+// written back.
+func TestProxyTransformRewritesBodyBeforeCaching(t *testing.T) {
+	srv := upstream(t, http.StatusOK, `{"a":1,"b":2}`, nil)
+	defer srv.Close()
+	c := cache.New()
+
+	transform := func(b []byte) ([]byte, error) {
+		return []byte(`{"a":1}`), nil
+	}
+	rec := callT(c, srv.Client(), "k", srv.URL, nil, transform)
+	if rec.Code != http.StatusOK || rec.Body.String() != `{"a":1}` {
+		t.Fatalf("code=%d body=%q, want 200 with transformed body", rec.Code, rec.Body.String())
+	}
+	cached, ok := c.Get("k")
+	if !ok || string(cached) != `{"a":1}` {
+		t.Fatalf("cached=%q ok=%v, want the transformed body cached", cached, ok)
+	}
+}
+
+// A transform error is treated like a validate error: 502, nothing cached.
+func TestProxyTransformErrorNotCached(t *testing.T) {
+	srv := upstream(t, http.StatusOK, `not json`, nil)
+	defer srv.Close()
+	c := cache.New()
+
+	transform := func(b []byte) ([]byte, error) {
+		return nil, errors.New("bad shape")
+	}
+	rec := callT(c, srv.Client(), "k", srv.URL, nil, transform)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("code=%d, want 502 when transform errors", rec.Code)
+	}
+	if _, ok := c.Get("k"); ok {
+		t.Fatal("transform-rejected body must not be cached")
 	}
 }
 

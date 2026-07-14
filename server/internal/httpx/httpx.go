@@ -24,11 +24,13 @@ const maxBodyBytes = 1 << 20
 // is cached under `key` for `ttl`. If `validate` is non-nil it is run against
 // the body first; a non-nil error means the payload is not cacheable and is
 // treated as an upstream failure — this stops APIs that report errors in a 200
-// body (e.g. ip-api's {"status":"fail"}) from being cached as success. On any
-// error a 502 is returned; the device is expected to fall back to the public
-// internet on its own.
+// body (e.g. ip-api's {"status":"fail"}) from being cached as success. If
+// `transform` is non-nil it runs after validation and its output — not the
+// raw upstream body — is what gets cached and written back; a non-nil error
+// is treated the same as an upstream failure. On any error a 502 is returned;
+// the device is expected to fall back to the public internet on its own.
 func Proxy(c *cache.Cache, client *http.Client, w http.ResponseWriter, r *http.Request,
-	key, upstream string, ttl time.Duration, validate func([]byte) error,
+	key, upstream string, ttl time.Duration, validate func([]byte) error, transform func([]byte) ([]byte, error),
 ) {
 	if body, ok := c.Get(key); ok {
 		w.Header().Set("Content-Type", "application/json")
@@ -69,6 +71,13 @@ func Proxy(c *cache.Cache, client *http.Client, w http.ResponseWriter, r *http.R
 	if validate != nil {
 		if err := validate(body); err != nil {
 			http.Error(w, "upstream invalid: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+	}
+	if transform != nil {
+		body, err = transform(body)
+		if err != nil {
+			http.Error(w, "transform: "+err.Error(), http.StatusBadGateway)
 			return
 		}
 	}
