@@ -7,7 +7,9 @@
  * State reset on onStop (ui_tasks_exit):
  *   widgets: parent_obj, menu, main_page, add_ta, task_container, quit_btn
  *                                       — destroyed via lv_obj_del then nulled
- * No timers, tasks, or hw sessions. If you add any, list them above AND
+ *   timers:  save_debounce_timer        — flushed (pending write forced
+ *                                          through) then lv_timer_del + null
+ * No tasks or hw sessions. If you add any more timers, list them above AND
  * extend the exit path.
  */
 #include "../ui_define.h"
@@ -51,7 +53,38 @@ static void save_tasks() {
     hw_save_preferred_file(tasks_file_path, content.c_str());
 }
 
+// Writing the whole list to flash/SD on every mutation (toggle, add, edit,
+// delete) blocks the LVGL thread for 10-200 ms per event. The in-memory
+// `tasks` vector is already authoritative intra-session, so the actual write
+// is coalesced behind a 300 ms one-shot timer; ui_tasks_exit flushes any
+// pending write synchronously so an abrupt exit never drops the last edit.
+static lv_timer_t *save_debounce_timer = NULL;
+
+static void save_debounce_cb(lv_timer_t *t) {
+    (void)t;
+    save_debounce_timer = NULL;
+    save_tasks();
+}
+
+static void schedule_save() {
+    if (save_debounce_timer) {
+        lv_timer_reset(save_debounce_timer);
+        return;
+    }
+    save_debounce_timer = lv_timer_create(save_debounce_cb, 300, NULL);
+    lv_timer_set_repeat_count(save_debounce_timer, 1);
+}
+
+static void flush_pending_save() {
+    if (save_debounce_timer) {
+        lv_timer_del(save_debounce_timer);
+        save_debounce_timer = NULL;
+        save_tasks();
+    }
+}
+
 void ui_tasks_refresh();
+static void rebuild_task_list();
 
 static void task_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
@@ -83,7 +116,7 @@ static void task_event_cb(lv_event_t *e) {
                 string display_text = icon + "  " + t.text;
                 lv_obj_t * label = lv_obj_get_child(obj, 0);
                 if (label) lv_label_set_text(label, display_text.c_str());
-                save_tasks();
+                schedule_save();
                 break;
             }
         }
@@ -117,8 +150,8 @@ static void task_event_cb(lv_event_t *e) {
                 focus_idx++;
             }
             if (found) {
-                save_tasks();
-                ui_tasks_refresh();
+                schedule_save();
+                rebuild_task_list();
                 if (!tasks.empty()) {
                     if (focus_idx >= tasks.size()) {
                         focus_idx = tasks.size() - 1;
@@ -184,9 +217,9 @@ static void add_ta_event_cb(lv_event_t *e) {
                 }
                 size_t focus_idx = (size_t)editing_idx;
                 editing_idx = -1;
-                save_tasks();
+                schedule_save();
                 lv_textarea_set_text(ta, "");
-                ui_tasks_refresh();
+                rebuild_task_list();
                 if (focus_idx < tasks.size() && tasks[focus_idx].obj) {
                     lv_group_focus_obj(tasks[focus_idx].obj);
                 }
@@ -198,9 +231,9 @@ static void add_ta_event_cb(lv_event_t *e) {
                 t.text = txt;
                 t.obj = NULL;
                 tasks.insert(tasks.begin(), t); // Add at the top
-                save_tasks();
+                schedule_save();
                 lv_textarea_set_text(ta, "");
-                ui_tasks_refresh();
+                rebuild_task_list();
             }
             // Always stop Enter from reaching the default handler to prevent "entering" editing mode
             lv_event_stop_processing(e);
@@ -249,7 +282,6 @@ static void tasks_back_cb(lv_event_t *e) {
 
 void ui_tasks_refresh() {
     if (task_container == NULL) return;
-    lv_obj_clean(task_container);
     tasks.clear();
 
     string content;
@@ -306,6 +338,18 @@ void ui_tasks_refresh() {
             tasks.push_back(t);
         }
     }
+
+    rebuild_task_list();
+}
+
+// Rebuilds the on-screen list from the in-memory `tasks` vector only — no
+// file I/O. Used both by ui_tasks_refresh (after a cold-start file parse)
+// and directly by mutation handlers (toggle/add/edit/delete), which already
+// keep `tasks` authoritative and would otherwise force a redundant
+// write-then-reread of the file they just wrote.
+static void rebuild_task_list() {
+    if (task_container == NULL) return;
+    lv_obj_clean(task_container);
 
     if (tasks.empty()) {
         return;
@@ -445,6 +489,9 @@ void ui_tasks_enter(lv_obj_t *parent) {
 void ui_tasks_exit(lv_obj_t *parent) {
     ui_hide_back_button();
     disable_keyboard();
+    // save_tasks() reads checked-state off the live checkbox widgets, so the
+    // flush must happen before they're torn down below.
+    flush_pending_save();
     if (menu) {
         lv_obj_clean(menu);
         lv_obj_del(menu);
