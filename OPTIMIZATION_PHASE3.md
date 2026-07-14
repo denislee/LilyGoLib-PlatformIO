@@ -53,8 +53,8 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.13 | Rotary task fake-sleep branch polls (`vTaskDelay`) instead of notify-blocking | 5 wakeups/s asleep (peers already fixed) | Very low |
 | P3.14–16 | Small: `ble_kb_ka` 3 KB stack; NFC callback statics in BSS; double `setCpuFrequencyMhz` at boot | ~1.7 KB RAM + hygiene | Very low |
 | P3.17–21 | lv_conf/build trims: 11 unused widgets, 2 unused themes, I1/AL88 blends, NimBLE roles, `LV_USE_FLOAT` | **−35–50 KB flash** total | Low–Med |
-| P3.22 | `boards/lilygo-t-lora-pager.json` declares `"variant": "lilygo_twatch_ultra"` | Wrong USB PID/pins if framework rebuilds | **Bug fix** |
-| P3.23 | Emulator defines Montserrat 21 + 40 that firmware doesn't build | Emulator masks font-fallback bugs | Zero |
+| P3.22 | `boards/lilygo-t-lora-pager.json` declares `"variant": "lilygo_twatch_ultra"` | Wrong USB PID/pins if framework rebuilds | ✅ Done |
+| P3.23 | Emulator defines Montserrat 21 + 40 that firmware doesn't build | Emulator masks font-fallback bugs | ✅ Done |
 | P3.24 | NimBLE heap in internal SRAM (`MEM_ALLOC_MODE_INTERNAL`) | 30–60 KB internal DRAM reclaimable | Med / ⚠️ HW |
 | P3.25 | BHI260 **Klio ML firmware blob = 123.7 KB of flash**; app uses no Klio features | up to −120 KB flash *if* GPIO variant works | High / ⚠️ HW, investigate only |
 | P3.26 | `test_desktop` is a 2+2 placeholder; `hal/str_encode` untested | Regression-safety, zero cost | Zero |
@@ -334,7 +334,7 @@ the HID-peripheral API (no `NimBLEClient`/`NimBLEScan` hits in `src/`). Add to
 P3.17 removes arc, set `LV_USE_FLOAT 0` (`lv_value_precise_t` → int32). Do it in the
 same pass as P3.17, not before.
 
-### P3.22 — Pager board JSON declares the T-Watch-Ultra variant (BUG, fix regardless)
+### P3.22 — Pager board JSON declares the T-Watch-Ultra variant (BUG, fix regardless) ✅ Done
 
 `boards/lilygo-t-lora-pager.json:21` — `"variant": "lilygo_twatch_ultra"`. The
 framework core compiles *its* `pins_arduino.h` from this field (USB PID 0x82D4 vs
@@ -344,11 +344,19 @@ framework cache; any clean framework rebuild bakes in the wrong USB identity. Fi
 correctness. ⚠️ After fixing, verify a clean build still boots + USB-enumerates as
 the pager.
 
-### P3.23 — Emulator/hardware font drift: Montserrat 21 + 40 (ZERO risk parity fix)
+**Fixed:** `variant` → `lilygo_tlora_pager`. `pio run -e tlora_pager` +
+`pio run -e emulator_lora_pager` + `pio test -e native_test` all pass. ⚠️ USB
+re-enumeration after a *clean* framework rebuild still wants a hardware check —
+carried into the smoke-test checklist.
+
+### P3.23 — Emulator/hardware font drift: Montserrat 21 + 40 (ZERO risk parity fix) ✅ Done
 
 `platformio.ini:249,259` (`[env_emulator]` block) define `LV_FONT_MONTSERRAT_21=1`
 and `_40=1`; firmware has 40 = 0 (phase-2 P2.10) and no 21 at all. The emulator can
 render sizes the device silently falls back on. Delete both lines.
+
+**Fixed:** both lines removed from `[env_emulator]`. Emulator build + native tests
+pass; no source references either size (grep-verified before the edit).
 
 ### P3.24 — NimBLE heap lives in internal SRAM (30–60 KB reclaimable, MED)
 
@@ -503,7 +511,7 @@ Park until a firmware change wants it.
 ## Suggested execution order
 
 1. **Bug fixes first, tiny and safe:** P3.8 ✅ (tg_bg stack — one number), P3.11 ✅
-   (hub_probe guard), P3.22 (board variant field), P3.23 (emulator font drift).
+   (hub_probe guard), P3.22 ✅ (board variant field), P3.23 ✅ (emulator font drift).
    One commit each.
 2. **Server quick wins (independent codebase):** D8, D9, D11 (trivial); then D6
    (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style.
