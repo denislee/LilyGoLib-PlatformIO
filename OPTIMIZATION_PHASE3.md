@@ -176,7 +176,7 @@ Emulator can't exercise this path (the whole `tg_fg_task`/`tg_parse_msgs` worker
 is `#ifdef ARDUINO`-only; the emulator's Telegram view has no live network path
 to populate `s_msgs`), so verification was build-only: `pio run -e tlora_pager`
 (Flash 68.1%, RAM 27.5% — in line with baseline) + `pio run -e
-emulator_lora_pager` + `pio test -e native_test` all pass. `commit <pending>`.
+emulator_lora_pager` + `pio test -e native_test` all pass. `commit 8048ef8`.
 
 ### P3.6 — Chat: SD probe on every mic press (LOW) ✅ Done
 
