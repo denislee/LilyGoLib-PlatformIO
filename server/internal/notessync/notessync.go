@@ -28,7 +28,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -170,7 +169,6 @@ func New() *Handler {
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/notes/sync", h.sync)
 	mux.HandleFunc("/api/notes/upload", h.upload)
-	mux.HandleFunc("/api/notes/list", h.list)
 }
 
 func (h *Handler) sync(w http.ResponseWriter, r *http.Request) {
@@ -483,34 +481,4 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(UploadResponse{Stored: true, Bytes: len(bs), Path: name})
-}
-
-type ListResponse struct {
-	Notes []string `json:"notes"`
-}
-
-func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "GET required", http.StatusMethodNotAllowed)
-		return
-	}
-	entries, err := os.ReadDir(h.notesDir)
-	if err != nil && !os.IsNotExist(err) {
-		http.Error(w, "readdir: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	out := ListResponse{Notes: []string{}}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		nm := e.Name()
-		if strings.HasSuffix(nm, ".tmp") {
-			continue
-		}
-		out.Notes = append(out.Notes, nm)
-	}
-	sort.Strings(out.Notes)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
 }
