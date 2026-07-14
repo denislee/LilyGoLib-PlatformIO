@@ -49,13 +49,12 @@ static void nrf_notify_callback()
 
 static void ndef_event_callback(ndefTypeId id, void *data)
 {
-    static ndefTypeRtdDeviceInfo   devInfoData;
-    static ndefConstBuffer         bufAarString;
-    static ndefRtdUri              url;
-    static ndefRtdText             text;
-    static String msg = "";
-    static wifi_conn_params_t params;
-    msg = "";
+    ndefTypeRtdDeviceInfo   devInfoData;
+    ndefConstBuffer         bufAarString;
+    ndefRtdUri              url;
+    ndefRtdText             text;
+    String msg = "";
+    wifi_conn_params_t params;
     switch (id) {
     case NDEF_TYPE_EMPTY:
         break;
