@@ -321,10 +321,22 @@ first tests). Items 5–6 (Git Data API + cosmetics) remain. Fix order:
 4. ✅ **done — B4 timeouts** (`cmd/lilyhub/main.go`): added `ReadTimeout` 60 s +
    `IdleTimeout` 120 s; `WriteTimeout` left off (chat path legitimately ≤60 s upstream,
    and `ReadTimeout` doesn't bound the handler once the body is read).
-5. **B3 + A3** — one commit + serial round-trip per file per sync
-   (`notessync.go:255-288`, `maxParallel` hardwired 1 at :98). Move to the Git Data
-   API (blobs → tree → one commit → ref) — batches, removes the parent-ref race that
-   forces serial, and makes A3's scaffolding either real or deletable.
+5. ✅ **done (2026-07-14, phase 3's D5) — B3 + A3.** Replaced the one-Contents-API-
+   PUT-per-file / one-commit-per-file loop with the Git Data API (blobs → tree → one
+   commit → ref): blob creation is content-addressed and race-free, so it now runs
+   genuinely parallel (`maxParallel` raised 1 → 4 — A3's semaphore/WaitGroup
+   scaffolding is real, not dead, now that there's an actual race-free reason for it);
+   the tree/commit/ref-update is a single batched write per sync instead of N. The
+   old per-file 409-on-race problem becomes a single ref-update 422 on a rare
+   concurrent-sync collision, retried up to 3× against a freshly-read branch head
+   (reusing the already-created blobs) before giving up and reporting every file in
+   that batch as failed — same "safe to retry, at worst a no-op" contract as before.
+   Full writeup, including why the branch/ref-name URL-escaping needed its own
+   `refPathEscape` helper (GitHub's ref endpoints want literal `/` preserved for
+   branch names like `feature/foo`, not one percent-encoded segment) and the 7 new
+   `notessync_test.go` cases (batched commit, partial/total blob failure, no-op
+   skip, ref-conflict retry success/exhaustion), is in `OPTIMIZATION_PHASE3.md`'s D5
+   entry.
 6. **A1/A2 + cosmetics** — dead `/api/notes/list` (`notessync.go:106,388-412`; the
    firmware only calls `/upload` and `/sync`); stale `/healthz` comment
    (`main.go:38-39` — the device raw-TCP-connects, never HTTP-pings); `gofmt -w`;

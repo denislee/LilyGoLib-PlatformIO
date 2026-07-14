@@ -64,9 +64,10 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.25 | BHI260 **Klio ML firmware blob = 123.7 KB of flash**; app uses no Klio features | up to −120 KB flash *if* GPIO variant works | High / ⚠️ HW, investigate only |
 | P3.26 | `test_desktop` is a 2+2 placeholder; `hal/str_encode` untested | Regression-safety, zero cost | Zero ✅ Done |
 | P3.27 | Partition rebalance (OTA 4→3 MiB, +2 MiB FFat) — only after size plateau | +2 MiB user storage | Deferred |
+| D5 | Notes-sync: one Contents-API PUT + one commit per file, forced serial (phase-2 carryover) | Slow first-time/bulk sync; noisy git history | ✅ Done |
 | D6 | Server chat/transcribe holds audio in ~3 simultaneous copies (~15 MiB peak on Pi) | Pi RSS spike per voice message | ✅ Done |
 | D7 | Notes-sync: no retry on GitHub 429/transient 5xx (chat already has the pattern) | Whole sync aborts on one blip | ✅ Done |
-| D8–D10 | Server memory trims: `buf.Grow`, release `ContentB64` after decode, `putFile` marshal copy | MiB-scale peak-RSS cuts, trivial–low | D8/D9 ✅ Done, D10 deferred |
+| D8–D10 | Server memory trims: `buf.Grow`, release `ContentB64` after decode, `createBlob` (was `putFile`) marshal copy | MiB-scale peak-RSS cuts, trivial–low | D8/D9 ✅ Done, D10 deferred |
 | D11 | Graceful-shutdown window 5 s < 30–60 s upstream timeouts | In-flight sync killed on `systemctl stop` | ✅ Done |
 | D12 | Server: `time.After` retry-sleep timer not stopped on ctx-done | Small | Low ✅ Done |
 | D13 | Server: geoSearch trim (`httpx.Proxy` transform hook) | ~2–4 KB less per-search device parse | Low ✅ Done |
@@ -686,6 +687,89 @@ Makefile/tools clean; coredump partition sized right.
 timeouts) verified still in place; outbound contexts/body-closing/goroutines
 re-checked clean; `http.Client` reuse confirmed in all four handlers.
 
+### D5 — Notes-sync: Git Data API rework, batches the per-file PUT/commit (phase-2 carryover) ✅ Done
+
+Phase-2 §D item 5 (`B3 + A3`), deliberately not picked up opportunistically during
+phase 3's HW-blocked stretch because of its bigger scope — see `OPTIMIZATION_PHASE3.md`'s
+own execution-order log. Picked up once the trickle-in zero-HW items (P3.13/15/16/26,
+D12/D13, A1/A2) ran out and no hardware session had materialized.
+
+Re-verified before editing: `notessync.go`'s `runSync` still built the upload set
+serially through one `putFile` (Contents API `PUT .../contents/notes/<name>`, one
+commit per call) per file, gated by `maxParallel` hardwired to 1 with a comment
+explaining the Contents API's parent-ref race forces that. `A3`'s
+semaphore+WaitGroup+mutex scaffolding around that loop was real code, not dead —
+phase-1's original A3 finding ("dead concurrency scaffolding... can never be raised
+under the Contents API") held exactly because nothing had moved off the Contents API
+yet.
+
+**Fixed:** replaced the per-file PUT loop with the Git Data API sequence — create a
+blob per new file (`POST .../git/blobs`, content-addressed, no parent-ref
+dependency), layer them onto the branch's current tree with `base_tree`
+(`POST .../git/trees`), create one commit pointing at the new tree with the old head
+as parent (`POST .../git/commits`), then fast-forward the branch ref
+(`PATCH .../git/refs/heads/<branch>`). Net effect: an N-file sync that used to cost N
+serial round-trips and N commits now costs one branch-head read, up to
+`maxParallel` (raised 1 → 4, since blob creation really is race-free — A3's
+scaffolding becomes genuinely useful instead of vestigial) concurrent blob creates,
+and one tree/commit/ref-update. `commitFiles` (new, in `notessync.go`) owns this:
+per-file blob failures are collected into `SyncResponse.Errors` and excluded from
+the tree (so one bad upload doesn't sink the batch); if every blob fails, the
+tree/commit/ref-update is skipped entirely (no empty commits). The one remaining
+race — the final ref update landing between this sync's `branchHead` read and its
+own `PATCH` if a second sync runs concurrently — surfaces as a GitHub 422
+(non-fast-forward), which `commitFiles` treats as a signal to refetch the head and
+retry the tree/commit/ref-update (reusing the already-created blobs, not
+re-uploading) up to 3 attempts before giving up and reporting every file in that
+batch as failed — same "safe to retry, at worst a no-op" contract `runSync`'s
+package doc already promises. `listRemote` (the additive-only "what's already
+there" check) is untouched — it's a plain read with no seriality constraint, so
+folding it into the same Git Data API round-trip wasn't in scope.
+
+One correctness wrinkle surfaced and fixed along the way: GitHub's ref-update and
+branch-read endpoints put the branch name directly in the URL *path*
+(`.../branches/<branch>`, `.../git/refs/heads/<branch>`), unlike the old
+Contents-API PUT where branch traveled as a JSON body field — so a branch name
+containing `/` (e.g. `feature/foo`, a legal git branch name) needed careful
+handling: naively `url.PathEscape`-ing the whole name would turn its `/` into
+`%2F`, which GitHub's ref routing does not reliably accept as a literal separator.
+Added `refPathEscape` (mirrors go-github's own `refURLEscape`): splits on `/`,
+`PathEscape`s each segment individually, rejoins with literal `/`.
+
+Also switched the branch-head read from two round-trips (`GET .../git/refs/heads/x`
+then `GET .../git/commits/<sha>`) to GitHub's Branches API
+(`GET .../branches/<branch>`), which returns both the head commit SHA and its tree
+SHA in one response — one fewer round-trip per sync than the naive Git Data API
+translation.
+
+`gofmt -l .` + `go vet ./...` + `go build ./...` + `go test -race ./...` all
+clean/pass across all six packages. Added 7 new test cases in
+`notessync_test.go` against a stateful mock GitHub server (`mockGitHubState` +
+`newMockGitHubServer`) reached through a `rewriteHostTransport` `http.RoundTripper`
+that redirects the package's hardcoded `api.github.com` URLs to the `httptest`
+server — same constraint D7's test notes already flagged (`listRemote`/`putFile`
+aren't independently server-mockable the way `chat.go`'s injectable `baseURL` is;
+rather than add a production-code injection point just for tests, the redirecting
+transport keeps the real endpoint-construction/retry code path under test without
+touching `notessync.go`'s production URLs). Plus 2 pure-function cases
+(`refPathEscape`, `commitMessage`). Covered: single batched commit for a
+multi-file sync (asserts exactly one tree/commit/ref-update call, not one per
+file); a failing blob excluded from the tree while the rest of the batch still
+lands; every blob failing skips the tree/commit/ref-update entirely; an
+all-already-on-remote sync makes zero Git Data API calls; a ref-update conflict
+(422) triggers a head refetch + retry that reuses the existing blobs and
+succeeds; and repeated conflicts exhausting all 3 attempts report every file in
+the batch as failed. No live GitHub credentials available in this environment to
+verify end-to-end against a real repo (unlike D13's live open-meteo check, which
+needed no auth) — the mock-server suite is the verification boundary here;
+flagging that explicitly rather than claiming a live check that didn't happen.
+Firmware untouched (server-only; `SyncResponse`'s `uploaded`/`already`/`errors`
+JSON shape the device parses in `ui_notes_sync.cpp` is unchanged) — `pio run -e
+tlora_pager` (Flash 66.7% / 2,796,653 B, RAM 27.4% / 89,824 B — in line with
+baseline) + `pio run -e emulator_lora_pager` + `pio test -e native_test` all
+re-run per standing build discipline anyway, all pass (unaffected, as expected).
+`commit <pending>`.
+
 ### D6 — Voice chat holds the audio in ~3 copies simultaneously (~15 MiB peak, HIGH for a Pi) ✅ Done
 
 `internal/chat/chat.go:185` (`DecodeString` of `req.AudioB64`), `:239` (multipart
@@ -720,7 +804,13 @@ needs to treat 404 as "no notes yet" rather than a failure. `putFile` uses the
 full 3-attempt pattern; `listRemote` uses `maxAttempts=2` (one retry). `commit
 21451a6`, with tests against `doWithRetry` directly (`listRemote`/`putFile`
 hardcode the `api.github.com` URL, unlike `chat.go`'s injectable `baseURL`, so
-they aren't independently server-mockable).
+they aren't independently server-mockable). `doWithRetry` itself and its
+`maxAttempts` conventions (3 for writes, 2/"one retry" for the read) carried
+through D5's Git Data API rework unchanged — `putFile` no longer exists (replaced
+by `createBlob`/`createTree`/`createCommit`/`updateRef`, all still going through
+`doWithRetry`), and the "not independently server-mockable" note above is what D5
+worked around with a redirecting `http.RoundTripper` in tests rather than adding a
+production `baseURL` field just for testing.
 
 ### D8 — `transcribe` buffer not pre-sized (TRIVIAL) ✅ Done
 
@@ -739,13 +829,16 @@ in `transcribe()`. `commit 5724dfb`. Superseded in part by D6, which changes wha
 **Fixed:** `req.ContentB64 = ""` added right after the `DecodeString` call
 in `upload()`. `commit ae4f83e`.
 
-### D10 — `putFile` `json.Marshal` duplicates the file's base64 once more (LOW)
+### D10 — `createBlob` `json.Marshal` duplicates the file's base64 once more (LOW)
 
-`notessync.go:267–277` — the marshal copies `contentB64` into a fresh buffer
-(~2.66× raw file live per PUT). Fix only if D6/D9 measurements still show pressure:
-hand-build the small JSON envelope into a pre-grown `bytes.Buffer` (escape `name`
-carefully) — or fold into the D5 Git-Data-API rework, which restructures this path
-anyway.
+Originally cited as `putFile`'s `json.Marshal` (`notessync.go:267–277`); D5's Git
+Data API rework replaced `putFile` with `createBlob`, which has the same shape —
+`json.Marshal` copies `contentB64` into a fresh buffer (~2.66× raw file live per
+blob create) rather than streaming it. D5 did not fix this (deliberately out of
+scope — same "fix only if measurements show pressure" reasoning as before still
+applies, and it wasn't part of D5's own stated goal of batching the write side).
+Fix only if D6/D9 measurements still show pressure: hand-build the small JSON
+envelope into a pre-grown `bytes.Buffer`.
 
 ### D11 — Shutdown window 5 s < upstream timeouts (TRIVIAL) ✅ Done
 
@@ -862,10 +955,10 @@ Park until a firmware change wants it.
 | P2.5 GPS rail latched 24/7 when enabled | PHASE2 §A | ☐ product decision |
 | P2.6 `playerTask` 8 KB boot-time stack | PHASE2 §A | ☐ pair with P3.10 |
 | P2.9 Journal reconcile on LVGL thread | PHASE2 §B | ☐ only if post-sync jank observed |
-| P2.10(B) notes-sync full upload body in device RAM | PHASE2 §B | ☐ pair with D5 |
+| P2.10(B) notes-sync full upload body in device RAM | PHASE2 §B | ☐ device-side, independent of D5's server-side batching |
 | P2.11 font product decisions (picker cap −75 KB, mono face −28–31 KB, emoji −43 KB) | PHASE2 §C | ☐ user call |
 | P2.12 WiFi power-save on fake sleep | PHASE2 §C | ☐ product decision |
-| §4 D5 Git Data API (batch commits, unblocks parallelism) | PHASE2 §D | ☐ (A1/A2 cosmetics ✅ done, see §D above) |
+| §4 D5 Git Data API (batch commits, unblocks parallelism) | PHASE2 §D | ✅ Done, see §D above |
 | §1.5 write-only `monitor_params_t` fields (removes live I2C reads) | PROGRESS Deferred | ☐ hardware pass |
 | §2.16 `hw_http_request` double-buffer | PROGRESS Deferred | ⊘ stays deferred |
 | §1.7 timezone-extern layering fix | PROGRESS Deferred | ☐ blocked on relocation |
@@ -934,13 +1027,18 @@ Park until a firmware change wants it.
    `/api/notes/list` — no firmware caller, no test coverage, confirmed by
    grep before deleting) and A2 (fix the stale `/healthz` comment — the
    device actually TCP-probes, never HTTP-pings that path) as two more
-   pure-code, zero-HW, server-only items. **Next up: a hardware session**
-   (step 6) — it now gates P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all at once, so
-   batch them into one bench pass rather than trickling in. If no hardware
-   session materializes, the remaining work in this doc is D5 (Git Data API
-   rework — bigger scope than the trickle-in items above, deliberately not
-   picked up opportunistically), D14, and the P2.11/P2.5/P2.12 product
-   decisions (step 7).
+   pure-code, zero-HW, server-only items. No hardware session materialized, so
+   picked up **D5** (§D, above — Git Data API rework) next: bigger scope than
+   the trickle-in items, deliberately not picked up opportunistically until they
+   ran out, but still pure server-side Go with no hardware dependency at all —
+   blob/tree/commit/ref batching replaces the old serial per-file PUT/commit,
+   verified against a mock GitHub server (7 new test cases) since no live
+   GitHub credentials are available in this environment. **Next up: a hardware
+   session** (step 6) — it now gates P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all at
+   once, so batch them into one bench pass rather than trickling in. If no
+   hardware session materializes, the remaining work in this doc is D14 (parked
+   — needs a firmware-side change that doesn't exist yet) and the
+   P2.11/P2.5/P2.12 product decisions (step 7).
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
    P3.7/9/10/12/24 verifications), then the P3.12 SD-rail bench and the P3.25 Klio
    investigation on a sacrificial device.
