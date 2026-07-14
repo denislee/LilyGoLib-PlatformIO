@@ -35,8 +35,10 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// The device pings /healthz (or any 200-returning path) to decide whether
-	// to use the hub for a given request. Keep it cheap and side-effect free.
+	// The device never sends an HTTP request to decide hub reachability — it
+	// does a raw TCP connect() with a short timeout (hal/hub.h's
+	// hub_is_reachable). This endpoint exists for humans/curl to sanity-check
+	// the process is up. Keep it cheap and side-effect free.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
