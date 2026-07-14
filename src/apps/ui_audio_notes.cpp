@@ -7,6 +7,11 @@
  *   - lv_obj_t*   menu, quit_btn   — destroyed via lv_obj_del / del_async
  *   - lv_obj_t*   main_page        — nulled (was child of menu, destroyed above)
  *   - lv_timer_t* tick_timer       — killed via kill_tick_timer()
+ *   - lv_timer_t* s_notes_scan_timer — killed; s_notes_scan_result freed if
+ *                                      a scan finished but wasn't drained
+ *   - task        s_notes_scan_task — left to finish on its own (touches
+ *                                      only a heap-local vector, never the
+ *                                      UI tree) — mirrors ui_weather.cpp
  *   - active recording             — flushed via finalize_recording()
  *   - active playback              — stopped via hw_set_play_stop()
  *   - notes / selected_* / pending_rec_path — cleared
@@ -18,6 +23,7 @@
 #include "../ui_define.h"
 #include "app_registry.h"
 #include "../core/app_manager.h"
+#include "../core/scoped_lock.h"
 #include "../core/spi_lock.h"
 #include "../hal/system.h"
 #include "../hal/storage.h"
@@ -29,6 +35,8 @@
 #ifdef ARDUINO
 #include <SD.h>
 #include <LilyGoLib.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #endif
 
 namespace {
@@ -131,9 +139,13 @@ static std::string build_new_note_path()
     return buf;
 }
 
-static void reload_notes()
+// Pure scan: lists NOTES_DIR and fills `out`. Touches only its argument and
+// the SD card (via ScopedSpiLock inside hw_list_sd_entries) — safe to run
+// off the LVGL thread. Kept separate from `notes` so the background task
+// below can build a result without racing the UI thread's reads of it.
+static void scan_notes(std::vector<Note> &out)
 {
-    notes.clear();
+    out.clear();
     std::vector<HwDirEntry> raw;
     hw_list_sd_entries(raw, ".wav", NOTES_DIR);
     for (const auto &r : raw) {
@@ -146,13 +158,120 @@ static void reload_notes()
         // already filled r.size from the directory scan, so there's no need to
         // re-open each file over the shared SPI bus just to read its length.
         n.data_bytes = (r.size >= 44) ? (r.size - 44) : 0;
-        notes.push_back(n);
+        out.push_back(n);
     }
     // Sort newest first by mtime, tie-break on filename desc.
-    std::sort(notes.begin(), notes.end(), [](const Note &a, const Note &b) {
+    std::sort(out.begin(), out.end(), [](const Note &a, const Note &b) {
         if (a.mtime != b.mtime) return a.mtime > b.mtime;
         return a.filename > b.filename;
     });
+}
+
+// Synchronous scan straight into the `notes` global — used on the emulator
+// (no real SD, no background-task infra needed) and as the fallback if
+// spawning the background scan task fails.
+static void reload_notes()
+{
+    scan_notes(notes);
+}
+
+#ifdef ARDUINO
+static TaskHandle_t       s_notes_scan_task = nullptr;
+static lv_timer_t        *s_notes_scan_timer = nullptr;
+static volatile bool      s_notes_scan_done = false;
+static std::vector<Note> *s_notes_scan_result = nullptr; // heap-owned; UI thread frees it
+#endif
+static bool                s_notes_scan_pending = false;  // gates the list view's "Loading..." row
+
+#ifdef ARDUINO
+// Background worker: walks the SD card off the LVGL thread. Touches only a
+// heap-local vector, never the `notes` global or any widget — mirrors
+// weather_bg_task / ui_weather.cpp.
+static void notes_scan_task(void *arg)
+{
+    (void)arg;
+    auto *result = new std::vector<Note>();
+    scan_notes(*result);
+    core::ScopedInstanceLock lock;
+    if (s_notes_scan_result) delete s_notes_scan_result;
+    s_notes_scan_result = result;
+    s_notes_scan_done = true;
+    s_notes_scan_task = nullptr;
+    vTaskDelete(NULL);
+}
+
+// LVGL timer: runs inside lv_timer_handler(), already holding the instance
+// mutex. Swaps the freshly scanned list in and, if the list view is still
+// on screen, re-renders it.
+static void notes_scan_drain_tick(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_notes_scan_done) return;
+    s_notes_scan_done = false;
+    std::vector<Note> *result = s_notes_scan_result;
+    s_notes_scan_result = nullptr;
+    if (result) {
+        notes.swap(*result);
+        delete result;
+    }
+    s_notes_scan_pending = false;
+    if (s_notes_scan_timer) {
+        lv_timer_del(s_notes_scan_timer);
+        s_notes_scan_timer = nullptr;
+    }
+    if (current_view == VIEW_LIST) render_view();
+}
+#endif
+
+// Kick a rescan of the notes directory off the LVGL thread, mirroring
+// ui_weather.cpp's weather_bg_task/weather_drain_tick pattern. If a scan is
+// already in flight, just make sure its drain timer is running. On the
+// emulator there's no real SD and no background-task infra, so this just
+// runs the scan inline.
+static void kick_notes_reload()
+{
+#ifdef ARDUINO
+    if (s_notes_scan_task != nullptr) {
+        if (!s_notes_scan_timer) {
+            s_notes_scan_timer = lv_timer_create(notes_scan_drain_tick, 100, nullptr);
+        }
+        return;
+    }
+    s_notes_scan_done = false;
+    s_notes_scan_pending = true;
+    // 4 KB stack: a plain single-directory SD walk, no TLS/HTTP involved.
+    if (xTaskCreate(notes_scan_task, "notes_scan", 4096, nullptr, 1,
+                    &s_notes_scan_task) != pdPASS) {
+        s_notes_scan_task = nullptr;
+        s_notes_scan_pending = false;
+        reload_notes(); // fall back to a synchronous scan so the list isn't stuck empty
+        return;
+    }
+    if (!s_notes_scan_timer) {
+        s_notes_scan_timer = lv_timer_create(notes_scan_drain_tick, 100, nullptr);
+    }
+#else
+    reload_notes();
+#endif
+}
+
+// Switch to VIEW_LIST and (re)populate `notes`. On ARDUINO this paints the
+// list immediately with whatever `notes` already holds, then refreshes
+// asynchronously once the background SD scan completes (kick_notes_reload()
+// above). The emulator has no real SD or background-task infra, so it scans
+// synchronously *before* the single render — same order as the pre-P3.3
+// code — rather than racing a render against kick_notes_reload()'s inline
+// scan.
+static void show_list_view()
+{
+    current_view = VIEW_LIST;
+#ifdef ARDUINO
+    render_view();
+    kick_notes_reload();
+#else
+    reload_notes();
+    render_view();
+#endif
 }
 
 // --- main view ---------------------------------------------------------
@@ -298,7 +417,7 @@ static void build_list_view()
 
     if (notes.empty()) {
         lv_obj_t *empty = lv_label_create(list);
-        lv_label_set_text(empty, "No notes yet");
+        lv_label_set_text(empty, s_notes_scan_pending ? "Loading..." : "No notes yet");
         lv_obj_set_style_text_color(empty, UI_COLOR_MUTED, 0);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(empty, LV_PCT(100));
@@ -577,9 +696,15 @@ static void pb_delete_cb(lv_event_t *e)
     hw_set_play_stop();
     if (!selected_path.empty()) {
         hw_delete_file(selected_path.c_str());
+        // Drop it from the in-memory list immediately — enter_list() below
+        // kicks an async rescan (P3.3) rather than blocking here, and we
+        // don't want the just-deleted file to flash back up in the list
+        // while that rescan is still in flight.
+        notes.erase(std::remove_if(notes.begin(), notes.end(),
+                    [&](const Note &n) { return n.full_path == selected_path; }),
+                    notes.end());
     }
     selected_path.clear();
-    reload_notes();
     enter_list();
 }
 
@@ -738,9 +863,7 @@ static void enter_main()
 
 static void enter_list()
 {
-    reload_notes();
-    current_view = VIEW_LIST;
-    render_view();
+    show_list_view();
 }
 
 static void enter_record()
@@ -821,12 +944,10 @@ static void ui_notes_enter(lv_obj_t *parent)
             current_view = VIEW_RECORD;
         } else {
             s_quick_record = false;
-            reload_notes();
             current_view = VIEW_LIST;
         }
     } else {
         if (s_quick_record) s_quick_record = false;  // no mic — drop quick mode
-        reload_notes();
         current_view = VIEW_LIST;
     }
 
@@ -839,7 +960,11 @@ static void ui_notes_enter(lv_obj_t *parent)
 
     lv_menu_set_page(menu, main_page);
 
-    render_view();
+    if (current_view == VIEW_LIST) {
+        show_list_view();
+    } else {
+        render_view();
+    }
 
 #ifdef USING_TOUCHPAD
     quit_btn = create_floating_button([](lv_event_t *e) {
@@ -860,6 +985,22 @@ static void ui_notes_exit(lv_obj_t *parent)
     kill_tick_timer();
     finalize_recording();
     hw_set_play_stop();
+#ifdef ARDUINO
+    // Stop draining the bg scan, if any. The task is left to finish on its
+    // own — it only writes to a heap-local vector, never the UI tree, so
+    // it's safe to outlive the app instance (kick_notes_reload() adopts it
+    // on a later re-entry). Drop any pending result so a re-entry doesn't
+    // render stale data into a fresh list.
+    if (s_notes_scan_timer) {
+        lv_timer_del(s_notes_scan_timer);
+        s_notes_scan_timer = nullptr;
+    }
+    if (s_notes_scan_done) {
+        s_notes_scan_done = false;
+        if (s_notes_scan_result) { delete s_notes_scan_result; s_notes_scan_result = nullptr; }
+    }
+#endif
+    s_notes_scan_pending = false;
     if (menu) {
         lv_obj_clean(menu);
         lv_obj_del(menu);
