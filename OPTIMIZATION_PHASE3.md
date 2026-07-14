@@ -51,7 +51,9 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.11 | `hub_probe` spawn failure leaks args + wedges `hub_probe_running` forever | Hub status indicator stuck for the session | ✅ Done |
 | P3.12 | SD rail stays powered through fake sleep (board can cut it via XL9555) | ~0.5–1 mA for hours of sleep | Med / ⚠️ HW |
 | P3.13 | Rotary task fake-sleep branch polls (`vTaskDelay`) instead of notify-blocking | 5 wakeups/s asleep (peers already fixed) | Very low |
-| P3.14–16 | Small: `ble_kb_ka` 3 KB stack; NFC callback statics in BSS; double `setCpuFrequencyMhz` at boot | ~1.7 KB RAM + hygiene | Very low |
+| P3.14 | `ble_kb_ka` 3 KB stack, wants a watermark check first | ~1.5 KB RAM | Very low / ⚠️ HW (measure first) |
+| P3.15 | NFC callback statics in BSS | ~116 B + hygiene | Very low ✅ Done |
+| P3.16 | Double `setCpuFrequencyMhz` at boot | ~0.5 ms boot | Very low ✅ Done |
 | P3.17, P3.21 | lv_conf trims: 10/11 unused widgets (arc stays — spinner dependency) + `LV_USE_FLOAT` | −26.5 KB flash (measured) | Low ✅ Done |
 | P3.18 | Unused themes SIMPLE + MONO — flags flipped, but dead-code-eliminated already | 0 B measured (est. was wrong) | Low ✅ Done |
 | P3.19 | lv_conf trim: I1/AL88 blends | −18.8 KB flash (measured) | Low ✅ Done |
@@ -274,6 +276,13 @@ internal DRAM is reserved forever for nothing.
 16 KB if `instance.loop()` surprises. Risk: low *with* the measurement; do not guess.
 ⚠️ HW-test-required (watermark reading is the test).
 
+**Still blocked, re-confirmed 2026-07-14:** no LilyGo device attached this session
+(`pio device list` shows only virtual `ttyS*` ports, `lsusb` has no matching VID) —
+can't take the watermark reading the fix depends on. Not guessing the number per
+this doc's own rule. Picked up P3.15/P3.16 instead (pure code, zero-HW-dependency
+items from the same execution-order batch); P3.14 stays open for the same reason as
+P3.7 — its fix also wants a watermark check first.
+
 ### P3.8 — `tg_bg` stack 6 KB is below the TLS floor its own twin documents (BUG) ✅ Done
 
 `src/apps/ui_telegram.cpp:1706` — `xTaskCreate(tg_bg_task, "tg_bg", 6144, …)`. The
@@ -350,7 +359,11 @@ test needed beyond the existing checklist's wake-latency item.
 tiny HID send every 25 s; ~1.5 KB wasted. **Fix:** 3072 → 1536 after a watermark
 check. ⚠️ trivial HW check while paired.
 
-### P3.15 — NFC callback `static` locals live in BSS forever (LOW)
+**Still open 2026-07-14:** blocked on the same hardware gap as P3.7 — the fix is
+explicitly "after a watermark check," and there's no device attached this session
+to take one. Do this whenever a hardware session happens (pair with P3.7/P3.9/P3.10).
+
+### P3.15 — NFC callback `static` locals live in BSS forever (LOW) ✅ Done
 
 `src/hal/peripherals.cpp:52–57` — six `static` locals (~116 B incl. a `String` and a
 two-`std::string` struct) inside `ndef_event_callback` are permanent internal-RAM
@@ -358,13 +371,31 @@ residents used only while a tag is being read. **Fix:** drop `static` (the 4 KB
 `nfc_reader` task stack absorbs them; everything is reinitialized per call). Risk:
 very low.
 
-### P3.16 — Double `setCpuFrequencyMhz(240)` at boot (LOW)
+**Fixed:** dropped `static` from all six locals (`devInfoData`, `bufAarString`,
+`url`, `text`, `msg`, `params`); dropped the now-pointless `msg = ""` reset (a
+freshly constructed `String` is already empty). Each is populated fresh from
+`data` per the `switch (id)` branch before use and never read across calls, so
+there's no cross-invocation state to preserve. `pio run -e tlora_pager` (Flash
+66.7% / 2,796,593 B, RAM 27.4% / 89,824 B — in line with baseline) + `pio run -e
+emulator_lora_pager` + `pio test -e native_test` all pass. No NFC hardware to
+exercise the callback itself; behavior is unchanged by construction (same values,
+now stack-allocated), so no HW test is needed beyond the existing NFC checklist
+item. `commit 0bfa9e4`.
+
+### P3.16 — Double `setCpuFrequencyMhz(240)` at boot (LOW) ✅ Done
 
 `src/factory.ino:67` unconditional, then `:77` from NVS. Line 67 exists so early boot
 isn't at a low default while loading settings — but when `cpu_freq_mhz == 240` the
 second call redundantly re-inits the PLL (~0.5 ms). **Fix:** guard line 77 with
 `if (settings.cpu_freq_mhz != 240)` (keeping line 67 as the fast-boot default), or
-drop line 67 if boot-at-default-freq for those few ms is acceptable. Cosmetic.
+drop line 77 if boot-at-default-freq for those few ms is acceptable. Cosmetic.
+
+**Fixed:** guarded the `:77` call with `if (settings.cpu_freq_mhz != 240)`, keeping
+line 67's unconditional 240 MHz as the fast-boot default. `pio run -e tlora_pager` +
+`pio run -e emulator_lora_pager` (emulator has no `factory.ino`/`setup()` path —
+structurally unaffected) + `pio test -e native_test` all pass. No behavioral
+difference to observe beyond boot timing (~0.5 ms), which isn't measurable from the
+emulator; stays off the smoke-test checklist as genuinely cosmetic. `commit e6922f1`.
 
 ### Informational (vendor code — document, don't patch)
 
@@ -758,8 +789,12 @@ Park until a firmware change wants it.
    — see its entry), P3.19 ✅ (−18.8 KB measured — see its entry; also surfaced an
    unrelated pre-existing crash bug in the in-flight `ui_settings.cpp` keyboard-
    shortcut diff, flagged to the user, not fixed here). Step complete.
-5. **Internal-RAM levers with measurement — next up:** P3.7 (watermark → shrink
-   loopTask), P3.14, P3.15, P3.16; then P3.9/P3.24 (need HW), P3.10 pinning (needs HW).
+5. **Internal-RAM levers with measurement:** P3.15 ✅, P3.16 ✅ (both pure code, no
+   HW dependency). P3.7 (watermark → shrink loopTask) and P3.14 (ble_kb_ka watermark)
+   re-confirmed blocked 2026-07-14 — no LilyGo device attached to this machine
+   (`pio device list`/`lsusb` checked); do not guess the numbers. **Next up: a
+   hardware session** (step 6) — it now gates P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all
+   at once, so batch them into one bench pass rather than trickling in.
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
    P3.7/9/10/12/24 verifications), then the P3.12 SD-rail bench and the P3.25 Klio
    investigation on a sacrificial device.
