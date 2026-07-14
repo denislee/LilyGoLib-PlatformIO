@@ -450,12 +450,14 @@ hand-build the small JSON envelope into a pre-grown `bytes.Buffer` (escape `name
 carefully) — or fold into the D5 Git-Data-API rework, which restructures this path
 anyway.
 
-### D11 — Shutdown window 5 s < upstream timeouts (TRIVIAL)
+### D11 — Shutdown window 5 s < upstream timeouts (TRIVIAL) ✅ Done
 
 `cmd/lilyhub/main.go:75` — `Shutdown` context is 5 s; notes-sync client timeout is
 30 s (`notessync.go:97`), chat ≤60 s. `systemctl stop` mid-sync cancels in-flight
 GitHub PUTs and 502s the device. Raise to ~35 s (sync bound + margin); chat's 60 s
 can be allowed to die — history is in-memory anyway.
+
+**Fixed:** `Shutdown` context raised from 5s to 35s in `main()`. `commit d3d78f6`.
 
 ### D12 — Retry sleep uses `time.After` (LOW, idiomatic fix)
 
