@@ -1703,7 +1703,7 @@ static void tg_bg_tick(lv_timer_t *t)
     if (s_bg_task != nullptr) return; // Previous task still running
 
     // Launch background task to avoid blocking the LVGL timer thread
-    xTaskCreate(tg_bg_task, "tg_bg", 6144, nullptr, 2, &s_bg_task);
+    xTaskCreate(tg_bg_task, "tg_bg", 8192, nullptr, 2, &s_bg_task);
 }
 #endif
 
