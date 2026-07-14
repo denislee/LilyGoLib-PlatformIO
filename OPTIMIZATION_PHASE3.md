@@ -43,7 +43,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.3 | Audio-notes: SD scan + `SD.exists/mkdir` on LVGL thread at every list entry | 50–200 ms freeze per view transition | Med |
 | P3.4 | SSH terminal trim copies ~8 KB into a `std::string` in internal DRAM per overflow | Heap churn under verbose output | Low |
 | P3.5 | Telegram `ascii_safe` re-walks font glyph tables on every re-render | 100s of glyph lookups per new-message render | Low |
-| P3.6 | Chat: `SD.exists` SPI probe on every mic press | 5–20 ms freeze per press | Very low |
+| P3.6 | Chat: `SD.exists` SPI probe on every mic press | 5–20 ms freeze per press | Very low ✅ Done |
 | P3.7 | `loopTask` stack fixed at **30 KB** — LVGL long since moved to its own task | ~18–22 KB internal DRAM wasted, permanent | Low (measure first) |
 | P3.8 | `tg_bg` worker stack **6 KB < the 8 KB TLS floor its own fg twin documents** | Latent stack overflow → heap corruption | ✅ Done |
 | P3.9 | `ssh_app` task: 32 KB internal stack per session | 32 KB internal DRAM during TLS-heavy use | Med |
@@ -144,12 +144,18 @@ store `safe_text`/`safe_from` alongside the raw fields; render uses the cached
 strings. The existing `msgs_signature` gate already bounds recomputation. Risk: low;
 emulator-verifiable.
 
-### P3.6 — Chat: SD probe on every mic press (LOW)
+### P3.6 — Chat: SD probe on every mic press (LOW) ✅ Done
 
 `src/apps/ui_chat.cpp:664` — `ensure_chat_dir()` runs `SD.exists` (+ conditional
 `mkdir`) on the LVGL thread on each mic press. **Fix:** `static bool s_chat_dir_ok`
 — call `SD.mkdir(CHAT_DIR)` once per session (it fails harmlessly if present) and
 skip afterwards. Risk: very low.
+
+**Fixed:** `ensure_chat_dir()` now short-circuits on a static `s_chat_dir_ok` flag
+once the SD dir has been ensured, and calls `SD.mkdir(CHAT_DIR)` unconditionally
+(dropping the `SD.exists` probe) instead of on every mic press. `pio run -e
+tlora_pager` + `pio run -e emulator_lora_pager` + `pio test -e native_test` all
+pass. `commit f935d2a`.
 
 ---
 
@@ -549,7 +555,7 @@ Park until a firmware change wants it.
 2. ✅ **Server quick wins (independent codebase):** D8, D9, D11 (trivial); then D6
    (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style.
    D10 remains deliberately deferred (§ D10).
-3. **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 (chat mkdir), P3.1
+3. **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 ✅ (chat mkdir), P3.1
    (tasks debounce), P3.5 (telegram sanitize-at-parse), then P3.3 (audio-notes
    worker+drain — the only refactor-sized one), P3.4 (SSH trim).
 4. **lv_conf/flash batch:** P3.17 + P3.21 together, P3.18, P3.20 (one commit each,
