@@ -69,7 +69,8 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | D8–D10 | Server memory trims: `buf.Grow`, release `ContentB64` after decode, `putFile` marshal copy | MiB-scale peak-RSS cuts, trivial–low | D8/D9 ✅ Done, D10 deferred |
 | D11 | Graceful-shutdown window 5 s < 30–60 s upstream timeouts | In-flight sync killed on `systemctl stop` | ✅ Done |
 | D12 | Server: `time.After` retry-sleep timer not stopped on ctx-done | Small | Low ✅ Done |
-| D13, D14 | Server cosmetics: geoSearch trim, `Cache-Control` toward device | Small | Low |
+| D13 | Server: geoSearch trim (`httpx.Proxy` transform hook) | ~2–4 KB less per-search device parse | Low ✅ Done |
+| D14 | Server cosmetics: `Cache-Control` toward device | Small | Low |
 
 ---
 
@@ -768,7 +769,7 @@ now does `timer := time.NewTimer(d)`, selects on `timer.C`, and calls
 `go vet ./...` + `go build ./...` + `go test ./...` all clean/pass across all
 six packages. `commit 026a947`.
 
-### D13 — geoSearch relays ~60 % dead payload to the device (LOW, optional)
+### D13 — geoSearch relays ~60 % dead payload to the device (LOW, optional) ✅ Done
 
 `internal/weather/weather.go` proxies the open-meteo geocoding response verbatim;
 firmware parses only `results[].{name,latitude,longitude,country,admin1}`
@@ -776,6 +777,43 @@ firmware parses only `results[].{name,latitude,longitude,country,admin1}`
 per search the ESP32 must cJSON-parse). Fix = dedicated trim handler for this one
 route; it breaks the "verbatim proxy" simplicity — only if device-side parse cost
 ever matters.
+
+**Fixed — the file:line citation was imprecise, corrected before editing.**
+`ui_weather.cpp:614–638` (`fetch_geo_city`, the *only* consumer that goes through
+the hub route) requests `count=1` and reads just `results[0].{latitude,longitude}`
+— it never reads `name`/`country`/`admin1`. The full `name/latitude/longitude/
+country/admin1` field set the original entry named is read by a second consumer,
+`weather_search_cities` (`ui_weather.cpp:1247–1303`), which calls
+`geocoding-api.open-meteo.com` **directly** (`hw_http_get_string`), bypassing the
+hub entirely — so today, nothing actually reads the trimmed fields *through* this
+route. Kept the full 5-field set in the trim anyway rather than narrowing to just
+lat/lon: `geoSearch`'s own comment ("count…default to 10, matches the device's old
+behavior") signals the route was sized for the list-search use case, and trimming
+to only what the sole current hub consumer reads would silently break the route
+for `weather_search_cities` the day it's pointed at the hub (an obviously-intended
+future wire-up, not a hypothetical). Implemented as a `transform` hook added to
+`httpx.Proxy` (new optional 9th param, `func([]byte) ([]byte, error)`, nil at the
+two other call sites) rather than a fully separate handler — reuses the existing
+fetch/size-cap/validate/cache/error-mapping instead of duplicating it, while still
+keeping the "verbatim proxy" default path untouched for `geoIP`/`forecast`.
+`trimGeoSearch` decodes into a `geoSearchResult{Name,Latitude,Longitude,Country,
+Admin1}` struct (via `encoding/json`, ignoring every other upstream field) and
+re-marshals; a missing/empty `results` array round-trips as an omitted field,
+which the device's `cJSON_IsArray` checks already treat as "no matches" same as
+before. `gofmt -l .` + `go vet ./...` + `go build ./...` + `go test ./...` clean
+across all packages, with new tests: `httpx` gained
+`TestProxyTransformRewritesBodyBeforeCaching`/`TestProxyTransformErrorNotCached`;
+`weather` gained `TestTrimGeoSearchDropsUnusedFields` (real open-meteo-shaped
+payload in, asserts every dropped field is gone from the bytes and the five kept
+fields round-trip exactly) / `TestTrimGeoSearchEmptyResults` /
+`TestTrimGeoSearchInvalidJSON`. Live-verified end-to-end: ran `lilyhub` locally
+against the real `geocoding-api.open-meteo.com` (`name=Paris&count=3`) — MISS
+response came back trimmed to the 5 fields only (confirmed `elevation`,
+`country_code`, `timezone`, `population`, `postcodes`, the numeric `id`, etc. are
+all absent), and the follow-up HIT served an identical cached body. Firmware
+untouched by this change (server-only); `pio run -e tlora_pager` + `pio run -e
+emulator_lora_pager` + `pio test -e native_test` re-run per standing build
+discipline anyway, all pass (unaffected, as expected). `commit <pending>`.
 
 ### D14 — No `Cache-Control` toward the device (LOW, needs firmware change too)
 
@@ -853,11 +891,17 @@ Park until a firmware change wants it.
    (2026-07-14): still no device attached (checked a third time this same day,
    in a follow-up session — `pio device list`/`lsusb` unchanged). Picked up
    D12 (§2, above) as another pure-code, zero-HW item while still blocked.
-   **Next up: a hardware session** (step 6) — it now gates
-   P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all at once, so batch them into one bench
-   pass rather than trickling in. If no hardware session materializes, D13/D14
-   (both optional/low, §D) and the P2.11 font product decisions (step 7) are
-   the only remaining non-HW work in this doc.
+   Re-confirmed a fourth time (2026-07-14, follow-up session): still no device
+   attached (`pio device list`/`lsusb` unchanged). Picked up D13 (§D, above —
+   geoSearch trim) as another pure-code, zero-HW, server-only item; its
+   file:line citation didn't survive re-verification (see its entry) but the
+   fix itself landed clean with a live end-to-end check against real
+   open-meteo. D14 stays parked — it explicitly needs a firmware-side change
+   that doesn't exist yet, unlike D13. **Next up: a hardware session**
+   (step 6) — it now gates P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all at once, so
+   batch them into one bench pass rather than trickling in. If no hardware
+   session materializes, D14 and the P2.11 font product decisions (step 7)
+   are the only remaining work in this doc.
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
    P3.7/9/10/12/24 verifications), then the P3.12 SD-rail bench and the P3.25 Klio
    investigation on a sacrificial device.
