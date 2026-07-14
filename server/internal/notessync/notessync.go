@@ -64,9 +64,11 @@ func (h *Handler) doWithRetry(req *http.Request, maxAttempts int) ([]byte, int, 
 			d := backoff(attempt)
 			log.Printf("notessync: %s %s retry %d/%d after %s (%v)",
 				req.Method, req.URL.Path, attempt, maxAttempts, d, lastErr)
+			timer := time.NewTimer(d)
 			select {
-			case <-time.After(d):
+			case <-timer.C:
 			case <-req.Context().Done():
+				timer.Stop()
 				return nil, 0, req.Context().Err()
 			}
 			if req.GetBody != nil {

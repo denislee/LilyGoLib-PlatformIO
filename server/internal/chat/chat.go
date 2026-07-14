@@ -430,9 +430,11 @@ func (h *Handler) do(req *http.Request) ([]byte, error) {
 			d := backoff(attempt)
 			log.Printf("chat: upstream %s %s retry %d/%d after %s (%v)",
 				req.Method, req.URL.Path, attempt, maxAttempts, d, lastErr)
+			timer := time.NewTimer(d)
 			select {
-			case <-time.After(d):
+			case <-timer.C:
 			case <-req.Context().Done():
+				timer.Stop()
 				return nil, req.Context().Err()
 			}
 			if req.GetBody != nil {
