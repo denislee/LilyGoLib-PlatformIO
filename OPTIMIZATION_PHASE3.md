@@ -39,7 +39,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | # | Finding | Impact | Risk |
 |---|---|---|---|
 | P3.1 | Tasks app: file write + re-read on **every checkbox toggle**, on the LVGL thread | 20–400 ms freeze per toggle | Low |
-| P3.2 | Notes-sync log: `lv_refr_now` per drained line; log string unbounded per run | 100–600 ms stacked flushes per drain tick | Low |
+| P3.2 | Notes-sync log: `lv_refr_now` per drained line; log string unbounded per run | 100–600 ms stacked flushes per drain tick | Low ✅ Done |
 | P3.3 | Audio-notes: SD scan + `SD.exists/mkdir` on LVGL thread at every list entry | 50–200 ms freeze per view transition | Med |
 | P3.4 | SSH terminal trim copies ~8 KB into a `std::string` in internal DRAM per overflow | Heap churn under verbose output | Low |
 | P3.5 | Telegram `ascii_safe` re-walks font glyph tables on every re-render | 100s of glyph lookups per new-message render | Low |
@@ -84,7 +84,7 @@ the exact pattern of `ui_text_editor.cpp`'s word-count debounce. Risk: low; the
 vector is already authoritative intra-session. ⚠️ Confirm persistence across an
 abrupt exit inside the debounce window is acceptable (or flush in `onStop`).
 
-### P3.2 — Notes-sync log: full display flush per drained line, unbounded log string (HIGH)
+### P3.2 — Notes-sync log: full display flush per drained line, unbounded log string (HIGH) ✅ Done
 
 `src/apps/ui_notes_sync.cpp:164` — `log_append()` ends in `lv_refr_now(nullptr)`,
 and `notes_sync_drain_tick` (100 ms timer) calls it once **per drained line**. N
@@ -96,6 +96,13 @@ for the duration of a sync run.
 tick and **drop `lv_refr_now` entirely** (the next `lv_timer_handler` cycle paints
 it); cap `s_log_text` at ~8 000 chars trimming whole lines from the front — exactly
 what `ui_chat.cpp`'s `log_append` (:130–135) already does. Risk: low.
+
+**Fixed:** `notes_sync_drain_tick` now joins all lines drained in one tick into a
+single batch and calls `log_append` once (one `lv_label_set_text` + scroll per
+tick, not per line); `log_append` no longer calls `lv_refr_now` and now caps
+`s_log_text` at 8 000 chars, trimming whole lines from the front — mirroring
+`ui_chat.cpp`'s `log_append`. `pio run -e tlora_pager` + `pio run -e
+emulator_lora_pager` + `pio test -e native_test` all pass. `commit 434bc93`.
 
 ### P3.3 — Audio-notes: SD scan on the LVGL thread at every list entry (HIGH)
 
@@ -542,7 +549,7 @@ Park until a firmware change wants it.
 2. ✅ **Server quick wins (independent codebase):** D8, D9, D11 (trivial); then D6
    (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style.
    D10 remains deliberately deferred (§ D10).
-3. **UI-thread stalls:** P3.2 (notes-sync log — small), P3.6 (chat mkdir), P3.1
+3. **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 (chat mkdir), P3.1
    (tasks debounce), P3.5 (telegram sanitize-at-parse), then P3.3 (audio-notes
    worker+drain — the only refactor-sized one), P3.4 (SSH trim).
 4. **lv_conf/flash batch:** P3.17 + P3.21 together, P3.18, P3.20 (one commit each,
