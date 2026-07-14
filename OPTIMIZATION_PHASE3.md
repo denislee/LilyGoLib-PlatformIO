@@ -38,7 +38,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 
 | # | Finding | Impact | Risk |
 |---|---|---|---|
-| P3.1 | Tasks app: file write + re-read on **every checkbox toggle**, on the LVGL thread | 20–400 ms freeze per toggle | Low |
+| P3.1 | Tasks app: file write + re-read on **every checkbox toggle**, on the LVGL thread | 20–400 ms freeze per toggle | Low ✅ Done |
 | P3.2 | Notes-sync log: `lv_refr_now` per drained line; log string unbounded per run | 100–600 ms stacked flushes per drain tick | Low ✅ Done |
 | P3.3 | Audio-notes: SD scan + `SD.exists/mkdir` on LVGL thread at every list entry | 50–200 ms freeze per view transition | Med |
 | P3.4 | SSH terminal trim copies ~8 KB into a `std::string` in internal DRAM per overflow | Heap churn under verbose output | Low |
@@ -69,7 +69,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 
 ## A. Firmware — UI-thread & app layer
 
-### P3.1 — Tasks app: synchronous file write + re-read on every mutation (HIGH)
+### P3.1 — Tasks app: synchronous file write + re-read on every mutation (HIGH) ✅ Done
 
 `src/apps/ui_tasks.cpp:51` (`save_tasks` → `hw_save_preferred_file`) and `:256`
 (`ui_tasks_refresh` → `hw_read_preferred_file`), both on the LVGL thread, called
@@ -83,6 +83,23 @@ cold-start); debounce the write behind a ~300 ms one-shot `lv_timer` dirty flag 
 the exact pattern of `ui_text_editor.cpp`'s word-count debounce. Risk: low; the
 vector is already authoritative intra-session. ⚠️ Confirm persistence across an
 abrupt exit inside the debounce window is acceptable (or flush in `onStop`).
+
+**Fixed:** split `ui_tasks_refresh()` into the cold-start file read/parse and a
+new `rebuild_task_list()` that rebuilds the on-screen list from the in-memory
+`tasks` vector only; every mutation handler (toggle, delete, add/edit-confirm)
+now calls `rebuild_task_list()` directly instead of round-tripping through the
+file it just wrote. The actual `hw_save_preferred_file` write is coalesced
+behind a 300 ms one-shot `lv_timer` (`schedule_save`/`save_debounce_cb`,
+mirroring `ui_text_editor.cpp`'s word-count debounce); `ui_tasks_exit` calls a
+new `flush_pending_save()` before tearing down the widgets `save_tasks()` reads
+checked-state from, so an abrupt exit inside the debounce window still
+persists the last edit. Verified in the SDL emulator (`hw_save_preferred_file`
+is a `printf`-stub there, so writes are directly observable in stdout):
+add/delete rebuild the list instantly with no extra read-back, mutations
+coalesce into a single debounced write, and exiting ~50–100 ms after a
+mutation (well under the 300 ms window) still flushes the write before
+returning to the menu. `pio run -e tlora_pager` + `pio run -e
+emulator_lora_pager` + `pio test -e native_test` all pass. `commit <pending>`.
 
 ### P3.2 — Notes-sync log: full display flush per drained line, unbounded log string (HIGH) ✅ Done
 
@@ -555,9 +572,9 @@ Park until a firmware change wants it.
 2. ✅ **Server quick wins (independent codebase):** D8, D9, D11 (trivial); then D6
    (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style.
    D10 remains deliberately deferred (§ D10).
-3. **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 ✅ (chat mkdir), P3.1
-   (tasks debounce), P3.5 (telegram sanitize-at-parse), then P3.3 (audio-notes
-   worker+drain — the only refactor-sized one), P3.4 (SSH trim).
+3. **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 ✅ (chat mkdir), P3.1 ✅
+   (tasks debounce), P3.5 (telegram sanitize-at-parse — next up), then P3.3
+   (audio-notes worker+drain — the only refactor-sized one), P3.4 (SSH trim).
 4. **lv_conf/flash batch:** P3.17 + P3.21 together, P3.18, P3.20 (one commit each,
    rebuild both targets + emulator screen sweep); P3.19 last with an explicit
    emulator render pass.
