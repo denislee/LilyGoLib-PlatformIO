@@ -1,10 +1,12 @@
 // Package notessync mounts /api/notes/sync — the device-delegated GitHub push
 // path. The device sends its local note list (name + base64 content) along
-// with the GitHub repo/branch/PAT, and we do the listing + PUTting against
-// api.github.com on the device's behalf. Net win is wall-clock: a real CPU
-// with HTTP keepalive and parallel uploads finishes in seconds where the
-// ESP32 takes tens of seconds to a minute, and the device only has to make
-// one round-trip to the LAN hub.
+// with the GitHub repo/branch/PAT, and we do the listing + committing against
+// api.github.com on the device's behalf: new files land as blob objects,
+// batched into a single tree + commit + ref update via the Git Data API,
+// rather than one Contents-API PUT (and one commit) per file. Net win is
+// wall-clock: a real CPU with HTTP keepalive and parallel blob uploads
+// finishes in seconds where the ESP32 takes tens of seconds to a minute, and
+// the device only has to make one round-trip to the LAN hub.
 //
 // Semantics mirror the device-side code in src/apps/ui_notes_sync.cpp exactly:
 // additive-only — we never overwrite a name that already exists on the
@@ -131,10 +133,10 @@ type SyncError struct {
 
 type Handler struct {
 	client *http.Client
-	// Bound on parallel GitHub PUTs. Must stay at 1: the Contents API computes
-	// the parent ref at request time, so two PUTs to the same branch race and
-	// the loser comes back as 409 "is at X but expected Y". Serial is fast
-	// enough at the note counts this app deals with.
+	// Bound on parallel blob creates (POST /git/blobs). Unlike the old
+	// per-file Contents API PUTs, blob creation is content-addressed and
+	// stateless — no parent-ref race — so this can be genuinely parallel
+	// instead of hardwired to 1.
 	maxParallel int
 	// Local on-disk note store. Lets the device offload bulk note storage to
 	// the hub when its internal flash fills up. Files are saved as opaque
@@ -161,7 +163,7 @@ func New() *Handler {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		maxParallel: 1,
+		maxParallel: 4,
 		notesDir:    dir,
 	}
 }
@@ -240,11 +242,36 @@ func (h *Handler) runSync(ctx context.Context, req *SyncRequest) (*SyncResponse,
 	}
 	out.Already = already
 
-	// Bounded parallel uploads. errors slice is built under a mutex so the
-	// final response order is deterministic-enough for the device's log.
+	if len(toUpload) == 0 {
+		return out, nil
+	}
+
+	h.commitFiles(ctx, req, toUpload, out)
+	return out, nil
+}
+
+// commitFiles uploads every file in toUpload as a single Git Data API commit
+// (blobs -> tree -> commit -> ref) instead of the old one-Contents-API-PUT-
+// per-file, one-commit-per-file approach. Blob creation is content-addressed
+// and race-free, so it runs with real parallelism (h.maxParallel) — the only
+// serialization point left is the final ref update, which is retried against
+// a freshly-read branch head on a non-fast-forward conflict (another sync
+// landing in between), the same race the old code sidestepped by forcing
+// every PUT serial, now isolated to one narrow window instead of gating
+// every file. Per-file failures (bad blob upload) are reported in
+// out.Errors and excluded from the commit; if the tree/commit/ref-update
+// step itself fails after exhausting retries, every file that got a blob is
+// reported as failed too, since nothing landed — same "safe to retry, at
+// worst a no-op" semantics as before.
+func (h *Handler) commitFiles(ctx context.Context, req *SyncRequest, toUpload []SyncFile, out *SyncResponse) {
+	type blobResult struct {
+		file SyncFile
+		sha  string
+	}
+	blobs := make([]blobResult, 0, len(toUpload))
+	var mu sync.Mutex
 	sem := make(chan struct{}, h.maxParallel)
 	var wg sync.WaitGroup
-	var mu sync.Mutex
 
 	for _, f := range toUpload {
 		wg.Add(1)
@@ -257,20 +284,80 @@ func (h *Handler) runSync(ctx context.Context, req *SyncRequest) (*SyncResponse,
 			// no decode/re-encode — so encrypted notes reach GitHub byte-for-
 			// byte and we skip two full-size allocations per file. GitHub
 			// validates the base64 itself, so a malformed payload surfaces as
-			// the PUT error below rather than a local decode failure.
-			if putErr := h.putFile(ctx, req, f.Name, f.ContentB64); putErr != nil {
-				mu.Lock()
-				out.Errors = append(out.Errors, SyncError{Name: f.Name, Err: putErr.Error()})
-				mu.Unlock()
+			// the blob-create error below rather than a local decode failure.
+			sha, err := h.createBlob(ctx, req, f.ContentB64)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				out.Errors = append(out.Errors, SyncError{Name: f.Name, Err: err.Error()})
 				return
 			}
-			mu.Lock()
-			out.Uploaded++
-			mu.Unlock()
+			blobs = append(blobs, blobResult{file: f, sha: sha})
 		}(f)
 	}
 	wg.Wait()
-	return out, nil
+
+	if len(blobs) == 0 {
+		return
+	}
+
+	names := make([]string, len(blobs))
+	for i, b := range blobs {
+		names[i] = b.file.Name
+	}
+	message := commitMessage(names)
+
+	const maxRefAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxRefAttempts; attempt++ {
+		baseCommit, baseTree, err := h.branchHead(ctx, req)
+		if err != nil {
+			lastErr = err
+			break
+		}
+
+		entries := make([]treeEntry, len(blobs))
+		for i, b := range blobs {
+			entries[i] = treeEntry{Path: "notes/" + b.file.Name, Mode: "100644", Type: "blob", SHA: b.sha}
+		}
+		newTree, err := h.createTree(ctx, req, baseTree, entries)
+		if err != nil {
+			lastErr = err
+			break
+		}
+		newCommit, err := h.createCommit(ctx, req, message, newTree, baseCommit)
+		if err != nil {
+			lastErr = err
+			break
+		}
+		conflict, err := h.updateRef(ctx, req, newCommit)
+		if err == nil {
+			out.Uploaded += len(blobs)
+			return
+		}
+		lastErr = err
+		if !conflict {
+			break
+		}
+		// Branch moved under us since branchHead was read — refetch and
+		// retry the tree/commit/ref-update against the new head, reusing
+		// the same already-created blobs.
+	}
+
+	for _, b := range blobs {
+		out.Errors = append(out.Errors, SyncError{Name: b.file.Name, Err: lastErr.Error()})
+	}
+}
+
+// commitMessage summarizes the batch for the commit subject/body. A single
+// file keeps the old "sync: add <name>" shape; a batch gets a count subject
+// plus the full name list in the body, since a git log full of "sync: add
+// N notes" without detail would be useless for auditing what actually synced.
+func commitMessage(names []string) string {
+	if len(names) == 1 {
+		return "sync: add " + names[0]
+	}
+	return fmt.Sprintf("sync: add %d notes\n\n%s", len(names), strings.Join(names, "\n"))
 }
 
 // listRemote fetches the names currently in `notes/` on the given branch.
@@ -319,43 +406,213 @@ func (h *Handler) listRemote(ctx context.Context, req *SyncRequest) ([]string, e
 	return out, nil
 }
 
-// putFile creates notes/<name> on the remote. Caller has already confirmed
-// the name is missing on the remote, so no prev-sha is needed; a 422 here
-// means someone raced us and we just surface it.
-func (h *Handler) putFile(ctx context.Context, req *SyncRequest, name string, contentB64 string) error {
-	body := struct {
-		Message string `json:"message"`
-		Content string `json:"content"`
-		Branch  string `json:"branch"`
-	}{
-		Message: "sync: add " + name,
-		Content: contentB64,
-		Branch:  req.Branch,
+// newGitHubRequest builds a GitHub API request with the headers every call
+// in this file needs. body is nil for GETs; a non-nil body sets
+// Content-Type: application/json (every write endpoint here sends JSON).
+func (h *Handler) newGitHubRequest(ctx context.Context, method, endpoint, token string, body []byte) (*http.Request, error) {
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
 	}
+	httpReq, err := http.NewRequestWithContext(ctx, method, endpoint, r)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+	httpReq.Header.Set("Accept", "application/vnd.github+json")
+	httpReq.Header.Set("User-Agent", "lilyhub/1.0")
+	if body != nil {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
+	return httpReq, nil
+}
+
+// refPathEscape escapes a git ref/branch name for use as a URL path,
+// preserving literal "/" — GitHub's ref endpoints expect a branch like
+// "feature/foo" to appear as two hierarchical path segments, not one
+// percent-encoded blob (mirrors go-github's refURLEscape).
+func refPathEscape(ref string) string {
+	parts := strings.Split(ref, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
+}
+
+// treeEntry is one file in a Git Data API tree-create request.
+type treeEntry struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+	Type string `json:"type"`
+	SHA  string `json:"sha"`
+}
+
+// branchHead returns the current commit SHA and that commit's tree SHA for
+// req.Branch — the base every blob/tree/commit in a sync attempt builds on
+// top of. Uses the Branches API (one round trip) rather than
+// GET .../git/refs + GET .../git/commits (two).
+func (h *Handler) branchHead(ctx context.Context, req *SyncRequest) (commitSHA, treeSHA string, err error) {
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/branches/%s",
+		req.Repo, refPathEscape(req.Branch))
+	httpReq, err := h.newGitHubRequest(ctx, http.MethodGet, endpoint, req.Token, nil)
+	if err != nil {
+		return "", "", err
+	}
+	body, status, err := h.doWithRetry(httpReq, 3)
+	if err != nil {
+		return "", "", err
+	}
+	if status != http.StatusOK {
+		return "", "", fmt.Errorf("github %d: %s", status, truncate(string(body), 200))
+	}
+
+	var parsed struct {
+		Commit struct {
+			SHA    string `json:"sha"`
+			Commit struct {
+				Tree struct {
+					SHA string `json:"sha"`
+				} `json:"tree"`
+			} `json:"commit"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", "", fmt.Errorf("parse branch head: %w", err)
+	}
+	if parsed.Commit.SHA == "" || parsed.Commit.Commit.Tree.SHA == "" {
+		return "", "", fmt.Errorf("branch head response missing commit/tree sha")
+	}
+	return parsed.Commit.SHA, parsed.Commit.Commit.Tree.SHA, nil
+}
+
+// createBlob uploads one file's content as a Git blob object and returns its
+// SHA. Blob creation has no parent-ref dependency — content-addressed, so
+// concurrent creates never race — which is what lets commitFiles run these
+// in parallel where the old per-file Contents API PUTs couldn't.
+func (h *Handler) createBlob(ctx context.Context, req *SyncRequest, contentB64 string) (string, error) {
+	body := struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+	}{Content: contentB64, Encoding: "base64"}
 	buf, _ := json.Marshal(body)
 
-	// name is safeName-validated in runSync (no slash/NUL/leading dot), but
-	// PathEscape it anyway: safeName still permits spaces, '?', '#', '%' etc.,
-	// which would otherwise inject into the URL path/query.
-	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/contents/notes/%s",
-		req.Repo, url.PathEscape(name))
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(buf))
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/git/blobs", req.Repo)
+	httpReq, err := h.newGitHubRequest(ctx, http.MethodPost, endpoint, req.Token, buf)
 	if err != nil {
-		return err
+		return "", err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+req.Token)
-	httpReq.Header.Set("Accept", "application/vnd.github+json")
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("User-Agent", "lilyhub/1.0")
-
 	respBody, status, err := h.doWithRetry(httpReq, 3) // chat.go's full retry pattern
 	if err != nil {
-		return err
+		return "", err
 	}
 	if status/100 != 2 {
-		return fmt.Errorf("github %d: %s", status, truncate(string(respBody), 200))
+		return "", fmt.Errorf("github %d: %s", status, truncate(string(respBody), 200))
 	}
-	return nil
+	var parsed struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", fmt.Errorf("parse blob response: %w", err)
+	}
+	if parsed.SHA == "" {
+		return "", fmt.Errorf("blob response missing sha")
+	}
+	return parsed.SHA, nil
+}
+
+// createTree layers entries on top of baseTree and returns the new tree's
+// SHA. base_tree means we only have to describe the changed paths (the new
+// note files); GitHub fills in everything else from the base.
+func (h *Handler) createTree(ctx context.Context, req *SyncRequest, baseTree string, entries []treeEntry) (string, error) {
+	body := struct {
+		BaseTree string      `json:"base_tree"`
+		Tree     []treeEntry `json:"tree"`
+	}{BaseTree: baseTree, Tree: entries}
+	buf, _ := json.Marshal(body)
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/git/trees", req.Repo)
+	httpReq, err := h.newGitHubRequest(ctx, http.MethodPost, endpoint, req.Token, buf)
+	if err != nil {
+		return "", err
+	}
+	respBody, status, err := h.doWithRetry(httpReq, 3)
+	if err != nil {
+		return "", err
+	}
+	if status/100 != 2 {
+		return "", fmt.Errorf("github %d: %s", status, truncate(string(respBody), 200))
+	}
+	var parsed struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", fmt.Errorf("parse tree response: %w", err)
+	}
+	if parsed.SHA == "" {
+		return "", fmt.Errorf("tree response missing sha")
+	}
+	return parsed.SHA, nil
+}
+
+// createCommit points a new commit at treeSHA with parentSHA as its sole
+// parent and returns the new commit's SHA.
+func (h *Handler) createCommit(ctx context.Context, req *SyncRequest, message, treeSHA, parentSHA string) (string, error) {
+	body := struct {
+		Message string   `json:"message"`
+		Tree    string   `json:"tree"`
+		Parents []string `json:"parents"`
+	}{Message: message, Tree: treeSHA, Parents: []string{parentSHA}}
+	buf, _ := json.Marshal(body)
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/git/commits", req.Repo)
+	httpReq, err := h.newGitHubRequest(ctx, http.MethodPost, endpoint, req.Token, buf)
+	if err != nil {
+		return "", err
+	}
+	respBody, status, err := h.doWithRetry(httpReq, 3)
+	if err != nil {
+		return "", err
+	}
+	if status/100 != 2 {
+		return "", fmt.Errorf("github %d: %s", status, truncate(string(respBody), 200))
+	}
+	var parsed struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", fmt.Errorf("parse commit response: %w", err)
+	}
+	if parsed.SHA == "" {
+		return "", fmt.Errorf("commit response missing sha")
+	}
+	return parsed.SHA, nil
+}
+
+// updateRef fast-forwards req.Branch to newCommit. GitHub returns 422 when
+// this isn't a fast-forward (the branch moved since branchHead was read) —
+// the conflict return tells commitFiles whether to refetch the head and
+// retry, versus giving up on a harder failure (auth, network, ...).
+func (h *Handler) updateRef(ctx context.Context, req *SyncRequest, newCommit string) (conflict bool, err error) {
+	body := struct {
+		SHA   string `json:"sha"`
+		Force bool   `json:"force"`
+	}{SHA: newCommit, Force: false}
+	buf, _ := json.Marshal(body)
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/git/refs/heads/%s",
+		req.Repo, refPathEscape(req.Branch))
+	httpReq, err := h.newGitHubRequest(ctx, http.MethodPatch, endpoint, req.Token, buf)
+	if err != nil {
+		return false, err
+	}
+	respBody, status, err := h.doWithRetry(httpReq, 3)
+	if err != nil {
+		return false, err
+	}
+	if status/100 != 2 {
+		return status == http.StatusUnprocessableEntity, fmt.Errorf("github %d: %s", status, truncate(string(respBody), 200))
+	}
+	return false, nil
 }
 
 func truncate(s string, n int) string {
