@@ -402,6 +402,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad base64: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	req.ContentB64 = "" // let GC drop the ~1.33x base64 string before the file write below
 
 	h.storeMu.Lock()
 	defer h.storeMu.Unlock()
