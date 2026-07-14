@@ -40,6 +40,7 @@
 #include "app_registry.h"
 
 #include <atomic>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -902,14 +903,33 @@ void SshApp::append_terminal(const std::string& chunk) {
     // ~kTermMax bytes, trimmed to a line boundary so we don't cut mid-line.
     // Only pull the (potentially 8 KB) buffer when the tracked length says a
     // trim is actually due — during bursts this path runs ~10x/s.
+    //
+    // We can't pass a pointer into the textarea's own buffer back into
+    // lv_textarea_set_text(): LVGL's set_text_internal() frees the label's
+    // current buffer before copying from its `txt` argument unless that
+    // argument *is* the current buffer pointer (by identity) — a `raw +
+    // offset` slice aliases freed memory by the time the copy runs. So the
+    // cut point is found by scanning the live buffer directly (no copy),
+    // and only the surviving tail is ever copied into an owned buffer.
     constexpr size_t kTermMax = 8000;
     if (term_len_ > kTermMax) {
-        std::string cur = lv_textarea_get_text(term_);
-        size_t cut = cur.size() - kTermMax;
-        size_t nl = cur.find('\n', cut);
-        cur.erase(0, nl == std::string::npos ? cut : nl + 1);
-        lv_textarea_set_text(term_, cur.c_str());
-        term_len_ = cur.size();
+        const char* raw = lv_textarea_get_text(term_);
+        size_t len = strlen(raw);
+        if (len > kTermMax) {
+            size_t cut = len - kTermMax;
+            const char* nl = static_cast<const char*>(memchr(raw + cut, '\n', len - cut));
+            size_t start = nl ? static_cast<size_t>(nl - raw) + 1 : cut;
+            if (!nl) {
+                // No newline in the discarded span: fall back to a hard cut
+                // at `cut`, but don't split a multi-byte UTF-8 sequence.
+                while (start < len && (static_cast<unsigned char>(raw[start]) & 0xC0) == 0x80) ++start;
+            }
+            std::string kept(raw + start);
+            lv_textarea_set_text(term_, kept.c_str());
+            term_len_ = kept.size();
+        } else {
+            term_len_ = len;  // resync if the tracked count ever drifted
+        }
     }
     lv_obj_scroll_to_y(term_, LV_COORD_MAX, LV_ANIM_OFF);
 }
