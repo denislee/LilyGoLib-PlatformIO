@@ -42,7 +42,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.2 | Notes-sync log: `lv_refr_now` per drained line; log string unbounded per run | 100–600 ms stacked flushes per drain tick | Low ✅ Done |
 | P3.3 | Audio-notes: SD scan + `SD.exists/mkdir` on LVGL thread at every list entry | 50–200 ms freeze per view transition | Med |
 | P3.4 | SSH terminal trim copies ~8 KB into a `std::string` in internal DRAM per overflow | Heap churn under verbose output | Low |
-| P3.5 | Telegram `ascii_safe` re-walks font glyph tables on every re-render | 100s of glyph lookups per new-message render | Low |
+| P3.5 | Telegram `ascii_safe` re-walks font glyph tables on every re-render | 100s of glyph lookups per new-message render | Low ✅ Done |
 | P3.6 | Chat: `SD.exists` SPI probe on every mic press | 5–20 ms freeze per press | Very low ✅ Done |
 | P3.7 | `loopTask` stack fixed at **30 KB** — LVGL long since moved to its own task | ~18–22 KB internal DRAM wasted, permanent | Low (measure first) |
 | P3.8 | `tg_bg` worker stack **6 KB < the 8 KB TLS floor its own fg twin documents** | Latent stack overflow → heap corruption | ✅ Done |
@@ -149,7 +149,7 @@ internal DRAM, the WiFi/TLS pool) just to compute a cut offset. Under verbose ou
 `lv_textarea_set_text(term_, raw + offset)` — LVGL copies internally; zero
 intermediate allocation. Mind UTF-8 boundaries when picking the offset. Risk: low.
 
-### P3.5 — Telegram `ascii_safe` re-sanitizes every message on every render (MED)
+### P3.5 — Telegram `ascii_safe` re-sanitizes every message on every render (MED) ✅ Done
 
 `src/apps/ui_telegram.cpp:352` — `ascii_safe()` calls `lv_font_get_glyph_dsc`
 (:380, fallback-chain walk) per non-ASCII codepoint, and `render_msgs` calls it for
@@ -160,6 +160,23 @@ chats ⇒ hundreds of glyph lookups on the LVGL thread per poll that lands new m
 store `safe_text`/`safe_from` alongside the raw fields; render uses the cached
 strings. The existing `msgs_signature` gate already bounds recomputation. Risk: low;
 emulator-verifiable.
+
+**Fixed:** `Message` gained `safe_from`/`safe_text` fields; `tg_parse_msgs` (the
+`tg_fg_task` HTTPS-worker's message parser, not `tg_bg_tick` — that background
+timer only fetches unread counts, never message bodies) now calls `ascii_safe()`
+once per message right after parsing, off the LVGL thread. `render_msgs()` reads
+`it->safe_from`/`it->safe_text` instead of recomputing. Checked one thread-safety
+wrinkle before landing this: `ascii_safe` → `get_telegram_font()` lazily
+first-time-initializes the Inter+emoji font variants
+(`ui_tools.cpp`'s `init_inter_emoji_fonts`, guarded only by a plain bool, no
+lock). `show_chat()` always calls `get_telegram_font()` synchronously on the LVGL
+thread while building the chat view — *before* it kicks the first message fetch —
+so the worker can never be the first caller and there's no init race in practice.
+Emulator can't exercise this path (the whole `tg_fg_task`/`tg_parse_msgs` worker
+is `#ifdef ARDUINO`-only; the emulator's Telegram view has no live network path
+to populate `s_msgs`), so verification was build-only: `pio run -e tlora_pager`
+(Flash 68.1%, RAM 27.5% — in line with baseline) + `pio run -e
+emulator_lora_pager` + `pio test -e native_test` all pass. `commit <pending>`.
 
 ### P3.6 — Chat: SD probe on every mic press (LOW) ✅ Done
 
@@ -573,8 +590,8 @@ Park until a firmware change wants it.
    (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style.
    D10 remains deliberately deferred (§ D10).
 3. **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 ✅ (chat mkdir), P3.1 ✅
-   (tasks debounce), P3.5 (telegram sanitize-at-parse — next up), then P3.3
-   (audio-notes worker+drain — the only refactor-sized one), P3.4 (SSH trim).
+   (tasks debounce), P3.5 ✅ (telegram sanitize-at-parse), then P3.3
+   (audio-notes worker+drain — the only refactor-sized one, next up), P3.4 (SSH trim).
 4. **lv_conf/flash batch:** P3.17 + P3.21 together, P3.18, P3.20 (one commit each,
    rebuild both targets + emulator screen sweep); P3.19 last with an explicit
    emulator render pass.
