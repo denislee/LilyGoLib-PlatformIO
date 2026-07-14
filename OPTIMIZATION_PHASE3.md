@@ -71,6 +71,8 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | D12 | Server: `time.After` retry-sleep timer not stopped on ctx-done | Small | Low ✅ Done |
 | D13 | Server: geoSearch trim (`httpx.Proxy` transform hook) | ~2–4 KB less per-search device parse | Low ✅ Done |
 | D14 | Server cosmetics: `Cache-Control` toward device | Small | Low |
+| A1 | Server: dead `/api/notes/list` endpoint (phase-1 leftover) | Repo hygiene | Trivial ✅ Done |
+| A2 | Server: stale `/healthz` comment (phase-1 leftover) | Repo hygiene | Trivial ✅ Done |
 
 ---
 
@@ -815,6 +817,35 @@ untouched by this change (server-only); `pio run -e tlora_pager` + `pio run -e
 emulator_lora_pager` + `pio test -e native_test` re-run per standing build
 discipline anyway, all pass (unaffected, as expected). `commit <pending>`.
 
+### A1 — Dead `/api/notes/list` endpoint (phase-1 leftover, TRIVIAL) ✅ Done
+
+`notessync.go:173` registered `GET /api/notes/list` (`h.list`, `ListResponse`
+type) — re-verified before editing that the firmware never calls it
+(`src/apps/ui_notes_sync.cpp` only hits `/api/notes/upload` and
+`/api/notes/sync`; repo-wide grep for `notes/list` in `src/` came back empty)
+and no test references `h.list`/`ListResponse` either.
+
+**Fixed:** deleted the route registration, the `list` handler, and the
+`ListResponse` type; dropped the now-unused `sort` import (`strings` is still
+used elsewhere in the file). `gofmt -l .` + `go vet ./...` + `go build ./...`
++ `go test ./...` all clean/pass. Server-only change — `pio run -e
+tlora_pager` + `pio run -e emulator_lora_pager` + `pio test -e native_test`
+re-run per standing build discipline anyway, all pass (unaffected, as
+expected). `commit 29f7c21`.
+
+### A2 — Stale `/healthz` comment (phase-1 leftover, TRIVIAL) ✅ Done
+
+`main.go:38–39` claimed "the device pings /healthz (or any 200-returning
+path) to decide whether to use the hub" — re-verified against
+`src/hal/hub.h:43–49` (`hub_is_reachable`): the device does a raw
+`connect()` TCP probe with **no HTTP request at all**, so it never actually
+hits this path.
+
+**Fixed:** rewrote the comment to describe the real mechanism (raw TCP
+connect, not HTTP) and this endpoint's actual purpose (human/curl liveness
+check), keeping the endpoint itself unchanged. `gofmt -l .` + `go vet ./...`
++ `go build ./...` + `go test ./...` all clean/pass. `commit 629805d`.
+
 ### D14 — No `Cache-Control` toward the device (LOW, needs firmware change too)
 
 `internal/httpx/httpx.go` — hub TTLs and the device's NVS `WEATHER_FRESH_TTL_SEC`
@@ -834,7 +865,7 @@ Park until a firmware change wants it.
 | P2.10(B) notes-sync full upload body in device RAM | PHASE2 §B | ☐ pair with D5 |
 | P2.11 font product decisions (picker cap −75 KB, mono face −28–31 KB, emoji −43 KB) | PHASE2 §C | ☐ user call |
 | P2.12 WiFi power-save on fake sleep | PHASE2 §C | ☐ product decision |
-| §4 D5 Git Data API (batch commits, unblocks parallelism) + A1/A2 cosmetics | PHASE2 §D | ☐ |
+| §4 D5 Git Data API (batch commits, unblocks parallelism) | PHASE2 §D | ☐ (A1/A2 cosmetics ✅ done, see §D above) |
 | §1.5 write-only `monitor_params_t` fields (removes live I2C reads) | PROGRESS Deferred | ☐ hardware pass |
 | §2.16 `hw_http_request` double-buffer | PROGRESS Deferred | ⊘ stays deferred |
 | §1.7 timezone-extern layering fix | PROGRESS Deferred | ☐ blocked on relocation |
@@ -897,11 +928,19 @@ Park until a firmware change wants it.
    file:line citation didn't survive re-verification (see its entry) but the
    fix itself landed clean with a live end-to-end check against real
    open-meteo. D14 stays parked — it explicitly needs a firmware-side change
-   that doesn't exist yet, unlike D13. **Next up: a hardware session**
+   that doesn't exist yet, unlike D13. Re-confirmed a fifth time (2026-07-14,
+   follow-up session): still no device attached (`pio device list`/`lsusb`
+   unchanged). Picked up the phase-1 leftover cosmetics A1 (delete dead
+   `/api/notes/list` — no firmware caller, no test coverage, confirmed by
+   grep before deleting) and A2 (fix the stale `/healthz` comment — the
+   device actually TCP-probes, never HTTP-pings that path) as two more
+   pure-code, zero-HW, server-only items. **Next up: a hardware session**
    (step 6) — it now gates P3.7/P3.9/P3.10/P3.12/P3.14/P3.24 all at once, so
    batch them into one bench pass rather than trickling in. If no hardware
-   session materializes, D14 and the P2.11 font product decisions (step 7)
-   are the only remaining work in this doc.
+   session materializes, the remaining work in this doc is D5 (Git Data API
+   rework — bigger scope than the trickle-in items above, deliberately not
+   picked up opportunistically), D14, and the P2.11/P2.5/P2.12 product
+   decisions (step 7).
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
    P3.7/9/10/12/24 verifications), then the P3.12 SD-rail bench and the P3.25 Klio
    investigation on a sacrificial device.
