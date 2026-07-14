@@ -425,10 +425,14 @@ codes. One GitHub blip aborts the whole (serial) sync back to the device. **Fix:
 reuse the chat backoff pattern (200→400→800 ms) on 429/5xx for `putFile`, one retry
 for `listRemote`. Low risk; sync is additive/idempotent.
 
-### D8 — `transcribe` buffer not pre-sized (TRIVIAL)
+### D8 — `transcribe` buffer not pre-sized (TRIVIAL) ✅ Done
 
 `chat.go:239` — `bytes.Buffer` grows by doubling through ~4.5 MiB of writes.
 `buf.Grow(len(audio)+512)` (or `len(audioB64)+512` post-D6) makes it one allocation.
+
+**Fixed:** `buf.Grow(len(audio) + 512)` added right after the buffer is declared
+in `transcribe()`. `commit 5724dfb`. Superseded in part by D6, which changes what
+`transcribe` receives and re-derives the grow size from the base64 length.
 
 ### D9 — `/upload` keeps base64 + decoded bytes both live through the file write (TRIVIAL)
 
