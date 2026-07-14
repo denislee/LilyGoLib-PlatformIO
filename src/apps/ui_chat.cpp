@@ -660,8 +660,11 @@ static std::string build_chat_audio_path()
 
 static void ensure_chat_dir()
 {
+    static bool s_chat_dir_ok = false;
+    if (s_chat_dir_ok) return;
     if (!(HW_SD_ONLINE & hw_get_device_online())) return;
-    if (!SD.exists(CHAT_DIR)) SD.mkdir(CHAT_DIR);
+    SD.mkdir(CHAT_DIR); // no-op if it already exists
+    s_chat_dir_ok = true;
 }
 #endif
 
