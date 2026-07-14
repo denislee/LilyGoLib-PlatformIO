@@ -367,6 +367,13 @@ flash `pio run -e tlora_pager -t upload` and confirm:
       (no flash-then-vanish) and stays gone after the background rescan lands. Cycle
       record → stop → browse → delete a few times back-to-back with no crash, no stuck
       "Loading..." state, and no ghost/duplicate entries.
+- [ ] **P3.4 SSH terminal scrollback trim** — open an SSH session and generate >8 000
+      bytes of output in one burst (e.g. `find / | head -c 20000`, or `dmesg`): the
+      terminal keeps scrolling smoothly with no stall, old lines drop off the top at a
+      line boundary (no mid-line garbage), and the view keeps tracking the latest output.
+      Cycle a few more large bursts back-to-back with no crash and no garbled text —
+      this exercises the rewritten in-place cut-point scan replacing the old
+      copy-whole-buffer-then-erase trim.
 
 If all pass, delete this checklist and the "compile-only" caveats above. If the radio
 boot is solid, the *optional* follow-up trims become safe: empty `hw_radio_begin`/

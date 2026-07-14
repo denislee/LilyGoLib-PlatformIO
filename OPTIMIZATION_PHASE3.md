@@ -41,7 +41,7 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.1 | Tasks app: file write + re-read on **every checkbox toggle**, on the LVGL thread | 20–400 ms freeze per toggle | Low ✅ Done |
 | P3.2 | Notes-sync log: `lv_refr_now` per drained line; log string unbounded per run | 100–600 ms stacked flushes per drain tick | Low ✅ Done |
 | P3.3 | Audio-notes: SD scan + `SD.exists/mkdir` on LVGL thread at every list entry | 50–200 ms freeze per view transition | Med ✅ Done |
-| P3.4 | SSH terminal trim copies ~8 KB into a `std::string` in internal DRAM per overflow | Heap churn under verbose output | Low |
+| P3.4 | SSH terminal trim copies ~8 KB into a `std::string` in internal DRAM per overflow | Heap churn under verbose output | Low ✅ Done |
 | P3.5 | Telegram `ascii_safe` re-walks font glyph tables on every re-render | 100s of glyph lookups per new-message render | Low ✅ Done |
 | P3.6 | Chat: `SD.exists` SPI probe on every mic press | 5–20 ms freeze per press | Very low ✅ Done |
 | P3.7 | `loopTask` stack fixed at **30 KB** — LVGL long since moved to its own task | ~18–22 KB internal DRAM wasted, permanent | Low (measure first) |
@@ -172,7 +172,7 @@ state in the log. The async task/timer path itself (`#ifdef ARDUINO`-only)
 and the record/stop/delete cycling remain ⚠️ **hardware-test-required** —
 carried into the smoke-test checklist. `commit fce0e8e`.
 
-### P3.4 — SSH terminal trim: ~8 KB `std::string` copy in internal DRAM (MED)
+### P3.4 — SSH terminal trim: ~8 KB `std::string` copy in internal DRAM (MED) ✅ Done
 
 `src/apps/ui_ssh.cpp:905–908` — when `term_len_ > kTermMax` (8 000), the trim path
 does `std::string cur = lv_textarea_get_text(term_)` (heap copy of up to ~8 KB in
@@ -182,6 +182,32 @@ internal DRAM, the WiFi/TLS pool) just to compute a cut offset. Under verbose ou
 **Fix:** compute the cut offset on the returned `const char*` directly and call
 `lv_textarea_set_text(term_, raw + offset)` — LVGL copies internally; zero
 intermediate allocation. Mind UTF-8 boundaries when picking the offset. Risk: low.
+
+**Fixed — not as literally proposed above.** Traced `lv_textarea_set_text` →
+`lv_label_set_text` → `set_text_internal` (`lv_label.c`): when the `txt` argument
+isn't the label's *own* current buffer pointer by identity, it **frees the old
+buffer first**, then `strcpy`s from `txt`. A `raw + offset` slice (this doc's
+literal suggestion) aliases memory `lv_textarea_set_text` frees before reading it
+— a use-after-free that happens to often "work" only because nothing reallocates
+between the free and the read, which is exactly the kind of thing that breaks
+first under ESP-IDF heap poisoning or a future LVGL/allocator change. Implemented
+instead: scan the live buffer in place with `strlen`/`memchr` (no copy) to find
+the cut point — mirroring UTF-8 continuation-byte skipping for the no-newline
+fallback — then construct **one** owned `std::string` from only the surviving
+tail and hand that to `lv_textarea_set_text`. This still cuts the work roughly in
+half versus the original (which copied the *whole* buffer via the `std::string`
+constructor and then `erase()`d the discarded prefix) without aliasing a buffer
+LVGL is about to free. Also hardened the size-tracking edge case: if the tracked
+`term_len_` ever drifts above `kTermMax` while the real buffer (via `strlen`)
+isn't, resync `term_len_` instead of computing a nonsensical cut. Verified the
+trim/cut/UTF-8-boundary logic against a standalone harness (line-boundary cut,
+hard cut with no newline, UTF-8 continuation-byte skip, no-op when under the
+cap) before touching device code. `pio run -e tlora_pager` (Flash 68.1% /
+2,855,457 B, RAM 27.5% — in line with baseline) + `pio run -e
+emulator_lora_pager` + `pio test -e native_test` all pass. No SSH hardware path
+to drive from the emulator; the trim only fires past 8 000 buffered bytes, so it
+stays ⚠️ **hardware-test-required** (verbose remote output, e.g. `dmesg`/`find /`)
+— added to the smoke-test checklist. `commit 9863857`.
 
 ### P3.5 — Telegram `ascii_safe` re-sanitizes every message on every render (MED) ✅ Done
 
@@ -623,12 +649,13 @@ Park until a firmware change wants it.
 2. ✅ **Server quick wins (independent codebase):** D8, D9, D11 (trivial); then D6
    (streaming decode) + D7 (retry) with tests, mirroring the D1–D4 commit style.
    D10 remains deliberately deferred (§ D10).
-3. **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 ✅ (chat mkdir), P3.1 ✅
+3. ✅ **UI-thread stalls:** P3.2 ✅ (notes-sync log — small), P3.6 ✅ (chat mkdir), P3.1 ✅
    (tasks debounce), P3.5 ✅ (telegram sanitize-at-parse), P3.3 ✅ (audio-notes
-   worker+drain), then P3.4 (SSH trim — next up).
-4. **lv_conf/flash batch:** P3.17 + P3.21 together, P3.18, P3.20 (one commit each,
-   rebuild both targets + emulator screen sweep); P3.19 last with an explicit
-   emulator render pass.
+   worker+drain), P3.4 ✅ (SSH trim — done, deviated from the literal fix; see its
+   entry). Step complete.
+4. **lv_conf/flash batch (next up):** P3.17 + P3.21 together, P3.18, P3.20 (one
+   commit each, rebuild both targets + emulator screen sweep); P3.19 last with an
+   explicit emulator render pass.
 5. **Internal-RAM levers with measurement:** P3.7 (watermark → shrink loopTask),
    P3.14, P3.15, P3.16; then P3.9/P3.24 (need HW), P3.10 pinning (needs HW).
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
