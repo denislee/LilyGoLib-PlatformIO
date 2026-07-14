@@ -154,6 +154,17 @@ static void log_append(const char *line)
 {
     if (line) s_log_text.append(line);
     s_log_text.push_back('\n');
+
+    // Bound the transcript so a long sync run can't grow this string (and
+    // the label it backs) without limit. Drop whole lines from the front
+    // once over cap — mirrors ui_chat.cpp's log_append.
+    constexpr size_t kLogMax = 8000;
+    if (s_log_text.size() > kLogMax) {
+        size_t cut = s_log_text.size() - kLogMax;
+        size_t nl = s_log_text.find('\n', cut);
+        s_log_text.erase(0, nl == std::string::npos ? cut : nl + 1);
+    }
+
     if (s_log_label) {
         lv_label_set_text(s_log_label, s_log_text.c_str());
         if (s_log_scroll) {
@@ -161,7 +172,6 @@ static void log_append(const char *line)
             lv_obj_scroll_to_y(s_log_scroll, LV_COORD_MAX, LV_ANIM_OFF);
         }
     }
-    lv_refr_now(nullptr);
 }
 
 static void log_appendf(const char *fmt, ...)
@@ -428,8 +438,15 @@ static void notes_sync_drain_tick(lv_timer_t *t)
     if (!s_pending_log.empty()) {
         std::vector<std::string> drained;
         drained.swap(s_pending_log);
-        for (auto &l : drained) {
-            if (s_log_label) log_append(l.c_str());
+        if (s_log_label) {
+            // One label update (+ scroll) per tick regardless of how many
+            // lines the bg task queued, instead of one per line.
+            std::string batch;
+            for (size_t i = 0; i < drained.size(); ++i) {
+                if (i) batch.push_back('\n');
+                batch += drained[i];
+            }
+            log_append(batch.c_str());
         }
     }
     if (s_bg_done && s_bg_task == nullptr) {
