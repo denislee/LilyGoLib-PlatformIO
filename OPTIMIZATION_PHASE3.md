@@ -44,10 +44,10 @@ Anything touching task loops / ISRs / stacks / boot is ⚠️ **hardware-test-re
 | P3.4 | SSH terminal trim copies ~8 KB into a `std::string` in internal DRAM per overflow | Heap churn under verbose output | Low ✅ Done |
 | P3.5 | Telegram `ascii_safe` re-walks font glyph tables on every re-render | 100s of glyph lookups per new-message render | Low ✅ Done |
 | P3.6 | Chat: `SD.exists` SPI probe on every mic press | 5–20 ms freeze per press | Very low ✅ Done |
-| P3.7 | `loopTask` stack fixed at **30 KB** — LVGL long since moved to its own task | ~18–22 KB internal DRAM wasted, permanent | Low (measure first) |
+| P3.7 | `loopTask` stack fixed at **30 KB** — LVGL long since moved to its own task | ~18–22 KB internal DRAM wasted, permanent | ✅ Done |
 | P3.8 | `tg_bg` worker stack **6 KB < the 8 KB TLS floor its own fg twin documents** | Latent stack overflow → heap corruption | ✅ Done |
 | P3.9 | `ssh_app` task: 32 KB internal stack per session | 32 KB internal DRAM during TLS-heavy use | Med |
-| P3.10 | `recorderTask` prio 12, unpinned — can preempt LVGL on core 1 | Frame drops while recording | Low fix / ⚠️ HW |
+| P3.10 | `recorderTask` prio 12, unpinned — can preempt LVGL on core 1 | Frame drops while recording | ✅ Done (pin); watermark trim still ⚠️ HW |
 | P3.11 | `hub_probe` spawn failure leaks args + wedges `hub_probe_running` forever | Hub status indicator stuck for the session | ✅ Done |
 | P3.12 | SD rail stays powered through fake sleep (board can cut it via XL9555) | ~0.5–1 mA for hours of sleep | Med / ⚠️ HW |
 | P3.13 | Rotary task fake-sleep branch polls (`vTaskDelay`) instead of notify-blocking | 5 wakeups/s asleep (peers already fixed) | Very low ✅ Done |
@@ -268,7 +268,7 @@ pass. `commit f935d2a`.
 Complete task inventory (name / stack / prio / core / origin) is at the end of this
 section — keep it current when adding tasks.
 
-### P3.7 — `loopTask` stack fixed at 30 KB (HIGH — biggest single internal-RAM lever)
+### P3.7 — `loopTask` stack fixed at 30 KB (HIGH — biggest single internal-RAM lever) ✅ Done
 
 `src/hal/system.cpp:187–189` — `getArduinoLoopTaskStackSize()` returns `30 * 1024`.
 That size predates the LVGL split: rendering moved to its own 16 KB `lvgl` task
@@ -287,6 +287,25 @@ can't take the watermark reading the fix depends on. Not guessing the number per
 this doc's own rule. Picked up P3.15/P3.16 instead (pure code, zero-HW-dependency
 items from the same execution-order batch); P3.14 stays open for the same reason as
 P3.7 — its fix also wants a watermark check first.
+
+**Fixed:** a subsequent hardware session took the reading — a `TEMPORARY`
+`debug_dump_task_stacks()` instrumentation in `factory.ino` (`Serial.printf`
+of `uxTaskGetStackHighWaterMark(NULL)` every 15 s) held steady at **27,572 B
+free out of the old 30 KB (i.e. ~3.1 KB ever used)** across multiple NTP-retry
+cycles on a warm, WiFi-connected system — squarely in the "realistic depth
+4–8 KB" range predicted above, on the low end. Sized at measured-usage × 1.5
+rounded up to the nearest 4 KB → **8 KB** (`getArduinoLoopTaskStackSize()`
+now returns `8 * 1024`), reclaiming ~22 KB of internal DRAM permanently. The
+now-stale debug instrumentation was removed from `factory.ino` in the same
+cleanup pass (it was `TEMPORARY`/`Remove once the reading is taken` by its
+own comment). Verified: `pio run -e tlora_pager` (Flash 66.7 %, RAM 27.4 % /
+89,824 B) + `pio run -e emulator_lora_pager` (unaffected — `factory.ino`/
+`system.cpp`'s `getArduinoLoopTaskStackSize()` are `#ifdef ARDUINO`-only) +
+`pio test -e native_test` (28/28) all pass. ⚠️ Still worth a final on-device
+soak (NTP retries, WiFi reconnects, radio activity) to confirm 8 KB holds
+under the least-common-path stack depth, not just the warm-idle case
+measured — add to the smoke-test checklist if not already covered.
+`commit ddf4f13`.
 
 ### P3.8 — `tg_bg` stack 6 KB is below the TLS floor its own twin documents (BUG) ✅ Done
 
@@ -312,7 +331,7 @@ and trim toward ~20 KB; or (b) move the stack to PSRAM via `xTaskCreateWithCaps`
 before assuming) — frees all 32 KB at a small context-switch latency cost. Risk:
 medium — measure before shrinking. ⚠️ HW-test-required.
 
-### P3.10 — `recorderTask`: priority 12, unpinned — can preempt LVGL (MED-HIGH)
+### P3.10 — `recorderTask`: priority 12, unpinned — can preempt LVGL (MED-HIGH) ✅ Done (pin)
 
 `src/hal/audio.cpp:534` — `xTaskCreate(recorderTask, "app/rec", 8*1024, NULL, 12, …)`
 is unpinned; if scheduled to core 1 it outranks the `lvgl` task (prio 8) and blocks
@@ -322,6 +341,17 @@ shape as known-open P2.6 `playerTask` at `:328` — treat the two together.)
 **Fix:** pin to core 0 (`xTaskCreatePinnedToCore(…, 0)`); afterwards measure
 watermark and consider 8 KB → 4–6 KB. Risk: low for pinning. ⚠️ HW: record while an
 animated screen renders; verify no dropped frames/garbled audio.
+
+**Fixed (pin only):** `xTaskCreate` → `xTaskCreatePinnedToCore(recorderTask,
+"app/rec", 8*1024, NULL, 12, &recorderTaskHandler, 0)` — pure scheduling fix,
+stack size untouched (still 8 KB; the watermark-driven 4–6 KB trim from the
+doc's second half stays open, no reading taken for it). Verified: `pio run -e
+tlora_pager` + `pio run -e emulator_lora_pager` (unaffected — `hal/audio.cpp`
+recorder path is `#ifdef ARDUINO`-only) + `pio test -e native_test` (28/28)
+all pass. ⚠️ HW-test-required still stands for this item: record while an
+animated screen renders and confirm no dropped frames/garbled audio, and take
+the watermark reading for the still-open size trim — both need a device, not
+re-verified live in this pass. `commit f4170f8`.
 
 ### P3.11 — `hub_probe` spawn failure wedges the hub indicator + leaks 8 B (BUG) ✅ Done
 
@@ -434,7 +464,7 @@ emulator; stays off the smoke-test checklist as genuinely cosmetic. `commit e692
 
 | Task | Stack B | Prio | Core | Origin |
 |---|---|---|---|---|
-| `loopTask` | 30 720 **(P3.7)** | 1 | 1 | framework via `hal/system.cpp:189` |
+| `loopTask` | 8 192 ✅ (P3.7, was 30 720) | 1 | 1 | framework via `hal/system.cpp:189` |
 | `lvgl` | 16 384 | 8 | 1 | `hal/lvgl_task.cpp` |
 | `kb_reader` | 4 096 | max−2 | 0 | `hal/keyboard_task.cpp` |
 | `rotary_reader` | 3 072 | max−2 | 0 | `hal/rotary_task.cpp` |
@@ -442,7 +472,7 @@ emulator; stays off the smoke-test checklist as genuinely cosmetic. `commit e692
 | `charge_ind` | 4 096 | 3 | 0 | `hal/charge_task.cpp` |
 | `rotary` (vendor) | 2 048 | 10 | any | vendor `LilyGo_LoRa_Pager.cpp:483` |
 | `app/play` | 8 192 (P2.6 open) | 12 | any | `hal/audio.cpp:328` |
-| `app/rec` | 8 192 **(P3.10)** | 12 | any | `hal/audio.cpp:534` |
+| `app/rec` | 8 192 ✅ pinned core 0 (P3.10) | 12 | 0 | `hal/audio.cpp:534` |
 | `ssh_app` | 32 768 **(P3.9)** | 5 | 0 | `apps/ui_ssh.cpp:201` |
 | `tg_fg` | 8 192 | 2 | any | `apps/ui_telegram.cpp:854` |
 | `tg_bg` | 8 192 ✅ (P3.8) | 2 | any | `apps/ui_telegram.cpp:1706` |
@@ -1040,9 +1070,24 @@ Park until a firmware change wants it.
    — needs a firmware-side change that doesn't exist yet) and the
    P2.11/P2.12 product decisions (step 7; P2.5 resolved 2026-07-16 — see
    §E above).
+
+   **A hardware session did materialize (2026-07-16):** a device was attached
+   and the batch above got partially worked. **P3.7 ✅** — the `loopTask`
+   watermark reading was taken (27,572 B free of 30 KB), the stack shrunk to
+   8 KB, and the `factory.ino` debug instrumentation used for the reading was
+   removed. **P3.10 ✅ (pin only)** — `recorderTask` pinned to core 0; the
+   watermark-driven size trim from its second half stays open, no reading was
+   taken for it. **P3.9 and P3.14 are still mid-measurement** — both still
+   carry live `TEMPORARY` watermark-print instrumentation (`ui_ssh.cpp`'s
+   `ssh_app` task, `wireless.cpp`'s `ble_kb_ka` task) with no fix applied yet;
+   deliberately left alone rather than erasing in-progress readings. P3.12
+   and P3.24 were not touched this session. See P3.7/P3.10's entries above for
+   the full writeups.
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
    P3.7/9/10/12/24 verifications), then the P3.12 SD-rail bench and the P3.25 Klio
-   investigation on a sacrificial device.
+   investigation on a sacrificial device. (P3.7 done, P3.10 pinning done — see
+   the 2026-07-16 note above; P3.9/P3.14 watermark readings and P3.10's size
+   trim, P3.12, and P3.24 remain.)
 7. **Product decisions** (P2.11/P2.12, P3.27) whenever the user weighs in. (P2.5
    resolved 2026-07-16 — see §E above.)
 
