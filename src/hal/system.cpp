@@ -190,7 +190,11 @@ int random(int min, int max)
 
 size_t getArduinoLoopTaskStackSize(void)
 {
-    return 30 * 1024;
+    // Measured on-device (OPTIMIZATION_PHASE3.md P3.7): loopTask's high-water
+    // mark holds steady at 27,572 B free out of the old 30 KB (i.e. ~3.1 KB
+    // ever used) across multiple NTP-retry cycles on a warm, WiFi-connected
+    // system. Sized at measured-usage x1.5, rounded up to the nearest 4 KB.
+    return 8 * 1024;
 }
 
 #endif
