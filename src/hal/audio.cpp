@@ -531,8 +531,11 @@ bool hw_rec_start(const char *sd_path)
     // hw_rec_stop() waits for *this* session, not a stale one.
     if (recorderDoneSem) xSemaphoreTake(recorderDoneSem, 0);
 
-    if (xTaskCreate(recorderTask, "app/rec", 8 * 1024, NULL, 12,
-                    &recorderTaskHandler) != pdPASS) {
+    // Pinned to core 0 (OPTIMIZATION_PHASE3.md P3.10): unpinned at prio 12 could
+    // land on core 1 and preempt the lvgl task (prio 8), stalling frames for
+    // codec-frame durations while recording.
+    if (xTaskCreatePinnedToCore(recorderTask, "app/rec", 8 * 1024, NULL, 12,
+                    &recorderTaskHandler, 0) != pdPASS) {
         log_e("recorder: task create failed");
         recorder_running = false;
 #if defined(USING_AUDIO_CODEC)
