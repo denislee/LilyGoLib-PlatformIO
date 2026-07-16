@@ -49,7 +49,7 @@ uint32_t s_deadline_ms = 0;
 void release_transient_gps_power()
 {
     if (s_auto_enabled) {
-        hw_set_gps_enable(false);
+        hw_set_gps_powered(false);
         s_auto_enabled = false;
     }
 }
@@ -80,8 +80,8 @@ bool hw_start_time_sync_gps()
 #ifdef ARDUINO
     hw_stop_time_sync_gps();
 
-    if (!hw_get_gps_enable()) {
-        hw_set_gps_enable(true);
+    if (!hw_get_gps_powered()) {
+        hw_set_gps_powered(true);
         s_auto_enabled = true;
     }
 

@@ -194,7 +194,6 @@ typedef struct {
     uint8_t bt_enable;
     uint8_t radio_enable;
     uint8_t nfc_enable;
-    uint8_t gps_enable;
     uint8_t speaker_enable;
     uint8_t haptic_enable;
     uint8_t show_mem_usage;

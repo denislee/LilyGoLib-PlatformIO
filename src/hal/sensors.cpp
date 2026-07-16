@@ -12,16 +12,21 @@
 
 // --- GPS ---------------------------------------------------------------
 // Only the power-rail toggle survives. The NMEA decode + PPS interrupt path
-// was removed because no app consumes GPS data; the toggle is kept so users
-// can still shut down the GPS module's power rail to save battery.
+// was removed because no app consumes GPS data. There is no persisted
+// enable setting either (see OPTIMIZATION_PHASE3.md P2.5): with nothing to
+// continuously consume a fix, latching the rail on 24/7 only burned tens of
+// mA for nothing. hw_start_time_sync_gps() (gps_time_sync.cpp) is now the
+// sole owner of GPS power, asserting it only transiently for the duration
+// of a sync attempt; these two functions just drive/track that rail state.
+static bool s_gps_powered = false;
 
-bool hw_get_gps_enable() { return user_setting.gps_enable; }
-void hw_set_gps_enable(bool en) {
-    user_setting.gps_enable = en;
+bool hw_get_gps_powered() { return s_gps_powered; }
+void hw_set_gps_powered(bool on) {
+    s_gps_powered = on;
 #ifdef ARDUINO
-    instance.powerControl(POWER_GPS, en);
+    instance.powerControl(POWER_GPS, on);
     delay(10);
-    if (!en) {
+    if (!on) {
         Serial1.end();
     } else {
         Serial1.begin(38400, SERIAL_8N1, GPS_RX, GPS_TX);

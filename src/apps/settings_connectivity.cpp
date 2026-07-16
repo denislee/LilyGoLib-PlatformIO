@@ -3,7 +3,7 @@
  * @brief     Settings » Connectivity subpage. Extracted from ui_settings.cpp;
  *            see settings_internal.h for the cross-TU contract.
  *
- * Toggles: WiFi, Bluetooth, Radio, NFC, GPS, Speaker, Haptic. Plus three
+ * Toggles: WiFi, Bluetooth, Radio, NFC, Speaker, Haptic. Plus three
  * follow-up buttons whose visibility tracks the relevant toggle:
  *   - "WiFi Networks" / "Test Internet"  — shown iff WiFi on
  *   - "NFC Test"                         — shown iff NFC on
@@ -114,15 +114,6 @@ void nfc_enable_cb(lv_event_t *e) {
             lv_group_focus_obj(obj);
         }
     }
-}
-
-void gps_enable_cb(lv_event_t *e) {
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-    bool en = lv_obj_has_state(obj, LV_STATE_CHECKED);
-    local_param.gps_enable = en;
-    hw_set_gps_enable(en);
-    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(obj);
-    if (label) lv_label_set_text(label, en ? " On " : " Off ");
 }
 
 void speaker_enable_cb(lv_event_t *e) {
@@ -352,9 +343,6 @@ void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
     }
     register_subpage_group_obj(sub_page, btn);
 #endif
-
-    btn = create_toggle_btn_row(sub_page, "GPS", hw_get_gps_enable(), gps_enable_cb);
-    register_subpage_group_obj(sub_page, btn);
 
     btn = create_toggle_btn_row(sub_page, "Speaker", hw_get_speaker_enable(), speaker_enable_cb);
     register_subpage_group_obj(sub_page, btn);

@@ -31,7 +31,11 @@ static constexpr uint32_t SETTINGS_MAGIC   = 0x50414752u; // "PAGR"
 // v11: dropped user_setting_params_t.led_indicator_level (removed LED slider).
 // A struct-layout change: the size guard in load already forces a clean
 // defaults-reset on upgrade, and the version bump makes that explicit.
-static constexpr uint16_t SETTINGS_VERSION = 11;
+// v12: dropped user_setting_params_t.gps_enable — GPS has no continuous
+// consumer, so the persisted "keep the rail on" setting just wasted power
+// for nothing; GPS power is now purely transient, owned by
+// hw_start_time_sync_gps() (see hal/gps_time_sync.cpp).
+static constexpr uint16_t SETTINGS_VERSION = 12;
 
 struct SettingsHeader {
     uint32_t magic;
@@ -272,7 +276,11 @@ void hw_init()
     hw_set_charger(user_setting.charger_enable);
     hw_set_charger_current(user_setting.charger_current);
     instance.setMSCPreferSD(user_setting.msc_prefer_sd != 0);
-    hw_set_gps_enable(user_setting.gps_enable);
+    // GPS has no persisted on/off setting or continuous consumer — force the
+    // rail off at boot (the vendor's begin() defaults it HIGH as part of
+    // expander GPIO setup). Only hw_start_time_sync_gps() powers it, and
+    // only transiently, for the duration of a sync attempt.
+    hw_set_gps_powered(false);
     hw_set_speaker_enable(user_setting.speaker_enable);
     hw_set_haptic_enable(user_setting.haptic_enable);
 #endif
@@ -355,7 +363,6 @@ void hw_load_setting()
     user_setting.bt_enable = 0;
     user_setting.radio_enable = 0;
     user_setting.nfc_enable = 0;
-    user_setting.gps_enable = 0;
     user_setting.speaker_enable = 0;
     user_setting.haptic_enable = 1;
     user_setting.show_mem_usage = 0;
@@ -408,7 +415,6 @@ void hw_load_setting()
     user_setting.charger_current = 1000;
     user_setting.charger_enable = true;
     user_setting.nfc_enable = 0;
-    user_setting.gps_enable = 0;
     user_setting.speaker_enable = 0;
     user_setting.haptic_enable = 1;
 #endif
@@ -674,7 +680,9 @@ void hw_power_up_all()
     // Revert CPU frequency to user set value
     setCpuFrequencyMhz(user_setting.cpu_freq_mhz);
 
-    if (user_setting.gps_enable) instance.powerControl(POWER_GPS, true);
+    // GPS is intentionally not restored here: it has no persisted enable
+    // setting and no continuous consumer, so it stays off across fake sleep
+    // and is only ever powered transiently by hw_start_time_sync_gps().
     if (user_setting.nfc_enable) instance.powerControl(POWER_NFC, true);
     if (user_setting.haptic_enable) instance.powerControl(POWER_HAPTIC_DRIVER, true);
     instance.powerControl(POWER_KEYBOARD, true);

@@ -85,7 +85,11 @@ void setup()
     // The vendor begin() I2C scan is a debug aid that costs ~100+ ms of I2C
     // probing + serial dump per scan — skip it unconditionally.
     disable_flags |= NO_SCAN_I2C_DEV;
-    if (!settings.gps_enable) disable_flags |= NO_HW_GPS;
+    // Vendor GPS init (UART handshake against its own gps object) is always
+    // skipped: nothing in this codebase reads HW_GPS_ONLINE or touches
+    // instance.gps — hw_start_time_sync_gps() talks to Serial1 directly with
+    // its own TinyGPSPlus instance, transiently, on demand (OPTIMIZATION_PHASE3.md P2.5).
+    disable_flags |= NO_HW_GPS;
     if (!settings.nfc_enable) disable_flags |= NO_HW_NFC;
     if (!settings.haptic_enable) disable_flags |= NO_HW_DRV;
 

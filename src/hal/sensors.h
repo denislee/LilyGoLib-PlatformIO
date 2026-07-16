@@ -7,11 +7,12 @@
 #include "types.h"
 
 // --- GPS ---
-// The GPS module is wired to power-rail control + a UART. We expose only the
-// power toggle: no app currently consumes GPS data, so the parsing/PPS
-// plumbing has been dropped.
-bool hw_get_gps_enable();
-void hw_set_gps_enable(bool en);
+// The GPS module is wired to power-rail control + a UART. No app consumes
+// continuous GPS data (the parsing/PPS plumbing has been dropped), so there
+// is no persisted on/off setting — these just drive/track the power rail
+// for hw_start_time_sync_gps()'s transient use (see hal/gps_time_sync.cpp).
+bool hw_get_gps_powered();
+void hw_set_gps_powered(bool on);
 
 // --- IMU ---
 void hw_register_imu_process();
