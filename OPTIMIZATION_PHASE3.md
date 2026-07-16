@@ -952,7 +952,7 @@ Park until a firmware change wants it.
 | Item | Where documented | State |
 |---|---|---|
 | **Hardware smoke-test checklist** (radio/audio/§2.13/§2.17/P2.1/P2.2/P2.8) | `OPTIMIZATION_PROGRESS.md` | ☐ blocks trusting those passes; extend with P3.7–P3.12 verifications |
-| P2.5 GPS rail latched 24/7 when enabled | PHASE2 §A | ☐ product decision |
+| P2.5 GPS rail latched 24/7 when enabled | PHASE2 §A | ✅ Done (2026-07-16) |
 | P2.6 `playerTask` 8 KB boot-time stack | PHASE2 §A | ☐ pair with P3.10 |
 | P2.9 Journal reconcile on LVGL thread | PHASE2 §B | ☐ only if post-sync jank observed |
 | P2.10(B) notes-sync full upload body in device RAM | PHASE2 §B | ☐ device-side, independent of D5's server-side batching |
@@ -1038,11 +1038,13 @@ Park until a firmware change wants it.
    once, so batch them into one bench pass rather than trickling in. If no
    hardware session materializes, the remaining work in this doc is D14 (parked
    — needs a firmware-side change that doesn't exist yet) and the
-   P2.11/P2.5/P2.12 product decisions (step 7).
+   P2.11/P2.12 product decisions (step 7; P2.5 resolved 2026-07-16 — see
+   §E above).
 6. **Hardware session:** run the full smoke-test checklist (phases 1–2 backlog +
    P3.7/9/10/12/24 verifications), then the P3.12 SD-rail bench and the P3.25 Klio
    investigation on a sacrificial device.
-7. **Product decisions** (P2.5/P2.11/P2.12, P3.27) whenever the user weighs in.
+7. **Product decisions** (P2.11/P2.12, P3.27) whenever the user weighs in. (P2.5
+   resolved 2026-07-16 — see §E above.)
 
 Per repo convention: one `<code>` commit + one `<docs>` commit per item; update this
 file's findings with a ✅/status note as they land; keep
