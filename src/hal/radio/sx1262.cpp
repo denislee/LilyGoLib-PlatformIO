@@ -35,6 +35,12 @@ void default_params(radio_params_t &params)
 int16_t configure(const radio_params_t &params)
 {
 #ifdef ARDUINO
+    // Wake the chip before touching any registers. RadioLib requires the chip
+    // to be in standby (not sleep) before register writes succeed after a
+    // prior radio.sleep() call. This makes every configure() path — TX, RX,
+    // or RADIO_DISABLE — self-healing if the chip was sleeping.
+    radio.standby();
+
     int16_t state = radio.setFrequency(params.freq);
     if (state == RADIOLIB_ERR_INVALID_FREQUENCY) {
         Serial.println(F("Selected frequency is invalid for this module!"));
@@ -65,7 +71,7 @@ int16_t configure(const radio_params_t &params)
     }
 
     switch (params.mode) {
-    case RADIO_DISABLE: state = radio.standby();          break;
+    case RADIO_DISABLE: state = radio.sleep();             break;
     case RADIO_TX:      state = radio.startTransmit(""); break;
     case RADIO_RX:      state = radio.startReceive();    break;
     case RADIO_CW:                                        break;
@@ -74,6 +80,15 @@ int16_t configure(const radio_params_t &params)
     return state;
 #else
     (void)params;
+    return 0;
+#endif
+}
+
+int16_t sleep()
+{
+#ifdef ARDUINO
+    return radio.sleep();
+#else
     return 0;
 #endif
 }

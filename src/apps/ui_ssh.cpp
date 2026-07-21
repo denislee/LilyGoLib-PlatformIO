@@ -54,6 +54,13 @@
 #include <libssh/libssh.h>
 #endif
 
+// Tracks whether any SSH backend is currently in the Connected state.
+// Written by the backend (SSH worker task or loopback stub); read by
+// factory.ino loop() as a guard against auto fake-sleep while a terminal
+// session is live. volatile is sufficient: bool read/writes are atomic on
+// ARM Cortex-M, and the compiler must not optimise away the cross-task read.
+static volatile bool s_ssh_session_active = false;
+
 namespace apps {
 namespace {
 
@@ -99,6 +106,7 @@ public:
     void disconnect() override {
         if (state_ == State::Connected) buf_ += "\nConnection closed.\n";
         state_ = State::Idle;
+        s_ssh_session_active = false;
     }
     void send_bytes(const std::string& bytes) override {
         if (state_ != State::Connected) return;
@@ -114,6 +122,7 @@ public:
         if (line == "exit" || line == "logout") {
             buf_ += "logout\n";
             state_ = State::Idle;
+            s_ssh_session_active = false;
             return;
         }
         if (line == "whoami")        buf_ += cfg_.user + "\n";
@@ -126,6 +135,7 @@ public:
         if (state_ == State::Connecting && ticks_until_connect_ > 0
             && --ticks_until_connect_ == 0) {
             state_ = State::Connected;
+            s_ssh_session_active = true;
             buf_ += "Welcome to LilyGo SSH (loopback stub).\n";
             buf_ += "Type 'exit' to disconnect.\n";
             buf_ += prompt();
@@ -312,6 +322,7 @@ private:
         }
 
         state_.store(State::Connected);
+        s_ssh_session_active = true;
 
         // TEMPORARY (OPTIMIZATION_PHASE3.md P3.9 hardware session) — periodic
         // watermark print to size the 32 KB stack from a measurement. The
@@ -356,6 +367,7 @@ private:
         ssh_disconnect(sess);
         ssh_free(sess);
         hal::secret_scrub(cfg_.password);
+        s_ssh_session_active = false;
         state_.store(State::Idle);
     }
 
@@ -1317,3 +1329,7 @@ void SshApp::build_special_keys_row(lv_obj_t* parent) {
 APP_FACTORY(make_ssh_app, SshApp)
 
 }  // namespace apps
+
+// Declared in core/system_hooks.h. Reads the file-scoped volatile flag updated
+// by the SSH backends. Safe to call from any task (factory.ino loop()).
+bool ssh_session_is_active() { return s_ssh_session_active; }

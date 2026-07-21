@@ -47,7 +47,9 @@ namespace {
 constexpr UBaseType_t kTaskPriority = configMAX_PRIORITIES - 2;
 constexpr BaseType_t  kTaskCore     = 0;   // Opposite of Arduino loopTask / LVGL task (core 1).
 constexpr UBaseType_t kQueueDepth   = 16;  // Burst of fast clicks while LVGL is briefly blocked.
-constexpr uint32_t    kFakeSleepIdleMs = 200;  // Idle cadence while the display is off.
+// Fallback cadence while the display is off. hw_rotary_task_notify_wake()
+// from ui_resume_timers() is the real wake path; 1 s is a safety net only.
+constexpr uint32_t    kFakeSleepIdleMs = 1000;
 
 QueueHandle_t s_event_queue = nullptr;
 TaskHandle_t  s_task        = nullptr;
@@ -62,6 +64,11 @@ void enqueue_event(const RotaryMsg_t &ev)
         xQueueReceive(s_event_queue, &discard, 0);
         xQueueSend(s_event_queue, &ev, 0);
     }
+    // Wake the LVGL task immediately so scroll/click renders without waiting
+    // for the kMaxTickMs (200 ms) fallback sleep. xTaskNotifyGive is cheap
+    // and idempotent — multiple gives before the task's ulTaskNotifyTake
+    // collapse to one.
+    hw_lvgl_task_notify_wake();
 }
 
 void rotary_task_fn(void *)

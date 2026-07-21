@@ -7,6 +7,8 @@
 #include "internal.h"
 #include "notes_crypto.h"
 #include "keyboard_task.h"
+#include "radio_chip.h"
+#include "../core/spi_lock.h"
 
 #include <cstring>
 #include <lvgl.h>
@@ -16,6 +18,24 @@ using std::string;
 
 #define NVS_NAME    "pager"
 user_setting_params_t user_setting;
+
+// Tracks the last frequency passed to setCpuFrequencyMhz() so hw_set_cpu_freq()
+// can skip redundant PLL re-locks.  0 = unknown (forces a real set on first call).
+static uint32_t s_cpu_freq_mhz = 0;
+
+void hw_set_cpu_freq(uint32_t mhz)
+{
+    if (mhz == 0 || mhz == s_cpu_freq_mhz) return;
+#ifdef ARDUINO
+    setCpuFrequencyMhz(mhz);
+#endif
+    s_cpu_freq_mhz = mhz;
+}
+
+uint32_t hw_get_cpu_freq()
+{
+    return s_cpu_freq_mhz;
+}
 
 // Settings blob schema guard.
 //
@@ -654,6 +674,12 @@ void hw_shutdown()
 void hw_power_down_all()
 {
 #ifdef ARDUINO
+    // Disable BQ25896 continuous ADC measurement during fake sleep — nobody
+    // reads the gauge while LVGL is blocked, so the ~0.5–1 mA conversion
+    // current is pure waste.  Mirrors vendor lightSleep() (LilyGo_LoRa_Pager.cpp:685).
+#if defined(USING_PPM_MANAGE)
+    instance.ppm.disableMeasure();
+#endif
     instance.powerControl(POWER_GPS, false);
     instance.powerControl(POWER_NFC, false);
     instance.powerControl(POWER_HAPTIC_DRIVER, false);
@@ -666,7 +692,29 @@ void hw_power_down_all()
     // both need ≥80MHz — dropping to 40MHz while either link is up severs
     // it, so hold at 80MHz in that case.
     bool hold_80 = hw_get_ble_kb_connected() || hw_get_wifi_connected();
-    setCpuFrequencyMhz(hold_80 ? 80 : 40);
+    hw_set_cpu_freq(hold_80 ? 80 : 40);
+
+    // Sleep the radio chip — vendor lightSleep() parity (LilyGo_LoRa_Pager.cpp:687).
+    // STANDBY_RC draws ~0.6–1.6 mA; sleep is <1 µA. SPI lock required because
+    // radio_chip::sleep() bypasses hw_set_radio_params() and its internal lock.
+    // Does NOT touch user_setting.radio_enable — intent is preserved across wake.
+    {
+        core::ScopedSpiLock spi;
+        radio_chip::sleep();
+    }
+
+    // PB.2 — escalate WiFi power-save to MAX_MODEM during fake sleep.
+    // LVGL timers (incl. the 60 s Telegram poll) are frozen while fake-sleeping,
+    // so there is no inbound-latency consumer — MAX_MODEM lets the RF front-end
+    // sleep for the listen interval, saving ~1–5 mA while associated.
+    // No-op when WiFi is disconnected.
+    hw_wifi_powersave_sleep();
+
+    // Suspend the three BHI260 virtual sensors (ACCEL_PASSTHROUGH, GAME_ROTATION_VECTOR,
+    // DEVICE_ORIENTATION).  During fake sleep the LVGL task is blocked so sensor.update()
+    // never runs and the BHI260 FIFO just fills forever — pure waste (~0.5–1 mA on I2C
+    // + sensor compute).  BHI260 is I2C, not SPI, so no ScopedSpiLock needed here.
+    hw_unregister_imu_process();
 #endif
 }
 
@@ -674,7 +722,7 @@ void hw_power_up_all()
 {
 #ifdef ARDUINO
     // Revert CPU frequency to user set value
-    setCpuFrequencyMhz(user_setting.cpu_freq_mhz);
+    hw_set_cpu_freq(user_setting.cpu_freq_mhz);
 
     // GPS is intentionally not restored here: it has no persisted enable
     // setting and no continuous consumer, so it stays off across fake sleep
@@ -683,7 +731,29 @@ void hw_power_up_all()
     if (user_setting.haptic_enable) instance.powerControl(POWER_HAPTIC_DRIVER, true);
     instance.powerControl(POWER_KEYBOARD, true);
     hw_enable_keyboard();
+    // Re-enable BQ25896 continuous ADC measurement so the battery gauge is
+    // live again after wake.  Mirrors vendor lightSleep() (LilyGo_LoRa_Pager.cpp:756).
+#if defined(USING_PPM_MANAGE)
+    instance.ppm.enableMeasure();
+#endif
     // Speaker is only powered on when needed by playback routines and if enabled
+
+    // Restore the radio to the user-configured state after the sleep placed in
+    // hw_power_down_all(). configure()'s top-of-function radio.standby() self-heals
+    // the chip from sleep before re-applying settings. hw_set_radio_enable →
+    // hw_set_radio_params already takes ScopedSpiLock internally — no extra lock here.
+    hw_set_radio_enable(user_setting.radio_enable);
+
+    // PB.2 — restore WiFi power-save to MIN_MODEM after fake sleep.
+    // Reverts the MAX_MODEM escalation applied in hw_power_down_all() so normal
+    // beacon-wakeup cadence resumes for any outbound requests (hub probe, etc.).
+    // No-op when WiFi is disconnected.
+    hw_wifi_powersave_active();
+
+    // Re-register the three BHI260 virtual sensors suspended in hw_power_down_all().
+    // This includes the full sensor-table dump (~50 ms) — acceptable for wake feel.
+    // BHI260 is I2C, not SPI, so no ScopedSpiLock needed here.
+    hw_register_imu_process();
 #endif
 }
 

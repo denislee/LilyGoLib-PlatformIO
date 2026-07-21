@@ -37,6 +37,14 @@ void hw_wifi_forget();  // drop every saved network
 // restore the prior session — we have to drive WiFi.begin() ourselves.
 void hw_wifi_reconnect_saved();
 
+// PB.2 — power-save escalation for fake sleep.
+// hw_wifi_powersave_sleep() escalates to WIFI_PS_MAX_MODEM when connected,
+// letting the RF front-end sleep for the listen interval during fake sleep.
+// hw_wifi_powersave_active() restores WIFI_PS_MIN_MODEM on wake.
+// Both are no-ops when WiFi is disconnected or (on the emulator) unconstrained.
+void hw_wifi_powersave_sleep();
+void hw_wifi_powersave_active();
+
 // --- HTTP (blocking; require an active WiFi connection) ---
 // GET the URL and append the body to `out`. Returns true on 2xx response.
 // `error` (optional) receives a short diagnostic on failure.

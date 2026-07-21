@@ -105,6 +105,15 @@ int16_t configure(const radio_params_t &params)
 #endif
 }
 
+int16_t sleep()
+{
+#ifdef ARDUINO
+    return radio.sleep();
+#else
+    return 0;
+#endif
+}
+
 } // namespace radio_chip
 
 

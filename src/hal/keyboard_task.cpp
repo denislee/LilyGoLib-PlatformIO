@@ -48,11 +48,17 @@ struct KeyEvent {
 
 constexpr UBaseType_t kTaskPriority     = configMAX_PRIORITIES - 2;
 constexpr BaseType_t  kTaskCore         = 0;   // Arduino loop runs on core 1
-constexpr uint32_t    kPollMs           = 10;  // Faster than the 100 ms fallback in LilyGoKeyboard.
+constexpr uint32_t    kPollMs           = 20;  // ~50 Hz (was 10 ms/100 Hz). Halves I2C + instance-lock
+                                                // churn with no perceptible latency (20 ms is imperceptible
+                                                // to human typing). Auto-repeat uses tick comparison so its
+                                                // delay/rate are unaffected; they're simply evaluated at
+                                                // 20 ms granularity instead of 10 ms.
 constexpr UBaseType_t kQueueDepth       = 32;
 constexpr uint32_t    kRepeatDelayMs    = 500; // Hold time before auto-repeat kicks in.
 constexpr uint32_t    kRepeatIntervalMs = 90;  // ~11 Hz repeat rate once engaged.
-constexpr uint32_t    kFakeSleepIdleMs  = 200; // Fallback re-check cadence while display off.
+// Fallback re-check while display off. hw_keyboard_task_notify_wake() from
+// ui_resume_timers() is the real wake path; 1 s here is a safety net only.
+constexpr uint32_t    kFakeSleepIdleMs  = 1000;
 
 QueueHandle_t s_event_queue = nullptr;
 TaskHandle_t  s_task        = nullptr;
@@ -85,6 +91,12 @@ void enqueue_event(const KeyEvent &ev)
         xQueueReceive(s_event_queue, &discard, 0);
         xQueueSend(s_event_queue, &ev, 0);
     }
+    // Wake the LVGL task immediately so input renders without waiting for
+    // the kMaxTickMs (200 ms) fallback sleep. xTaskNotifyGive is cheap and
+    // idempotent — multiple gives before the task's ulTaskNotifyTake
+    // collapse to one. Safe here even though the drain loop holds the
+    // instance mutex: the LVGL task will simply block on it until we release.
+    hw_lvgl_task_notify_wake();
 }
 
 void keyboard_task_fn(void *)

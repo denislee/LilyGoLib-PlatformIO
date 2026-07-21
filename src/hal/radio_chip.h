@@ -28,4 +28,10 @@ void default_params(radio_params_t &p);
 // and may special-case `RADIO_CW` where the chip supports it.
 int16_t configure(const radio_params_t &p);
 
+// Put the chip into its lowest-power sleep state. Caller must hold the SPI
+// lock. Returns RADIOLIB_ERR_NONE on success. After this call the chip must
+// be woken (standby) before any register writes — configure() handles that
+// via the top-of-function radio.standby() wake call.
+int16_t sleep();
+
 } // namespace radio_chip

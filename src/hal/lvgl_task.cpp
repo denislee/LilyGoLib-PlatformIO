@@ -34,11 +34,22 @@ namespace {
 constexpr UBaseType_t kTaskPriority = 8;
 constexpr BaseType_t  kTaskCore     = 1;
 // Fallback re-check cadence while the display is off. Normally the task is
-// woken instantly by hw_lvgl_task_notify_wake() (wake / editor-switch); this
-// timeout only bounds latency if a notification is ever missed, so it can be
-// generous without hurting responsiveness.
-constexpr uint32_t    kFakeSleepIdleMs = 200;
-constexpr uint32_t    kMaxTickMs    = 16;
+// woken instantly by hw_lvgl_task_notify_wake() (from ui_resume_timers() on
+// wake or an editor-switch); this 1 s timeout is only a safety net so a
+// missed notify still recovers, without waking 5×/s as the 200 ms value did.
+constexpr uint32_t    kFakeSleepIdleMs = 1000;
+// Cap for lv_timer_handler()'s returned deadline while the display is on.
+// lv_timer_handler() returns the real next deadline — small values when
+// animations or timers are running, and large values (≥ LV_DEF_REFR_PERIOD =
+// 33 ms) when the screen is fully static. We honor that deadline instead of
+// forcing a 60 Hz wake-up on every iteration; a fully static screen now
+// sleeps up to 200 ms between LVGL ticks, cutting ~60 unnecessary mutex
+// acquisitions/s to near zero. Active animations and timers are unaffected
+// because they return deadlines well below 33 ms.
+// Input immediacy is preserved: keyboard_task.cpp and rotary_task.cpp both
+// call hw_lvgl_task_notify_wake() from their enqueue_event() so key/scroll
+// events wake this task immediately rather than waiting up to 200 ms.
+constexpr uint32_t    kMaxTickMs    = 200;
 // FFat reads plus mbedTLS AES-CBC decrypt plus nested LVGL event dispatch
 // (e.g. menu rebuild from a click handler) easily cleared 6KB on 8KB stacks.
 constexpr uint32_t    kStackBytes   = 16384;

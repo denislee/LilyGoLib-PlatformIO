@@ -221,7 +221,12 @@ void hw_unregister_imu_process()
 #if defined(ARDUINO)
 #if defined(USING_BHI260_SENSOR)
     if (hw_get_device_online() & HW_BHI260AP_ONLINE) {
+        // Disable all three virtual sensors that hw_register_imu_process() enables —
+        // they must mirror each other exactly.  Previously only GAME_ROTATION_VECTOR
+        // was disabled here, leaving ACCEL_PASSTHROUGH and DEVICE_ORIENTATION running.
+        instance.sensor.configure(SensorBHI260AP::ACCEL_PASSTHROUGH, 0, 0);
         instance.sensor.configure(SensorBHI260AP::GAME_ROTATION_VECTOR, 0, 0);
+        instance.sensor.configure(SensorBHI260AP::DEVICE_ORIENTATION, 0, 0);
     }
 #elif defined(USING_BMA423_SENSOR)
     if (hw_get_device_online() & HW_BMA423_ONLINE) {

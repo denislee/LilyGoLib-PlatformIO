@@ -15,6 +15,12 @@
 #include "hal/notes_crypto.h"
 #include "event_define.h"
 #include "core/system_hooks.h"
+#include "core/input_focus.h"
+
+// Vendor entry point: sets a volatile flag consumed by the rotary task to run
+// perform_fake_sleep_toggle() — the same path as a long-press. Declared here
+// rather than in a header because it is only used from this translation unit.
+extern "C" void lilygo_request_fake_sleep_toggle();
 
 #include <string>
 
@@ -64,7 +70,7 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 
 void setup()
 {
-    setCpuFrequencyMhz(240);
+    hw_set_cpu_freq(240);
 
     Serial.begin(115200);
 
@@ -74,12 +80,9 @@ void setup()
     user_setting_params_t settings;
     hw_get_user_setting(settings);
 
-    // Line 67 already set 240 MHz for a fast, deterministic boot before
-    // settings were loaded; skip the redundant PLL re-init when the saved
-    // setting agrees (the common case) instead of re-applying the same freq.
-    if (settings.cpu_freq_mhz != 240) {
-        setCpuFrequencyMhz(settings.cpu_freq_mhz);
-    }
+    // hw_set_cpu_freq() is a no-op when the freq is already set, so the
+    // common case (settings.cpu_freq_mhz == 240) incurs zero PLL re-init cost.
+    hw_set_cpu_freq(settings.cpu_freq_mhz);
 
     uint32_t disable_flags = 0;
     // The vendor begin() I2C scan is a debug aid that costs ~100+ ms of I2C
@@ -185,40 +188,60 @@ void loop()
         }
     }
 
-    static uint32_t last_freq = 0;
+    // Latch: true after lilygo_request_fake_sleep_toggle() is called but before
+    // the rotary task has consumed the flag and ui_is_fake_sleep() becomes true.
+    // Prevents loop() re-requesting the toggle on every 50 ms tick and bouncing
+    // the device back out of sleep.
+    static bool auto_sleep_pending = false;
+
     if (ui_is_fake_sleep()) {
+        // Clear the latch: the rotary task processed the request and the
+        // device is now confirmed in fake sleep.
+        if (auto_sleep_pending) auto_sleep_pending = false;
         // BLE and WiFi both need ≥80MHz; hold there while either link is
         // up so the fake-sleep power saving doesn't drop them.
+        // hw_set_cpu_freq() is a no-op when hw_power_down_all() already set
+        // this frequency; loop() just keeps it correct if hold_80 changes.
         bool hold_80 = hw_get_ble_kb_connected() || hw_get_wifi_connected();
-        uint32_t fake_sleep_freq = hold_80 ? 80 : 40;
-        if (last_freq != fake_sleep_freq) {
-            setCpuFrequencyMhz(fake_sleep_freq);
-            last_freq = fake_sleep_freq;
-        }
+        hw_set_cpu_freq(hold_80 ? 80 : 40);
     } else {
         // Settings are an in-memory struct, but the loop runs at 20 Hz —
         // refreshing the user-configured CPU freq once per second is plenty
         // and keeps the cached active_freq path branch-only on most ticks.
+        // disp_timeout_second is cached in the same pass so auto-sleep sees
+        // the current setting without a second struct copy per tick.
         static uint32_t last_settings_refresh_ms = 0;
         static uint32_t cached_active_freq = 240;
+        static uint8_t  cached_disp_timeout_sec = 0;
         uint32_t now_ms = millis();
         if (cached_active_freq == 0 || now_ms - last_settings_refresh_ms > 1000) {
             user_setting_params_t settings;
             hw_get_user_setting(settings);
-            cached_active_freq = settings.cpu_freq_mhz;
+            cached_active_freq       = settings.cpu_freq_mhz;
+            cached_disp_timeout_sec  = settings.disp_timeout_second;
             last_settings_refresh_ms = now_ms;
         }
 
         if (inactive_time > 2000 && cached_active_freq > 80) {
-            if (last_freq != 80) {
-                setCpuFrequencyMhz(80);
-                last_freq = 80;
-            }
+            hw_set_cpu_freq(80);
         } else {
-            if (last_freq != cached_active_freq) {
-                setCpuFrequencyMhz(cached_active_freq);
-                last_freq = cached_active_freq;
-            }
+            hw_set_cpu_freq(cached_active_freq);
+        }
+
+        // Auto fake-sleep: fire the vendor toggle when the LVGL inactivity
+        // clock exceeds the user's display-timeout setting and no guarded
+        // activity is in progress. The async latch prevents loop() from
+        // re-requesting the toggle on every subsequent 50 ms tick before the
+        // rotary task has time to process it and set ui_is_fake_sleep().
+        if (!auto_sleep_pending
+                && cached_disp_timeout_sec > 0
+                && inactive_time >= (uint32_t)cached_disp_timeout_sec * 1000
+                && !hw_player_running()
+                && !hw_rec_running()
+                && !core::isTextInputFocused()
+                && !ssh_session_is_active()) {
+            lilygo_request_fake_sleep_toggle();
+            auto_sleep_pending = true;
         }
     }
 

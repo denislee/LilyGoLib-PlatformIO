@@ -256,9 +256,10 @@ void hw_get_monitor_params(monitor_params_t &params)
 
     // Refresh at most once per second while charging (the status bar animates
     // the bolt / rising percent), but back off to 5 s when discharging: the
-    // full sweep below is ~12 I2C gauge/PMU register reads under the instance
-    // mutex, and an idle battery percent barely moves second-to-second. A
-    // freshly-plugged charger is picked up within one 5 s tick.
+    // full sweep below is ~4 I2C gauge register reads (9 removed by PB.14)
+    // plus ~5 PPM reads, all under the instance mutex, and an idle battery
+    // percent barely moves second-to-second. A freshly-plugged charger is
+    // picked up within one 5 s tick.
     uint32_t ttl_ms = cached_params.is_charging ? 1000 : 5000;
     if (last_refresh != 0 && (millis() - last_refresh < ttl_ms)) {
         params = cached_params;
@@ -301,14 +302,6 @@ void hw_get_monitor_params(monitor_params_t &params)
         instance.gauge.refresh();
         params.battery_percent = instance.gauge.getStateOfCharge();
         params.battery_voltage = instance.gauge.getVoltage();
-        params.instantaneousCurrent = instance.gauge.getCurrent();
-        params.remainingCapacity = instance.gauge.getRemainingCapacity();
-        params.fullChargeCapacity = instance.gauge.getFullChargeCapacity();
-        params.standbyCurrent = instance.gauge.getStandbyCurrent();
-        params.temperature = instance.gauge.getTemperature();
-        params.designCapacity = instance.gauge.getDesignCapacity();
-        params.averagePower = instance.gauge.getAveragePower();
-        params.maxLoadCurrent = instance.gauge.getMaxLoadCurrent();
         BatteryStatus batteryStatus = instance.gauge.getBatteryStatus();
 
         // Do NOT derive is_charging from the gauge alone — once the cell hits
@@ -318,19 +311,6 @@ void hw_get_monitor_params(monitor_params_t &params)
         // only veto it here when the gauge confirms a full charge.
         if (batteryStatus.isFullChargeDetected()) {
             params.is_charging = false;
-        }
-
-        if (batteryStatus.isInDischargeMode()) {
-            params.timeToEmpty = instance.gauge.getTimeToEmpty();
-            params.timeToFull = 0;
-        } else {
-            if (batteryStatus.isFullChargeDetected()) {
-                params.timeToFull = 0;
-                params.timeToEmpty = 0;
-            } else {
-                params.timeToEmpty = 0;
-                params.timeToFull = instance.gauge.getTimeToFull();
-            }
         }
     } else {
         // Gauge not online: Fallback to voltage-based percentage calculation

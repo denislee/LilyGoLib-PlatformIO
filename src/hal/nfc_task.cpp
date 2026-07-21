@@ -30,8 +30,13 @@ namespace {
 
 constexpr UBaseType_t kTaskPriority = configMAX_PRIORITIES - 3;
 constexpr BaseType_t  kTaskCore     = 0;
-constexpr uint32_t    kPollMs       = 20;
-constexpr uint32_t    kIdleMs       = 200;  // Cadence while NFC is off / asleep.
+constexpr uint32_t    kPollMs       = 100;  // ~10 Hz — 5× cut in instance-lock traffic vs. the old 50 Hz; tap latency unaffected (RFAL responds as soon as a tag is detected, not on this timer boundary)
+// Fallback cadence while NFC is off or the display is in fake-sleep.
+// hw_start_nfc_discovery() kicks hw_nfc_task_notify_wake() when the user
+// enables NFC, so enable-latency is unaffected. ui_resume_timers() does NOT
+// kick the NFC task, so raising this to 1 s adds up to ~800 ms latency to
+// NFC scan resumption after fake-sleep wake (acceptable — not latency-critical).
+constexpr uint32_t    kIdleMs       = 1000;
 
 TaskHandle_t s_task = nullptr;
 

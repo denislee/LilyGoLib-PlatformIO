@@ -7,10 +7,12 @@
 #include "board_config.h"
 #include "system.h"
 #include "storage.h"
+#include "core/system_hooks.h"
 
 #ifdef ARDUINO
 #include <LilyGoLib.h>
 #include <WiFi.h>
+#include <esp_wifi.h>      // esp_wifi_set_ps() for fine-grained power-save control
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <SD.h>
@@ -27,10 +29,13 @@ static BleKeyboard bleKeyboard;
 // iOS is strict about Apple's Accessory Design Guidelines for BLE HID. If the
 // connection interval / latency / supervision timeout drift outside the
 // recommended window, iPhone silently tears the link down after a few minutes.
-// These values sit inside the accepted band: 30–50 ms interval, no slave
-// latency, 6.72 s supervision timeout. The second-stage task also emits an
-// empty HID report every 25 s so iOS sees the peripheral as "live" and does
-// not park the connection during idle periods.
+// These values sit inside the accepted band: 30–50 ms interval, slave latency
+// 10, 6.72 s supervision timeout. Latency 10 means the peripheral answers
+// every 11th connection event instead of every one, cutting idle radio wakes
+// ~10×. Apple-compliance check: max effective interval = 50 ms × (10+1) =
+// 550 ms ≤ 2 s; supervision timeout 6.72 s ≥ 550 ms × 3 = 1.65 s ✓.
+// The second-stage task also emits an empty HID report every 25 s so iOS
+// sees the peripheral as "live" and does not park the connection.
 static TaskHandle_t ble_kb_keepalive_handle = nullptr;
 
 static void ble_kb_apply_ios_conn_params()
@@ -40,8 +45,8 @@ static void ble_kb_apply_ios_conn_params()
     uint8_t n = server->getConnectedCount();
     for (uint8_t i = 0; i < n; ++i) {
         NimBLEConnInfo info = server->getPeerInfo(i);
-        // 0x18=24 (30 ms), 0x28=40 (50 ms), latency 0, timeout 0x2A0=672 (6.72 s).
-        server->updateConnParams(info.getConnHandle(), 0x18, 0x28, 0, 0x2A0);
+        // 0x18=24 (30 ms), 0x28=40 (50 ms), latency 10, timeout 0x2A0=672 (6.72 s).
+        server->updateConnParams(info.getConnHandle(), 0x18, 0x28, 10, 0x2A0);
     }
 }
 
@@ -54,6 +59,16 @@ static void ble_kb_keepalive_task(void *)
     // once the reading is taken.
     uint32_t last_wm_ms = 0;
     for (;;) {
+        // PB.12/Lever3: park during fake sleep — the keyboard rail is cut
+        // while the display is off, so no keystrokes can be sent. Blocking
+        // here removes the 1 Hz wakes. was_connected is cleared so conn-params
+        // re-apply on the next real connect after wake. ui_resume_timers()
+        // calls hw_ble_kb_task_notify_wake() to unblock immediately on wake.
+        if (ui_is_fake_sleep()) {
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+            was_connected = false;
+            continue;
+        }
         uint32_t wm_now = millis();
         if (wm_now - last_wm_ms > 15000) {
             Serial.printf("[stackwm] ble_kb_ka free=%u B\n",
@@ -127,6 +142,11 @@ void hw_set_wifi_enable(bool en) {
 #ifdef ARDUINO
     if (en) {
         WiFi.mode(WIFI_STA);
+        // Make the Arduino default explicit — determinism, not a behaviour change.
+        // Without this call the stack uses WIFI_PS_MIN_MODEM by default, but
+        // keeping it implicit means hw_wifi_powersave_active() cannot reliably
+        // restore MIN after a fake-sleep wake (the baseline would be unknown).
+        WiFi.setSleep(WIFI_PS_MIN_MODEM);
         hw_wifi_reconnect_saved();
     } else {
         WiFi.disconnect(true);
@@ -142,6 +162,33 @@ void hw_wifi_reconnect_saved()
     std::string s, pw;
     if (wifi_load_saved(s, pw)) {
         WiFi.begin(s.c_str(), pw.c_str());
+    }
+#endif
+}
+
+// PB.2 — WiFi power-save wrappers called by hw_power_down_all / hw_power_up_all.
+//
+// While the device is in fake sleep the LVGL timer that drives the 60 s Telegram
+// poll is frozen, so there is no inbound-latency consumer to worry about.
+// MAX_MODEM lets the RF front-end sleep for the full listen interval instead of
+// waking every DTIM beacon, saving an estimated 1–5 mA while associated.
+// The guard on hw_get_wifi_connected() means we touch the stack only when there
+// is an active association — if WiFi is off or disconnected the calls are no-ops.
+void hw_wifi_powersave_sleep()
+{
+#ifdef ARDUINO
+    if (hw_get_wifi_connected()) {
+        esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+    }
+#endif
+}
+
+void hw_wifi_powersave_active()
+{
+#ifdef ARDUINO
+    if (hw_get_wifi_connected()) {
+        // Restore the explicit baseline set in hw_set_wifi_enable().
+        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     }
 #endif
 }
@@ -577,6 +624,11 @@ void hw_set_ble_kb_enable()
 #ifdef CONFIG_BLE_KEYBOARD
     bleKeyboard.setName("lilygo-pager");
     bleKeyboard.begin();
+    // PB.12/Lever4: lower TX power from the +3 dBm default to 0 dBm.
+    // A BLE HID keyboard is used at < 1 m; the extra 3 dB buys nothing while
+    // idle-connected. Signature confirmed from NimBLE-Arduino 2.2.3 vendored
+    // header: setPower(int8_t dbm). Bench-tunable default.
+    NimBLEDevice::setPower(0);
     // BleKeyboard's begin() calls setSecurityAuth(false,false,false), which
     // leaves bonding off — iOS then re-prompts "Allow" on every reconnect.
     // Re-enable bonding with Just Works pairing so the link key persists.
@@ -677,5 +729,17 @@ void hw_set_ble_key(media_key_value_t key)
 
     }
 #endif
+#endif
+}
+
+// PB.12/Lever3: unblock the BLE keepalive task when leaving fake sleep.
+// Called from ui_resume_timers() alongside the LVGL/keyboard/rotary kicks.
+// Safe from any task context — a give while the task is running simply
+// leaves the notification pending for the next take. No-op on the emulator
+// and on pager builds that have USING_BLE_KEYBOARD unset.
+void hw_ble_kb_task_notify_wake()
+{
+#if defined(ARDUINO) && defined(USING_BLE_KEYBOARD)
+    if (ble_kb_keepalive_handle) xTaskNotifyGive(ble_kb_keepalive_handle);
 #endif
 }

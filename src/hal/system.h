@@ -70,5 +70,13 @@ void hw_set_user_setting(user_setting_params_t &param);
 
 void hw_get_heap_info(uint32_t &total, uint32_t &free);
 
+// Tracked CPU-frequency setter — calls setCpuFrequencyMhz() only when the
+// requested frequency differs from the last set value, eliminating redundant
+// PLL re-locks across the hw_power_down_all / hw_power_up_all / loop() paths.
+// No-op when mhz == 0.  On the emulator the tracker advances without calling
+// the Arduino API (which doesn't exist there).
+void     hw_set_cpu_freq(uint32_t mhz);
+uint32_t hw_get_cpu_freq();
+
 // UI helper exposed from factory/ui_main for HAL-layer callers.
 void ui_msg_pop_up(const char *title_txt, const char *msg_txt);

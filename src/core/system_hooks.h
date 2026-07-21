@@ -49,6 +49,11 @@ void hw_lvgl_task_notify_wake();
 void hw_keyboard_task_notify_wake();
 void hw_rotary_task_notify_wake();
 void hw_charge_task_on_fake_sleep_enter();
+//   - hw_ble_kb_task_notify_wake(): the display is coming back
+//     (ui_resume_timers); the BLE keepalive task should resume so conn-params
+//     can be re-applied after a sleep during which the iOS link may have
+//     dropped. No-op on emulator and on builds without USING_BLE_KEYBOARD.
+void hw_ble_kb_task_notify_wake();
 
 // Vendor-compat aliases for the instance lock. New in-tree code should
 // prefer core::ScopedInstanceLock directly.
@@ -63,3 +68,9 @@ extern bool editor_auto_edit;
 // Menu panel visibility. Thin wrappers over core::System.
 void menu_show();
 void menu_hidden();
+
+// True while any SSH session (LibSshBackend or loopback stub) is in the
+// Connected state. Set/cleared by ui_ssh.cpp; read by factory.ino loop() as a
+// guard that prevents auto fake-sleep while a live terminal session is open.
+// Safe to call from any task — backed by a volatile bool.
+bool ssh_session_is_active();
