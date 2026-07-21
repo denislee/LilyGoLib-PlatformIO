@@ -535,12 +535,16 @@ potentially bigger than everything above combined, both risky under Arduino:
 ## 6. Worktree caveats at analysis time
 
 - `src/hal/wireless.cpp` + `src/apps/ui_ssh.cpp` carry the **TEMPORARY P3.14/P3.9
-  stack-watermark prints** (uncommitted, mid-measurement — phase-3's 2026-07-16
-  session). The `ble_kb_ka` print itself wakes the serial path every 15 s; don't
-  count it in any bench baseline, and finish those readings first.
+  stack-watermark prints** — **now committed in `51c71a6`** (were uncommitted at
+  analysis time), still mid-measurement from phase-3's 2026-07-16 session. The
+  `ble_kb_ka` print itself wakes the serial path every 15 s; don't count it in any
+  bench baseline, and finish those readings first. Removal is deferred until the
+  P3.9/P3.14 stack readings are captured — the process is take-reading → land the
+  stack trim → remove the print, so pulling the prints early forfeits both.
 - `src/apps/ui_settings.cpp` carries the unrelated settings-shortcut feature diff
-  with a **known intermittent back-navigation crash** (flagged in P3.19's entry).
-  Bench sessions that navigate settings should expect it.
+  (**also committed in `51c71a6`**) with a **known intermittent back-navigation
+  crash** (flagged in P3.19's entry). Bench sessions that navigate settings should
+  expect it.
 
 ## 7. Suggested execution order
 
