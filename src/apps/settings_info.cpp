@@ -54,7 +54,12 @@ void sys_timer_event_cb(lv_timer_t *)
     if (hw_get_wifi_connected()) {
         lv_label_set_text_fmt(sys_label.wifi_rssi_label, "%d", hw_get_wifi_rssi());
     }
-    lv_label_set_text_fmt(sys_label.batt_voltage_label, "%d mV", hw_get_battery_voltage());
+    // Read through the TTL-cached sweep rather than hw_get_battery_voltage(),
+    // which forces a full gauge.refresh() every second. <=5 s staleness on a
+    // static voltage label is fine, and this shares the status bar's cache. (PB.15)
+    monitor_params_t mp;
+    hw_get_monitor_params(mp);
+    lv_label_set_text_fmt(sys_label.batt_voltage_label, "%d mV", mp.battery_voltage);
 
     if (!sys_label.info_loaded) {
         std::string wifi_ssid = "N/A";

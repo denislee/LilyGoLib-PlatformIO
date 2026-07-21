@@ -9,6 +9,7 @@
  *   widgets: menu, quit_btn, settings_main_page, settings_exit_btn
  *                                       — destroyed via lv_obj_del then nulled
  *   arrays:  main_page_group_items[]    — cleared, count reset to 0
+ *            settings_shortcuts[]       — cleared, count reset to 0
  *   subpages: every settings_X / notes_sec namespace's reset_state() fires
  *             via the settings_internal.h contract to null its cached state
  * Each settings_X.cpp is responsible for its own subpage state; ui_sys_exit
@@ -69,6 +70,82 @@ static void add_main_page_group_item(lv_obj_t *obj)
         main_page_group_items[main_page_group_count++] = obj;
     }
     lv_group_add_obj(menu_g, obj);
+}
+
+// --- Main-page keyboard shortcuts ---------------------------------------
+// Every grid tile gets a single-letter shortcut: a key-cap badge is drawn on
+// the tile (so it's self-documenting) and the key is wired so pressing it on
+// the physical keyboard focuses + activates that tile. LV_EVENT_KEY only
+// fires on the *focused* widget, so the handler is attached to every tile
+// (and the shared back button); whichever holds focus catches the key and
+// dispatches to the mapped target. Mirrors the home-screen shortcut
+// convention in menu_app.cpp. Only active on the root page — the handler
+// bails when a subpage is open so letters typed into subpage fields (or a
+// focused back button on a subpage) never trigger a jump.
+#define MAX_SETTINGS_SHORTCUTS 32
+static struct {
+    char key;            // uppercase ASCII
+    lv_obj_t *target;    // tile to activate when the key is pressed
+} settings_shortcuts[MAX_SETTINGS_SHORTCUTS];
+static uint8_t settings_shortcut_count = 0;
+
+static char shortcut_upper(uint32_t k)
+{
+    return (k >= 'a' && k <= 'z') ? (char)(k - 'a' + 'A') : (char)k;
+}
+
+static void settings_shortcut_key_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_KEY) return;
+    // Root page only: on a subpage the tiles aren't focused anyway, but the
+    // shared back button is — guard so its key events don't jump pages.
+    if (!menu || lv_menu_get_cur_main_page(menu) != settings_main_page) return;
+    char key = shortcut_upper(lv_event_get_key(e));
+    for (uint8_t i = 0; i < settings_shortcut_count; i++) {
+        if (settings_shortcuts[i].key == key && settings_shortcuts[i].target) {
+            lv_obj_t *t = settings_shortcuts[i].target;
+            lv_group_focus_obj(t);
+            lv_obj_send_event(t, LV_EVENT_CLICKED, NULL);
+            return;
+        }
+    }
+}
+
+// Draw the small key-cap badge on a tile, flush to the right edge. The tile
+// is a flex row [icon | text]; letting the text label take the slack pushes
+// the badge to the far right, vertically centered.
+static void add_shortcut_badge(lv_obj_t *cont, char key)
+{
+    lv_obj_t *text_label = lv_obj_get_child(cont, 1); // 0 = icon, 1 = text
+    if (text_label) lv_obj_set_flex_grow(text_label, 1);
+
+    lv_obj_t *badge = lv_label_create(cont);
+    char txt[2] = { key, '\0' };
+    lv_label_set_text(badge, txt);
+    lv_obj_set_style_text_font(badge, get_small_font(), 0);
+    lv_obj_set_style_text_color(badge, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_bg_color(badge, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_20, 0);
+    lv_obj_set_style_radius(badge, 4, 0);
+    lv_obj_set_style_pad_hor(badge, 4, 0);
+    lv_obj_set_style_pad_ver(badge, 1, 0);
+    lv_obj_set_style_border_width(badge, 1, 0);
+    lv_obj_set_style_border_color(badge, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_border_opa(badge, LV_OPA_50, 0);
+}
+
+// Attach a shortcut to a freshly created tile: record key→tile, wire the key
+// handler, and draw the badge.
+static void settings_register_shortcut(lv_obj_t *cont, char key)
+{
+    if (!cont) return;
+    if (settings_shortcut_count < MAX_SETTINGS_SHORTCUTS) {
+        settings_shortcuts[settings_shortcut_count].key = key;
+        settings_shortcuts[settings_shortcut_count].target = cont;
+        settings_shortcut_count++;
+    }
+    lv_obj_add_event_cb(cont, settings_shortcut_key_cb, LV_EVENT_KEY, NULL);
+    add_shortcut_badge(cont, key);
 }
 
 // External linkage — called from the split-out settings_*.cpp files. See
@@ -624,48 +701,67 @@ void ui_sys_enter(lv_obj_t *parent)
         add_main_page_group_item(c);
     };
 
+    // Grid tile with a single-letter keyboard shortcut (badge + key wiring).
+    // Keys are mnemonic first letters where free, disambiguated on collision
+    // (see the badge on each tile for the exact key). Keep them unique.
+    auto add_grid_item_sc = [&](lv_obj_t *c, char key) {
+        if (!c) return;
+        lv_obj_set_width(c, LV_PCT(48));
+        add_main_page_group_item(c);
+        settings_register_shortcut(c, key);
+    };
+
     // Back button lives on the status bar. Keep the pointer so
     // restore_main_page_group() can focus it when returning from a subpage.
     settings_exit_btn = ui_show_back_button(settings_exit_cb);
+    // So a shortcut still fires when focus sits on the back button (the
+    // initial focus after popping back from a subpage). The handler's
+    // root-page guard keeps it inert while a subpage is open. Cleaned up by
+    // ui_hide_back_button() in ui_sys_exit (it clears all back-button cbs).
+    if (settings_exit_btn) {
+        lv_obj_add_event_cb(settings_exit_btn, settings_shortcut_key_cb,
+                            LV_EVENT_KEY, NULL);
+    }
 
     // Appearance
-    cont = create_subpage_backlight(menu, main_page);      add_grid_item(cont);
-    cont = create_subpage_fonts(menu, main_page);          add_grid_item(cont);
+    cont = create_subpage_backlight(menu, main_page);      add_grid_item_sc(cont, 'D'); // Display
+    cont = create_subpage_fonts(menu, main_page);          add_grid_item_sc(cont, 'F'); // Fonts
     // Time & power
-    cont = create_subpage_datetime(menu, main_page);       add_grid_item(cont);
-    cont = create_subpage_otg(menu, main_page);            add_grid_item(cont);
+    cont = create_subpage_datetime(menu, main_page);       add_grid_item_sc(cont, 'T'); // Time
+    cont = create_subpage_otg(menu, main_page);            add_grid_item_sc(cont, 'C'); // Charger
     // Connectivity & hardware
-    cont = create_subpage_connectivity(menu, main_page);   add_grid_item(cont);
-    cont = create_device_probe(menu, main_page);           add_grid_item(cont);
+    cont = create_subpage_connectivity(menu, main_page);   add_grid_item_sc(cont, 'N'); // Network
+    cont = create_device_probe(menu, main_page);           add_grid_item_sc(cont, 'V'); // deVices
     // Home screen
-    cont = create_subpage_home_apps(menu, main_page);      add_grid_item(cont);
+    cont = create_subpage_home_apps(menu, main_page);      add_grid_item_sc(cont, 'H'); // Home apps
     // Online services
-    cont = create_subpage_hub(menu, main_page);            add_grid_item(cont);
-    cont = create_subpage_weather(menu, main_page);        add_grid_item(cont);
-    cont = create_subpage_telegram(menu, main_page);       add_grid_item(cont);
+    cont = create_subpage_hub(menu, main_page);            add_grid_item_sc(cont, 'L'); // Local hub
+    cont = create_subpage_weather(menu, main_page);        add_grid_item_sc(cont, 'W'); // Weather
+    cont = create_subpage_telegram(menu, main_page);       add_grid_item_sc(cont, 'G'); // teleGram
     // Notes
-    cont = create_subpage_notes_sync(menu, main_page);     add_grid_item(cont);
-    cont = create_subpage_notes_security(menu, main_page); add_grid_item(cont);
+    cont = create_subpage_notes_sync(menu, main_page);     add_grid_item_sc(cont, 'Y'); // sYnc
+    cont = create_subpage_notes_security(menu, main_page); add_grid_item_sc(cont, 'E'); // sEcurity
     // Storage & files
-    cont = create_subpage_storage(menu, main_page);        add_grid_item(cont);
-    cont = create_files_item(main_page);                   add_grid_item(cont);
+    cont = create_subpage_storage(menu, main_page);        add_grid_item_sc(cont, 'S'); // Storage
+    cont = create_files_item(main_page);                   add_grid_item_sc(cont, 'I'); // fIles
     // App shortcuts
-    cont = create_recordings_item(main_page);              add_grid_item(cont);
-    cont = create_remote_item(main_page);                  add_grid_item(cont);
+    cont = create_recordings_item(main_page);              add_grid_item_sc(cont, 'R'); // Recordings
+    cont = create_remote_item(main_page);                  add_grid_item_sc(cont, 'M'); // reMote
     // System
-    cont = create_subpage_performance(menu, main_page);    add_grid_item(cont);
-    cont = create_subpage_info(menu, main_page);           add_grid_item(cont);
-    cont = create_subpage_imu_debug(menu, main_page);      add_grid_item(cont);
+    cont = create_subpage_performance(menu, main_page);    add_grid_item_sc(cont, 'P'); // Performance
+    cont = create_subpage_info(menu, main_page);           add_grid_item_sc(cont, 'O'); // infO
+    cont = create_subpage_imu_debug(menu, main_page);      add_grid_item_sc(cont, 'U'); // imU
 
     // Plugged-in entries (see core/settings_registry.h). Rendered between
     // the hand-wired grid and the Power Off tile so third-party tiles
-    // don't visually out-rank the first-party ones.
+    // don't visually out-rank the first-party ones. No fixed shortcut — the
+    // set is dynamic, so a stable key can't be reserved.
     for (const auto &e : core::settings_entries()) {
         cont = create_registered_entry(menu, main_page, e);
         add_grid_item(cont);
     }
 
-    cont = create_power_off_item(main_page);             add_grid_item(cont);
+    cont = create_power_off_item(main_page);             add_grid_item_sc(cont, 'X'); // eXit/off
 
     settings_main_page = main_page;
     lv_menu_set_page(menu, main_page);
@@ -727,8 +823,10 @@ void ui_sys_exit(lv_obj_t *parent)
     core::reset_settings_entries();
     main_page_group_count = 0;
     subpage_item_count = 0;
+    settings_shortcut_count = 0;
     memset(main_page_group_items, 0, sizeof(main_page_group_items));
     memset(subpage_items, 0, sizeof(subpage_items));
+    memset(settings_shortcuts, 0, sizeof(settings_shortcuts));
 }
 
 #include "app_registry.h"

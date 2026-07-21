@@ -651,14 +651,6 @@ void hw_shutdown()
 #endif
 }
 
-void hw_light_sleep()
-{
-#ifdef ARDUINO
-    instance.decrementBrightness(0, 5, false);
-    instance.lightSleep((WakeupSource_t)(WAKEUP_SRC_BOOT_BUTTON));
-#endif
-}
-
 void hw_power_down_all()
 {
 #ifdef ARDUINO

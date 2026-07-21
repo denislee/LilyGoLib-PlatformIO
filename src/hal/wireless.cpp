@@ -49,7 +49,17 @@ static void ble_kb_keepalive_task(void *)
 {
     bool was_connected = false;
     uint32_t last_ka_ms = 0;
+    // TEMPORARY (OPTIMIZATION_PHASE3.md P3.14 hardware session) — periodic
+    // watermark print to size the 3072 B stack from a measurement. Remove
+    // once the reading is taken.
+    uint32_t last_wm_ms = 0;
     for (;;) {
+        uint32_t wm_now = millis();
+        if (wm_now - last_wm_ms > 15000) {
+            Serial.printf("[stackwm] ble_kb_ka free=%u B\n",
+                          (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+            last_wm_ms = wm_now;
+        }
         bool now_connected = bleKeyboard.isConnected();
         if (now_connected && !was_connected) {
             // Give the iPhone a moment to finish service discovery / pairing

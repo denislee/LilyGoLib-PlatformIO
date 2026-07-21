@@ -290,8 +290,12 @@ void System::setupGlobalUI() {
                 static bool hub_reachable = false;
                 static bool hub_probe_running = false;
                 static uint8_t hub_tick = 0;
-                
-                if (!hub_probe_running && ++hub_tick >= 10) {
+
+                // Probe every 30 s, matching the freshness window the consumers
+                // actually demand (hub_last_reachable's 30 s max_age). Probing
+                // faster bought nothing but an extra task spawn + TCP SYN (radio
+                // wake) per tick; the status-bar icon now lags <=30 s. (PB.10)
+                if (!hub_probe_running && ++hub_tick >= 30) {
                     hub_tick = 0;
                     hub_probe_running = true;
 #ifdef ARDUINO

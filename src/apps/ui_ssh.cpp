@@ -313,8 +313,22 @@ private:
 
         state_.store(State::Connected);
 
+        // TEMPORARY (OPTIMIZATION_PHASE3.md P3.9 hardware session) — periodic
+        // watermark print to size the 32 KB stack from a measurement. The
+        // high-water mark is a running minimum since task creation, so this
+        // captures the auth/handshake peak too, not just the idle read loop.
+        // Remove once the reading is taken.
+        uint32_t last_wm_ms = 0;
+
         char buf[256];
         while (!stop_flag_.load()) {
+            uint32_t wm_now = millis();
+            if (wm_now - last_wm_ms > 3000) {
+                Serial.printf("[stackwm] ssh_app free=%u B\n",
+                              (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+                last_wm_ms = wm_now;
+            }
+
             int n = ssh_channel_read_nonblocking(ch, buf, sizeof(buf), 0);
             if (n == SSH_ERROR) break;
             if (n > 0) push_output(std::string(buf, buf + n));

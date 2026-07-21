@@ -57,7 +57,6 @@ void hw_notify_time_sync_completed();
 
 void hw_shutdown();
 void hw_sleep();
-void hw_light_sleep();
 void hw_power_down_all();
 void hw_power_up_all();
 void hw_low_power_loop();
