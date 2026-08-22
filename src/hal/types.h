@@ -75,12 +75,28 @@ typedef enum {
     WL_DISCONNECTED = 6
 } wl_status_t;
 
+// Emulator-only fallback constants. The vendor LilyGo_LoRa_Pager.h defines
+// the authoritative hardware values (e.g. DEVICE_MAX_BRIGHTNESS_LEVEL=16 for
+// the AW9364 16-step driver). Wrap each in #ifndef so the vendor header always
+// wins when present — include order must not matter.
+#ifndef DEVICE_MAX_BRIGHTNESS_LEVEL
 #define DEVICE_MAX_BRIGHTNESS_LEVEL 255
+#endif
+#ifndef DEVICE_MIN_BRIGHTNESS_LEVEL
 #define DEVICE_MIN_BRIGHTNESS_LEVEL 0
+#endif
+#ifndef DEVICE_MAX_CHARGE_CURRENT
 #define DEVICE_MAX_CHARGE_CURRENT   1000
+#endif
+#ifndef DEVICE_MIN_CHARGE_CURRENT
 #define DEVICE_MIN_CHARGE_CURRENT   100
+#endif
+#ifndef DEVICE_CHARGE_LEVEL_NUMS
 #define DEVICE_CHARGE_LEVEL_NUMS    12
+#endif
+#ifndef DEVICE_CHARGE_STEPS
 #define DEVICE_CHARGE_STEPS         1
+#endif
 #define USING_RADIO_NAME            "SX12XX"
 
 // Hardware online status bit definitions

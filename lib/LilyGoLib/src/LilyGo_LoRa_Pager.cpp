@@ -1333,6 +1333,9 @@ static void rotaryTask(void *p)
     bool btn_prev_state = HIGH;
     bool long_press_triggered = false;
     bool long_press_active = false;
+    // [LOCAL PATCH P4.11] Timestamp of the last detent or button edge, driving
+    // the idle-adaptive poll cadence below.
+    uint32_t last_activity_ms = 0;
 
     instance.rotary.begin();
     pinMode(ROTARY_C, INPUT_PULLUP);
@@ -1343,6 +1346,7 @@ static void rotaryTask(void *p)
         
         // Falling edge (Pressed)
         if (btn_curr_state == LOW && btn_prev_state == HIGH) {
+            last_activity_ms = millis();   // [LOCAL PATCH P4.11]
             press_time = millis();
             long_press_triggered = false;
             long_press_active = true;
@@ -1350,6 +1354,7 @@ static void rotaryTask(void *p)
         
         // Rising edge (Released)
         if (btn_curr_state == HIGH && btn_prev_state == LOW) {
+            last_activity_ms = millis();   // [LOCAL PATCH P4.11]
             if (!long_press_triggered && !s_display_off) {
                 // It was a short press/click, only allow if display is ON
                 msg.centerBtnPressed = true;
@@ -1380,6 +1385,7 @@ static void rotaryTask(void *p)
         }
         
         if (result || msg.centerBtnPressed) {
+            last_activity_ms = millis();   // [LOCAL PATCH P4.11]
             switch (result) {
             case DIR_CW:
                 msg.dir = ROTARY_DIR_UP;
@@ -1400,7 +1406,14 @@ static void rotaryTask(void *p)
         // imperceptible against a 1 s hold) and cuts this task's GPIO polling on
         // a second core to 10 Hz while nothing is on screen. Scroll events are
         // already ignored above when the display is off, so nothing else is lost.
-        delay(s_display_off ? 100 : 2);
+        // [LOCAL PATCH P4.11] Idle-adaptive poll. Stay at 2 ms for 2 s after the
+        // last detent or button edge so a scroll burst stays crisp, then back off
+        // to 15 ms (~66 Hz). An idle home screen drops this task from 500 GPIO
+        // polls/s to ~66, which is also the precondition for ever reaching
+        // ESP-IDF tickless idle (PB.21). Stay fast while a press is in flight so
+        // the >1000 ms hold detection keeps its resolution.
+        uint32_t idle_ms = millis() - last_activity_ms;
+        delay(s_display_off ? 100 : ((long_press_active || idle_ms < 2000) ? 2 : 15));
     }
     vTaskDelete(NULL);
 }

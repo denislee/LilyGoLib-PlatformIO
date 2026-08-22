@@ -319,10 +319,19 @@ void reset_state()
     s_menu = nullptr;
     s_page = nullptr;
     lbl = labels_t{};
+    // P4.22: unregister the IMU pipeline when the debug page is torn down.
+    // hw_unregister_imu_process() is idempotent — safe if never registered.
+    hw_unregister_imu_process();
 }
 
 void build_subpage(lv_obj_t *menu, lv_obj_t *sub_page)
 {
+    // P4.22: register the IMU pipeline on demand rather than at boot.
+    // hw_register_imu_process() is idempotent — double-open is safe.
+    // hw_probe_imu_info() populates sensor_count (P4.6: heavy probe is lazy).
+    hw_register_imu_process();
+    hw_probe_imu_info();
+
     s_menu = menu;
     s_page = sub_page;
     lv_obj_add_flag(sub_page, LV_OBJ_FLAG_SCROLLABLE);

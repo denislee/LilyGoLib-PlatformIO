@@ -8,6 +8,7 @@
 #include "system.h"
 #include "storage.h"
 #include "core/system_hooks.h"
+#include "ca_certs.h"   // P4.27 root CA bundle
 
 #ifdef ARDUINO
 #include <LilyGoLib.h>
@@ -54,10 +55,6 @@ static void ble_kb_keepalive_task(void *)
 {
     bool was_connected = false;
     uint32_t last_ka_ms = 0;
-    // TEMPORARY (OPTIMIZATION_PHASE3.md P3.14 hardware session) — periodic
-    // watermark print to size the 3072 B stack from a measurement. Remove
-    // once the reading is taken.
-    uint32_t last_wm_ms = 0;
     for (;;) {
         // PB.12/Lever3: park during fake sleep — the keyboard rail is cut
         // while the display is off, so no keystrokes can be sent. Blocking
@@ -68,12 +65,6 @@ static void ble_kb_keepalive_task(void *)
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
             was_connected = false;
             continue;
-        }
-        uint32_t wm_now = millis();
-        if (wm_now - last_wm_ms > 15000) {
-            Serial.printf("[stackwm] ble_kb_ka free=%u B\n",
-                          (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
-            last_wm_ms = wm_now;
         }
         bool now_connected = bleKeyboard.isConnected();
         if (now_connected && !was_connected) {
@@ -88,7 +79,9 @@ static void ble_kb_keepalive_task(void *)
             last_ka_ms = millis();
         }
         was_connected = now_connected;
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // P4.14: 1 Hz while connected (keepalive timing + conn-param watch);
+        // 5 s cadence while disconnected — the 1 Hz was pointless overhead.
+        vTaskDelay(pdMS_TO_TICKS(now_connected ? 1000 : 5000));
     }
 }
 #endif
@@ -235,7 +228,7 @@ int16_t hw_get_wifi_rssi()
 int16_t hw_set_wifi_scan()
 {
 #ifdef ARDUINO
-    printf("hw_set_wifi_scan\n");
+    log_d("hw_set_wifi_scan");
     return  WiFi.scanNetworks(true);
 #endif
     return 0;
@@ -255,10 +248,10 @@ void hw_get_wifi_scan_result(std::vector<wifi_scan_params_t> &list)
 #ifdef ARDUINO
     int16_t nums = WiFi.scanComplete();
     if (nums < 0) {
-        printf("Nothing network found. return code : %d\n", nums);
+        log_d("Nothing network found. return code : %d", nums);
         return;
     } else {
-        printf("find %d network\n", nums);
+        log_d("find %d network", nums);
     }
     // uint8_t networkItem, String &ssid, uint8_t &encryptionType, int32_t &RSSI, uint8_t *&BSSID, int32_t &channel
     wifi_scan_params_t param;
@@ -269,7 +262,7 @@ void hw_get_wifi_scan_result(std::vector<wifi_scan_params_t> &list)
         uint8_t *BSSID;
         int32_t channel;
         WiFi.getNetworkInfo(i, ssid, encryptionType, rssi, BSSID, channel);
-        printf("SSID:%s RSSI:%d\n", ssid.c_str(), rssi);
+        log_d("SSID:%s RSSI:%d", ssid.c_str(), rssi);
         param.authmode = encryptionType;
         param.ssid = ssid.c_str();
         param.rssi = rssi;
@@ -288,12 +281,11 @@ void hw_get_wifi_scan_result(std::vector<wifi_scan_params_t> &list)
 
 void hw_set_wifi_connect(wifi_conn_params_t &params)
 {
-    printf("hw_set_wifi_connect:ssid:<%s> password <%s>\n", params.ssid.c_str(), params.password.c_str());
+    // P4.28: never log the password — SSID only.
+    log_d("hw_set_wifi_connect ssid:<%s>", params.ssid.c_str());
 #ifdef ARDUINO
     String ssid = params.ssid.c_str();
     String password = params.password.c_str();
-    Serial.print("SSID :"); Serial.println(ssid);
-    Serial.print("PWD :"); Serial.println(password);
     if (WiFi.getMode() == WIFI_OFF) {
         WiFi.mode(WIFI_STA);
     }
@@ -440,6 +432,49 @@ void hw_wifi_forget()
 
 #ifdef ARDUINO
 namespace {
+
+// ---------------------------------------------------------------------------
+// P4.15 (TLS session resumption) is NOT implemented, and cannot be on this
+// framework. Verified against framework-arduinoespressif32@3.20014.231204
+// (arduino-esp32 2.0.14): WiFiClientSecure exposes no setSession()/getSession(),
+// and start_ssl_client() calls mbedtls_ssl_setup() immediately before
+// mbedtls_ssl_handshake() with no hook in between — so a session seeded before
+// connect() is discarded by the setup call. Saving sessions without being able
+// to restore them buys nothing and costs static RAM, so no cache is kept here.
+//
+// Unblock path, in preference order:
+//   (a) upgrade the platform to arduino-esp32 3.x, whose NetworkClientSecure
+//       exposes setSession(), then seed from a small per-host LRU cache; or
+//   (b) vendor a patched ssl_client.cpp that accepts an mbedtls_ssl_session*
+//       and calls mbedtls_ssl_set_session() between setup and handshake.
+// Until then every HTTPS request pays a full handshake — which is exactly why
+// P4.16's cadence backoff and the hub-first plain-HTTP LAN path matter.
+// HTTPClient::setReuse(true) below is kept: it is free and helps whenever a
+// single HTTPClient makes more than one request (the redirect chain).
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// P4.27: enable TLS certificate validation.
+//
+// Every HTTPS connection this firmware makes used to run setInsecure(), so the
+// notes-sync token and — worse — the Telegram bot token in the Authorization
+// header travelled over connections any on-path attacker could impersonate with
+// a self-signed cert.
+//
+// The full Mozilla root bundle is used rather than a pinned per-host root
+// table. Verified 2026-08-22, the hosts do not share a root and they rotate:
+// api.github.com chains to Sectigo Root E46, while raw.githubusercontent.com
+// and api.open-meteo.com chain to an ISRG (Let's Encrypt) root. A pinned table
+// that guesses one of those wrong fails closed in the field with no recovery
+// short of a reflash; ~55 KB of flash removes that entire failure class.
+//
+// There is no setInsecure() fallback on failure — that would reintroduce the
+// downgrade this fixes. A validation failure surfaces as a failed request.
+static void setup_secure_for_url(WiFiClientSecure &sec, const char * /*url*/)
+{
+    sec.setCACertBundle(kRootCaBundle);
+}
+
 struct HttpClients {
     WiFiClientSecure secure;
     WiFiClient plain;
@@ -453,11 +488,12 @@ static bool http_open(HttpClients &c, const char *url, std::string *error)
         if (error) *error = "WiFi not connected.";
         return false;
     }
-    c.secure.setInsecure();  // GitHub Pages — we don't ship a root CA bundle.
+    setup_secure_for_url(c.secure, url);   // P4.27: cert validation
     c.http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     c.http.setTimeout(5000);
     c.http.setConnectTimeout(5000);
     c.http.setUserAgent("LilyGoLib/1.0");
+    c.http.setReuse(true);                 // reuse the socket across redirects
 
     bool ok;
     String u = url;
@@ -546,11 +582,12 @@ bool hw_http_request(const char *url,
         return false;
     }
     HttpClients c;
-    c.secure.setInsecure();
+    setup_secure_for_url(c.secure, url);   // P4.27: cert validation
     c.http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     c.http.setTimeout(5000);
     c.http.setConnectTimeout(5000);
     c.http.setUserAgent("LilyGoLib/1.0");
+    c.http.setReuse(true);                 // reuse the socket across redirects
 
     String u = url;
     bool begun = u.startsWith("https://") ? c.http.begin(c.secure, u)
@@ -596,6 +633,97 @@ bool hw_http_request(const char *url,
     if (status_code) *status_code = 0;
     if (error) *error = "Not supported on emulator.";
     return false;
+#endif
+}
+
+// --- WiFi reconnect supervisor (P4.17) --------------------------------
+//
+// Call hw_wifi_supervise(millis()) from the main loop (factory.ino / loop())
+// at any cadence >= 1 Hz. The function is self-throttled: it tracks its own
+// retry timestamps and does nothing if it is not yet time to act.
+//
+// State machine:
+//   IDLE       — connected or wifi_enable just turned false. No action.
+//   BACKOFF    — disconnected; retry hw_wifi_reconnect_saved() on exponential
+//                backoff 30 s -> 60 s -> 300 s (capped). After 5 consecutive
+//                failures, kill WiFi entirely and enter LONG_BACKOFF.
+//   LONG_BACKOFF — WiFi modem off; retry after 15 min, then restart from
+//                  the 30 s backoff schedule.
+//
+// hw_wifi_reconnect_saved() is the existing function that drives WiFi.begin()
+// from the saved credential. setAutoReconnect remains false — we drive it.
+
+void hw_wifi_supervise(uint32_t now_ms)
+{
+#ifdef ARDUINO
+    static uint32_t s_next_ms       = 0;
+    static uint32_t s_backoff_ms    = 30000u;  // 30 s initial
+    static int      s_fails         = 0;
+    static bool     s_armed         = false;
+    static bool     s_off_for_backoff = false;
+
+    if (!user_setting.wifi_enable) {
+        // WiFi disabled by the user — reset everything.
+        s_armed = false; s_fails = 0;
+        s_backoff_ms = 30000u; s_off_for_backoff = false;
+        return;
+    }
+
+    if (hw_get_wifi_connected()) {
+        // Successful association — reset backoff state.
+        if (s_fails || s_off_for_backoff || s_armed) {
+            log_i("[wifi_sv] connected — backoff reset");
+        }
+        s_armed = false; s_fails = 0;
+        s_backoff_ms = 30000u; s_off_for_backoff = false;
+        return;
+    }
+
+    // WiFi should be enabled but we are not connected.
+    if (!s_armed) {
+        // Arm the first retry interval.
+        s_next_ms = now_ms + s_backoff_ms;
+        s_armed = true;
+        return;
+    }
+
+    // Not yet time to retry?
+    if ((int32_t)(now_ms - s_next_ms) < 0) return;
+
+    // --- time to act ---
+
+    if (s_off_for_backoff) {
+        // Restore the modem after the long backoff and try once.
+        log_i("[wifi_sv] long backoff expired — restoring modem");
+        WiFi.mode(WIFI_STA);
+        WiFi.setSleep(WIFI_PS_MIN_MODEM);
+        s_off_for_backoff = false;
+        s_fails = 0;
+        s_backoff_ms = 30000u;
+        // Arm immediately for the first normal retry.
+        s_next_ms = now_ms;
+        return;
+    }
+
+    log_i("[wifi_sv] retry attempt %d (interval %u s)", s_fails + 1, s_backoff_ms / 1000u);
+    hw_wifi_reconnect_saved();
+    s_fails++;
+
+    if (s_fails >= 5) {
+        // Five consecutive misses — kill the modem for 15 min.
+        log_w("[wifi_sv] 5 failures — WiFi OFF for 15 min");
+        WiFi.mode(WIFI_OFF);
+        s_off_for_backoff = true;
+        s_next_ms = now_ms + 15u * 60u * 1000u;
+        s_fails = 0;
+    } else {
+        // Exponential backoff: 30 s -> 60 s -> 300 s (cap).
+        if (s_backoff_ms < 60000u)       s_backoff_ms = 60000u;
+        else if (s_backoff_ms < 300000u) s_backoff_ms = 300000u;
+        s_next_ms = now_ms + s_backoff_ms;
+    }
+#else
+    (void)now_ms;
 #endif
 }
 

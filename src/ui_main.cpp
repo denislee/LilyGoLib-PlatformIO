@@ -13,6 +13,12 @@
 #include "core/scoped_lock.h"
 
 static bool fake_sleep_active = false;
+// Tracks whether hw_power_down_all() has been called for the current fake-sleep
+// cycle. Used to make ui_pause_timers() idempotent: the vendor sequence calls
+// ui_pause_timers() before ui_request_editor_switch(), and the deferred timer
+// callback (or a second caller) would otherwise call hw_power_down_all() a
+// second time on the already-torn-down rail set. Cleared by ui_resume_timers().
+static bool s_power_down_active = false;
 bool editor_auto_edit = false;
 
 static void deferred_switch_timer_cb(lv_timer_t *t)
@@ -47,6 +53,7 @@ void ui_request_editor_switch()
 void ui_resume_timers()
 {
     fake_sleep_active = false;
+    s_power_down_active = false;  // P4.2: allow next sleep cycle to tear down again
     hw_power_up_all();
     enable_keyboard();
     lv_display_trigger_activity(NULL);
@@ -63,6 +70,12 @@ void ui_resume_timers()
 void ui_pause_timers()
 {
     fake_sleep_active = true;
+    // P4.2: idempotency guard — the vendor perform_fake_sleep_toggle() calls
+    // ui_pause_timers() and then ui_request_editor_switch(); the deferred
+    // 10 ms timer callback calls ui_pause_timers() a second time. Skip the
+    // rail teardown on the second call to avoid a double hw_power_down_all().
+    if (s_power_down_active) return;
+    s_power_down_active = true;
     disable_keyboard();
     hw_power_down_all();
     // Fake-sleep just began — let the charge task start watching VBUS so a

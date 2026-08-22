@@ -32,14 +32,24 @@
 
 namespace {
 
-constexpr UBaseType_t kTaskPriority = 3;
-constexpr BaseType_t  kTaskCore     = 0;
-constexpr uint32_t    kPollMs       = 500;
-constexpr uint32_t    kShowMs       = 4000;
+constexpr UBaseType_t kTaskPriority       = 3;
+constexpr BaseType_t  kTaskCore           = 0;
+// Base (fast) poll interval — used for the first kFastPhaseMs after sleep
+// entry or a VBUS edge (P4.8 progressive backoff).
+constexpr uint32_t    kPollFastMs         = 500;
+// Progressive back-off stages (P4.8): fast → medium → slow.
+constexpr uint32_t    kFastPhaseMs        = 30000;   // first 30 s
+constexpr uint32_t    kMediumPhaseMs      = 90000;   // 30–90 s
+constexpr uint32_t    kPollMediumMs       = 2000;
+constexpr uint32_t    kPollSlowMs         = 5000;
+constexpr uint32_t    kShowMs             = 4000;
+// Slow tick for 80 % charge-cap enforcement during fake sleep (P4.5).
+// lv_timers are frozen while fake-sleeping, so this task drives the check.
+constexpr uint32_t    kBatteryCheckMs     = 60000;  // once per minute
 // Fallback re-check while awake. Normally we block until ui_pause_timers()
 // notifies us that fake-sleep began; this bounds recovery if a notify is
 // ever missed, without polling VBUS over I2C around the clock.
-constexpr uint32_t    kAwakeBlockMs = 3000;
+constexpr uint32_t    kAwakeBlockMs       = 3000;
 
 TaskHandle_t s_task = nullptr;
 
@@ -124,8 +134,10 @@ lv_obj_t *build_charge_overlay()
 
 void charge_task_fn(void *)
 {
-    bool prev_vbus = false;
-    bool primed    = false;  // ignore first sample; we want edges, not boot state
+    bool     prev_vbus            = false;
+    bool     primed               = false;  // ignore first sample; we want edges, not boot state
+    uint32_t last_reset_ms        = 0;      // P4.8: reset on sleep entry or VBUS edge
+    uint32_t last_battery_chk_ms  = 0;      // P4.5: 80% enforcement slow tick
 
     for (;;) {
         if (!ui_is_fake_sleep()) {
@@ -137,11 +149,23 @@ void charge_task_fn(void *)
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kAwakeBlockMs));
             // Re-prime so the first fake-sleep sample only sets the baseline —
             // a cable already plugged before sleeping must not fire the overlay.
-            primed = false;
+            primed         = false;
+            last_reset_ms  = millis();   // P4.8: restart fast phase on sleep entry
             continue;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(kPollMs));
+        // P4.8 — progressive back-off: fast for the first 30 s after sleep
+        // entry or a VBUS edge, medium for the next minute, then slow.
+        uint32_t elapsed_since_reset = millis() - last_reset_ms;
+        uint32_t poll_ms;
+        if (elapsed_since_reset < kFastPhaseMs) {
+            poll_ms = kPollFastMs;
+        } else if (elapsed_since_reset < kMediumPhaseMs) {
+            poll_ms = kPollMediumMs;
+        } else {
+            poll_ms = kPollSlowMs;
+        }
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
 
         bool cur_vbus;
         {
@@ -153,6 +177,37 @@ void charge_task_fn(void *)
         prev_vbus = cur_vbus;
         primed = true;
 
+        if (rising) {
+            // P4.8: VBUS edge resets the fast-phase counter.
+            last_reset_ms = millis();
+        }
+
+        // P4.29 — age the notes-passphrase grace period. This task is the only
+        // thing still ticking during fake sleep, so it owns the aging; the call
+        // is a cheap no-op outside the grace window.
+        hw_fake_sleep_tick(millis());
+
+        // P4.5 — 80 % charge-cap slow tick.  lv_timers are frozen during
+        // fake sleep so the cap would never fire overnight.  Drive the same
+        // hw_update_battery_history() that the awake lv_timer calls, once
+        // per minute.  Only battery_percent (from the fuel gauge) matters
+        // for enforcement — the BQ gauge does not need ppm.enableMeasure().
+        {
+            uint32_t now = millis();
+            if (now - last_battery_chk_ms >= kBatteryCheckMs) {
+                last_battery_chk_ms = now;
+                core::ScopedInstanceLock lock;
+                hw_update_battery_history();
+                // The BQ25896 ADC is off in fake sleep (PB.4), so the read this
+                // just did populated the TTL cache with zeroed usb/sys voltages.
+                // Drop it so the first post-wake reader gets live values rather
+                // than up to 5 s of stale zeros — the same P4.7 symptom.
+#if defined(USING_PPM_MANAGE)
+                hw_invalidate_monitor_cache();
+#endif
+            }
+        }
+
         if (!rising) continue;
         if (!ui_is_fake_sleep()) continue;
 
@@ -162,6 +217,15 @@ void charge_task_fn(void *)
         lv_obj_t *overlay = nullptr;
         {
             core::ScopedInstanceLock lock;
+            // P4.7 — the BQ25896 ADC is disabled during fake sleep
+            // (hw_power_down_all did ppm.disableMeasure()).  Invalidate the
+            // TTL cache so build_charge_overlay() reads live ADC values, then
+            // re-enable the ADC before the read so usb_voltage / sys_voltage
+            // are not zero on the overlay or on the Info page after wake.
+#if defined(USING_PPM_MANAGE)
+            hw_invalidate_monitor_cache();
+            instance.ppm.enableMeasure();
+#endif
             instance.wakeupDisplay();
             instance.setBrightness(target_brightness);
             ui_resume_timers();
@@ -179,6 +243,11 @@ void charge_task_fn(void *)
             ui_pause_timers();
             instance.setBrightness(0);
             instance.sleepDisplay();
+            // P4.7 — put the ADC back to sleep to match hw_power_down_all()
+            // which disabled it on fake-sleep entry.
+#if defined(USING_PPM_MANAGE)
+            instance.ppm.disableMeasure();
+#endif
         }
 
         // Refresh prev_vbus from a fresh sample so a still-asserted VBUS

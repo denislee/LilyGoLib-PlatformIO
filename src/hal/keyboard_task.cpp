@@ -48,11 +48,14 @@ struct KeyEvent {
 
 constexpr UBaseType_t kTaskPriority     = configMAX_PRIORITIES - 2;
 constexpr BaseType_t  kTaskCore         = 0;   // Arduino loop runs on core 1
-constexpr uint32_t    kPollMs           = 20;  // ~50 Hz (was 10 ms/100 Hz). Halves I2C + instance-lock
-                                                // churn with no perceptible latency (20 ms is imperceptible
-                                                // to human typing). Auto-repeat uses tick comparison so its
-                                                // delay/rate are unaffected; they're simply evaluated at
-                                                // 20 ms granularity instead of 10 ms.
+// [P4.12] ISR-notify replaces the flat 50 Hz poll.  kFallbackMs is the
+// ulTaskNotifyTake timeout: a safety net that catches any interrupt state the
+// TCA8418 ISR missed (the vendor's own getKey() internal poll runs at 10 Hz /
+// 100 ms for exactly this reason).  Idle wakes drop from 50/s to ~10/s; a
+// real keypress wakes the task in ISR→task-switch time (<1 ms) rather than
+// up to 20 ms late.  Auto-repeat still fires; repeat interval is evaluated
+// on each wake so it may be up to kFallbackMs late — imperceptible.
+constexpr uint32_t    kFallbackMs       = 100; // ~10 Hz safety-net poll
 constexpr UBaseType_t kQueueDepth       = 32;
 constexpr uint32_t    kRepeatDelayMs    = 500; // Hold time before auto-repeat kicks in.
 constexpr uint32_t    kRepeatIntervalMs = 90;  // ~11 Hz repeat rate once engaged.
@@ -101,27 +104,29 @@ void enqueue_event(const KeyEvent &ev)
 
 void keyboard_task_fn(void *)
 {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
     for (;;) {
         // While the display is off (fake-sleep) hw_power_down_all() cuts the
         // keyboard rail and instance.kb.end() detaches the TCA8418 ISR, so
-        // this loop would take the instance mutex 100×/s and I2C-poll a dead
-        // chip — burning power and contending with LVGL/NFC exactly when we
-        // mean to be idle. Block on a task notify instead; ui_resume_timers()
-        // kicks us via hw_keyboard_task_notify_wake() so the first keypress
-        // after wake isn't delayed, and the timeout bounds latency if a
-        // notify is ever missed. Drop any held-key state so a key that was
-        // down before sleep can't fire a stale auto-repeat on wake, and reset
-        // xLastWakeTime so vTaskDelayUntil doesn't burst to "catch up" the
-        // ticks skipped while blocked.
+        // this loop would take the instance mutex and I2C-poll a dead chip —
+        // burning power and contending with LVGL/NFC exactly when we mean to
+        // be idle. Block on a task notify instead; ui_resume_timers() kicks us
+        // via hw_keyboard_task_notify_wake() so the first keypress after wake
+        // isn't delayed, and the timeout bounds latency if a notify is missed.
+        // Drop any held-key state so a key held before sleep can't fire a
+        // stale auto-repeat on wake.
         if (ui_is_fake_sleep()) {
             s_held_char = '\0';
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kFakeSleepIdleMs));
-            xLastWakeTime = xTaskGetTickCount();
             continue;
         }
 
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(kPollMs));
+        // [P4.12] Block until the TCA8418 ISR notifies us (via setNotifyTask /
+        // vTaskNotifyGiveFromISR) or the safety-net timeout fires.  The notify
+        // fires on every TCA8418 interrupt edge, so a real keypress unblocks
+        // immediately.  kFallbackMs (100 ms = 10 Hz) matches the vendor
+        // driver's own internal safety-poll cadence inside getKey(), so we
+        // never miss an interrupt state it would have caught.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kFallbackMs));
 
         if ((hw_get_device_online() & HW_KEYBOARD_ONLINE) == 0) {
             continue;
@@ -305,6 +310,19 @@ void hw_keyboard_task_start()
     if (ok != pdPASS) {
         log_e("kb_reader: task create failed");
         s_task = nullptr;
+        return;
+    }
+
+    // [P4.12] Register our task handle with the vendor driver so keyboard_isr
+    // can vTaskNotifyGiveFromISR us on every TCA8418 interrupt edge.  This
+    // replaces the 50 Hz vTaskDelayUntil poll with an ISR-driven wake + 100 ms
+    // fallback timeout.  Cleared in hw_keyboard_task_stop() (if added later)
+    // or implicitly when the task is deleted and the handle becomes stale —
+    // vendor's begin()/end() cycle re-attaches/detaches the ISR so no spurious
+    // notifies can reach a dead handle between end() and the next begin().
+    {
+        core::ScopedInstanceLock lock;
+        instance.kb.setNotifyTask(s_task);
     }
 }
 

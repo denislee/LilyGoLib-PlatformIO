@@ -75,6 +75,11 @@ constexpr int kItemCount = sizeof(kItems) / sizeof(kItems[0]);
 // periodic timer can refresh them. Reset each time the menu re-mounts.
 static std::vector<lv_obj_t*> s_badge_labels;
 static std::vector<BadgeFn>   s_badge_fns;
+// P4.13a: cached count per badge — lv_label_set_text in LVGL 9 calls
+// lv_obj_invalidate() unconditionally, so an unchanged badge forces a
+// dirty-rect + SPI flush every 2 s. Initialised to -1 so the first tick
+// always writes. Reset in parallel with s_badge_labels.
+static std::vector<int>       s_badge_cached_counts;
 static lv_timer_t* s_badge_timer = nullptr;
 
 // Tiles whose backing app needs an active WiFi connection — greyed out and
@@ -118,6 +123,12 @@ static void update_badges(lv_timer_t *t) {
         lv_obj_t *lbl = s_badge_labels[i];
         if (!lbl) continue;
         int n = s_badge_fns[i] ? s_badge_fns[i]() : 0;
+        // P4.13a: skip the label write when the count hasn't changed.
+        // lv_label_set_text in LVGL 9 calls lv_obj_invalidate()
+        // unconditionally, forcing a dirty-rect + SPI flush on every tick.
+        int cached = (i < s_badge_cached_counts.size()) ? s_badge_cached_counts[i] : -1;
+        if (n == cached) continue;
+        if (i < s_badge_cached_counts.size()) s_badge_cached_counts[i] = n;
         if (n > 0) {
             char buf[8];
             format_badge_text(n, buf, sizeof(buf));
@@ -575,6 +586,7 @@ void MenuApp::onStop() {
 #endif
     s_badge_labels.clear();
     s_badge_fns.clear();
+    s_badge_cached_counts.clear();
     s_media_buttons.clear();
     s_volume_btn = nullptr;
     s_volume_icon = nullptr;
@@ -603,6 +615,7 @@ void MenuApp::onStart(lv_obj_t* parent) {
     // are now invalid. onStop() kills the timer before the tiles go away.
     s_badge_labels.clear();
     s_badge_fns.clear();
+    s_badge_cached_counts.clear();
     if (s_badge_timer) { lv_timer_del(s_badge_timer); s_badge_timer = nullptr; }
     s_media_buttons.clear();
     s_volume_btn = nullptr;
@@ -888,6 +901,7 @@ void MenuApp::onStart(lv_obj_t* parent) {
             lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
             s_badge_labels.push_back(badge);
             s_badge_fns.push_back(item.badge_fn);
+            s_badge_cached_counts.push_back(-1); // -1 = never written
         }
     }
 

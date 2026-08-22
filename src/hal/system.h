@@ -60,6 +60,12 @@ void hw_sleep();
 void hw_power_down_all();
 void hw_power_up_all();
 void hw_low_power_loop();
+
+// P4.29 — call periodically from the charge task while in fake sleep.
+// Locks the notes passphrase once the device has been continuously fake-sleeping
+// for the configured grace period (5 min). now_ms should be millis().
+// Idempotent: after locking it is a no-op until the next fake-sleep entry.
+void hw_fake_sleep_tick(uint32_t now_ms);
 void hw_feedback();
 bool hw_get_haptic_enable();
 void hw_set_haptic_enable(bool en);

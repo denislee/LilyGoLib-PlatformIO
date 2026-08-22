@@ -36,10 +36,10 @@ static void hw_nrf24_isr()
 void hw_nrf24_begin()
 {
     radioEvent = xEventGroupCreate();
-    printf(" init NRF2401 \n");
+    log_d("init NRF2401");
     bool rlst = instance.initNRF24();
     if (!rlst) {
-        printf("nRF2401 option Model not detected\n");
+        log_e("nRF2401 option Model not detected");
         return;
     }
     nrf24.setPacketSentAction(hw_nrf24_isr);

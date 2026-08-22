@@ -25,9 +25,22 @@
 
 static bool keyboard_interrupted = false;
 
+// [LOCAL PATCH P4.12] Task handle registered via setNotifyTask(). When set,
+// keyboard_isr notifies it with vTaskNotifyGiveFromISR() so the keyboard task
+// can block on ulTaskNotifyTake() instead of polling at 50 Hz.  nullptr = off.
+static TaskHandle_t s_notify_task = nullptr;
+
 static void keyboard_isr()
 {
     keyboard_interrupted = true;
+    // [LOCAL PATCH P4.12] Wake the registered task immediately on every TCA8418
+    // interrupt edge. The task still has a fallback timeout so no event is lost
+    // if this runs before the task blocks on ulTaskNotifyTake.
+    if (s_notify_task) {
+        BaseType_t higher_prio_woken = pdFALSE;
+        vTaskNotifyGiveFromISR(s_notify_task, &higher_prio_woken);
+        portYIELD_FROM_ISR(higher_prio_woken);
+    }
 }
 
 LilyGoKeyboard::LilyGoKeyboard()
@@ -162,6 +175,15 @@ void LilyGoKeyboard::setRawCallback(KeyboardRawCallback cb)
 void LilyGoKeyboard::setRepeat(bool enable)
 {
     repeat_function = enable;
+}
+
+// [LOCAL PATCH P4.12] Register (or clear) the task handle that keyboard_isr
+// will notify via vTaskNotifyGiveFromISR on every TCA8418 interrupt edge.
+// Safe to call from any task context; ISRs read s_notify_task atomically on
+// Xtensa (aligned pointer write is single-cycle, no torn read possible).
+void LilyGoKeyboard::setNotifyTask(TaskHandle_t h)
+{
+    s_notify_task = h;
 }
 
 int LilyGoKeyboard::getKey(char *c)

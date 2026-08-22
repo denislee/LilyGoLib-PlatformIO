@@ -6,6 +6,7 @@
 #include "../hal_interface.h"
 #include "internal.h"
 #include "notes_crypto.h"
+#include "sensors.h"
 #include "keyboard_task.h"
 #include "radio_chip.h"
 #include "../core/spi_lock.h"
@@ -22,6 +23,20 @@ user_setting_params_t user_setting;
 // Tracks the last frequency passed to setCpuFrequencyMhz() so hw_set_cpu_freq()
 // can skip redundant PLL re-locks.  0 = unknown (forces a real set on first call).
 static uint32_t s_cpu_freq_mhz = 0;
+
+// P4.29 — notes passphrase lock grace period.
+// We do NOT lock on every fake-sleep entry (that would demand a re-enter every
+// 60 s once P4.1 is active). Instead we lock once the device has been
+// continuously in fake sleep for NOTES_LOCK_GRACE_MS. The charge task drives
+// the aging — it is the only thing still ticking in fake sleep — by calling
+// hw_fake_sleep_tick() on each of its iterations.
+// s_fake_sleep_entry_ms == 0 means "not in fake sleep / already locked this cycle".
+static constexpr uint32_t NOTES_LOCK_GRACE_MS = 5u * 60u * 1000u; // 5 minutes
+static uint32_t s_fake_sleep_entry_ms = 0;
+
+// P4.22 — save the IMU registration state across a fake-sleep/wake cycle so
+// hw_power_up_all() can restore it if the IMU debug page was open before sleep.
+static bool s_imu_was_registered = false;
 
 void hw_set_cpu_freq(uint32_t mhz)
 {
@@ -55,7 +70,12 @@ static constexpr uint32_t SETTINGS_MAGIC   = 0x50414752u; // "PAGR"
 // consumer, so the persisted "keep the rail on" setting just wasted power
 // for nothing; GPS power is now purely transient, owned by
 // hw_start_time_sync_gps() (see hal/gps_time_sync.cpp).
-static constexpr uint16_t SETTINGS_VERSION = 12;
+// v13: raised disp_timeout_second default from 0 ("never") to 60 s, and
+// brightness_level default from 50 to 8 (half of the pager's 16-step AW9364
+// clamp), so the PB auto-sleep and dim-stage savings actually activate out of
+// the box.  The header-mismatch path wholesale-resets to defaults, which is
+// the correct behaviour for both fields.
+static constexpr uint16_t SETTINGS_VERSION = 13;
 
 struct SettingsHeader {
     uint32_t magic;
@@ -358,9 +378,9 @@ void hw_load_setting()
 {
 #ifdef ARDUINO
     // Initialize with defaults first
-    user_setting.brightness_level = 50;
+    user_setting.brightness_level = 8;  // P4.1/P4.3: half of the pager's 16-step AW9364 clamp
     user_setting.keyboard_bl_level = 80;
-    user_setting.disp_timeout_second = 0;
+    user_setting.disp_timeout_second = 60; // P4.1: 60 s enables auto-sleep out of the box
     user_setting.charger_current = DEVICE_CHARGE_CURRENT_RECOMMEND;
     user_setting.charger_enable = true;
     user_setting.sleep_mode = 0;
@@ -433,9 +453,9 @@ void hw_load_setting()
         save_user_setting_nvs();
     }
 #else
-    user_setting.brightness_level = 10;
+    user_setting.brightness_level = 8;   // P4.1/P4.3: match hardware default
     user_setting.keyboard_bl_level = 255;
-    user_setting.disp_timeout_second = 0;
+    user_setting.disp_timeout_second = 60; // P4.1: 60 s enables auto-sleep out of the box
     user_setting.charger_current = 1000;
     user_setting.charger_enable = true;
     user_setting.nfc_enable = 0;
@@ -711,10 +731,17 @@ void hw_power_down_all()
     hw_wifi_powersave_sleep();
 
     // Suspend the three BHI260 virtual sensors (ACCEL_PASSTHROUGH, GAME_ROTATION_VECTOR,
-    // DEVICE_ORIENTATION).  During fake sleep the LVGL task is blocked so sensor.update()
-    // never runs and the BHI260 FIFO just fills forever — pure waste (~0.5–1 mA on I2C
-    // + sensor compute).  BHI260 is I2C, not SPI, so no ScopedSpiLock needed here.
-    hw_unregister_imu_process();
+    // DEVICE_ORIENTATION) only if they are currently streaming. During fake sleep the
+    // LVGL task is blocked so sensor.update() never runs and the BHI260 FIFO just fills
+    // forever — pure waste (~0.5–1 mA on I2C + sensor compute). BHI260 is I2C, not SPI,
+    // so no ScopedSpiLock needed here. Save state so power_up_all() can restore it.
+    // (P4.22: IMU is only registered on demand by the debug page, not at boot.)
+    s_imu_was_registered = hw_imu_is_registered();
+    if (s_imu_was_registered) hw_unregister_imu_process();
+
+    // P4.29 — record when we entered fake sleep so hw_fake_sleep_tick() can
+    // lock the notes passphrase after the grace period.
+    s_fake_sleep_entry_ms = millis();
 #endif
 }
 
@@ -750,10 +777,33 @@ void hw_power_up_all()
     // No-op when WiFi is disconnected.
     hw_wifi_powersave_active();
 
-    // Re-register the three BHI260 virtual sensors suspended in hw_power_down_all().
-    // This includes the full sensor-table dump (~50 ms) — acceptable for wake feel.
+    // Re-register the BHI260 virtual sensors only if they were active before the
+    // fake sleep (P4.22: IMU is registered on demand by the debug page, not at boot).
     // BHI260 is I2C, not SPI, so no ScopedSpiLock needed here.
-    hw_register_imu_process();
+    if (s_imu_was_registered) hw_register_imu_process();
+    s_imu_was_registered = false;
+
+    // P4.29 — reset the grace-period timer on wake so the next fake-sleep
+    // cycle gets a fresh 5-minute window.
+    s_fake_sleep_entry_ms = 0;
+#endif
+}
+
+// P4.29 — notes passphrase grace-period aging.
+// Called periodically by the charge task while the device is in fake sleep.
+// Locks the notes passphrase once the device has been continuously fake-sleeping
+// for NOTES_LOCK_GRACE_MS (5 min) without waking. Idempotent after locking:
+// once s_fake_sleep_entry_ms is cleared here, subsequent ticks are no-ops.
+void hw_fake_sleep_tick(uint32_t now_ms)
+{
+#ifdef ARDUINO
+    if (s_fake_sleep_entry_ms == 0) return; // not in fake sleep / already locked
+    if ((now_ms - s_fake_sleep_entry_ms) >= NOTES_LOCK_GRACE_MS) {
+        notes_crypto_lock();
+        s_fake_sleep_entry_ms = 0; // prevent repeated calls to notes_crypto_lock()
+    }
+#else
+    (void)now_ms;
 #endif
 }
 

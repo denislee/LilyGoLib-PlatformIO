@@ -51,6 +51,10 @@ static void time_available(struct timeval *t)
 }
 
 // WARNING: This function is called from a separate FreeRTOS task (thread)!
+// P4.19: set by WiFiGotIP to trigger NTP backoff / attempt-count reset on
+// the next loop() tick. Volatile because it crosses the WiFi task boundary.
+static volatile bool s_ntp_new_assoc = false;
+
 void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 {
     Serial.println("WiFi connected");
@@ -59,6 +63,9 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
     /* NTP sync is driven from the main loop's poll (see loop()) rather than
      * from this event callback, so boot-time flows that connect WiFi before
      * the event handler is fully wired are still covered. */
+    // P4.19: signal loop() to reset NTP backoff and attempt count for the
+    // new association. Don't manipulate static loop() state from this task.
+    s_ntp_new_assoc = true;
 }
 
 #include "core/system.h"
@@ -147,6 +154,15 @@ void setup()
     Serial.println("Start done. run main loop");
 }
 
+// P4.9: VBUS/charging probe for the auto-sleep guard. Kept out of the hot path
+// — only called on the tick where every other sleep precondition already holds.
+static bool is_on_external_power()
+{
+    monitor_params_t p;
+    hw_get_monitor_params(p);
+    return p.is_charging;
+}
+
 void loop()
 {
     // Poll-based NTP driver: keep re-triggering configTime() while WiFi is
@@ -154,28 +170,57 @@ void loop()
     // enough — lwIP's SNTP will retry on its own, but on a cold boot the
     // first DNS lookup or UDP round-trip often drops (AP still handshaking,
     // DHCP lease just arrived, etc.) and we want to force a fresh cycle
-    // until the time_available() callback fires. Re-triggers every 30 s so
-    // we don't thrash the tcpip task or the NTP pool.
-    static uint32_t last_ntp_attempt_ms = 0;
-    if (hw_get_time_sync_status() == 0 && hw_get_wifi_connected()) {
+    // until the time_available() callback fires.
+    //
+    // P4.19: exponential backoff (30s → 1min → 5min → 15min cap) and a hard
+    // per-association attempt ceiling so a persistent NTP failure doesn't
+    // burn the radio and CPU indefinitely. Both reset on each GOT_IP event.
+    // Timezone offset is cached — it changes twice a year, not twice a minute.
+    static uint32_t last_ntp_attempt_ms   = 0;
+    static uint32_t ntp_backoff_ms        = 30000;   // starts at 30 s
+    static int      ntp_attempts          = 0;        // per WiFi association
+    static bool     tz_offset_valid       = false;
+    static int      cached_tz_offset_sec  = 0;
+    static constexpr int kNtpMaxAttempts  = 10;       // ~30s+1m+5m+15m*7 ≈ 2h cap
+    static constexpr uint32_t kNtpBackoffCap = 15UL * 60 * 1000;  // 15 min
+
+    if (s_ntp_new_assoc) {
+        // New DHCP lease — reset backoff and attempt count for this association.
+        s_ntp_new_assoc    = false;
+        last_ntp_attempt_ms = 0;
+        ntp_backoff_ms      = 30000;
+        ntp_attempts        = 0;
+        // Keep tz_offset_valid: the timezone hasn't changed between associations.
+    }
+
+    if (hw_get_time_sync_status() == 0 && hw_get_wifi_connected()
+            && ntp_attempts < kNtpMaxAttempts) {
         uint32_t now = millis();
-        if (last_ntp_attempt_ms == 0 || now - last_ntp_attempt_ms > 30000) {
-            Serial.println("Triggering NTP sync");
-            std::string tz = timezone_get_user_tz();
-            int offset_sec = 0;
-            if (!tz.empty()) {
-                int raw = 0, dst = 0;
-                std::string err;
-                if (timezone_fetch_offset(tz.c_str(), raw, dst, err)) {
-                    offset_sec = raw + dst;
-                    hw_start_time_sync_ntp(offset_sec);
-                } else {
-                    hw_start_time_sync_ntp();
+        if (last_ntp_attempt_ms == 0 || now - last_ntp_attempt_ms >= ntp_backoff_ms) {
+            log_i("Triggering NTP sync (attempt %d, backoff %lu ms)",
+                  ntp_attempts + 1, (unsigned long)ntp_backoff_ms);
+            if (!tz_offset_valid) {
+                std::string tz = timezone_get_user_tz();
+                if (!tz.empty()) {
+                    int raw = 0, dst = 0;
+                    std::string err;
+                    if (timezone_fetch_offset(tz.c_str(), raw, dst, err)) {
+                        cached_tz_offset_sec = raw + dst;
+                        tz_offset_valid      = true;
+                    }
                 }
+            }
+            if (tz_offset_valid && cached_tz_offset_sec != 0) {
+                hw_start_time_sync_ntp(cached_tz_offset_sec);
             } else {
                 hw_start_time_sync_ntp();
             }
+
             last_ntp_attempt_ms = now;
+            ntp_attempts++;
+            // Advance backoff: 30s → 60s → 300s → 900s (cap at kNtpBackoffCap).
+            ntp_backoff_ms = min(ntp_backoff_ms * 2, (uint32_t)kNtpBackoffCap);
+            if (ntp_backoff_ms < 60000 && ntp_attempts >= 2) ntp_backoff_ms = 60000;
         }
     }
 
@@ -208,17 +253,23 @@ void loop()
         // Settings are an in-memory struct, but the loop runs at 20 Hz —
         // refreshing the user-configured CPU freq once per second is plenty
         // and keeps the cached active_freq path branch-only on most ticks.
-        // disp_timeout_second is cached in the same pass so auto-sleep sees
-        // the current setting without a second struct copy per tick.
+        // disp_timeout_second, brightness_level and keyboard_bl_level are
+        // cached in the same pass so the dim ladder and auto-sleep see the
+        // current setting without a second struct copy per tick.
         static uint32_t last_settings_refresh_ms = 0;
         static uint32_t cached_active_freq = 240;
         static uint8_t  cached_disp_timeout_sec = 0;
+        static uint8_t  cached_brightness = 8;       // P4.3: user display level
+        static uint8_t  cached_kb_brightness = 8;    // P4.3: user keyboard level
+
         uint32_t now_ms = millis();
         if (cached_active_freq == 0 || now_ms - last_settings_refresh_ms > 1000) {
             user_setting_params_t settings;
             hw_get_user_setting(settings);
             cached_active_freq       = settings.cpu_freq_mhz;
             cached_disp_timeout_sec  = settings.disp_timeout_second;
+            cached_brightness        = settings.brightness_level;
+            cached_kb_brightness     = settings.keyboard_bl_level;
             last_settings_refresh_ms = now_ms;
         }
 
@@ -227,6 +278,55 @@ void loop()
         } else {
             hw_set_cpu_freq(cached_active_freq);
         }
+
+        // P4.3: dim ladder — at ~60% of the display timeout, lower the
+        // display and keyboard backlights to save power while giving the user
+        // a visual warning that sleep is imminent. Restore immediately on any
+        // LVGL activity (inactive_time dropped back below the dim threshold).
+        // The AW9364 driver early-returns on unchanged values before clamping,
+        // so we cache what we actually wrote and compare before writing again.
+        static bool     s_dimmed = false;
+        static uint8_t  s_dim_disp_written = 0;   // last value sent to display
+        static uint8_t  s_dim_kb_written   = 0;   // last value sent to KB LED
+        static uint32_t s_prev_inactive_time = 0;
+
+        if (cached_disp_timeout_sec > 0) {
+            uint32_t dim_threshold_ms = (uint32_t)cached_disp_timeout_sec * 600; // 60%
+            bool activity = (inactive_time < s_prev_inactive_time); // LVGL reset counter
+            if (s_dimmed && activity) {
+                // Restore on activity — only write if we need to change the level.
+                uint8_t want_disp = cached_brightness;
+                uint8_t want_kb   = cached_kb_brightness;
+                if (s_dim_disp_written != want_disp) {
+                    hw_set_disp_backlight(want_disp);
+                    s_dim_disp_written = want_disp;
+                }
+                if (s_dim_kb_written != want_kb) {
+                    hw_set_kb_backlight(want_kb);
+                    s_dim_kb_written = want_kb;
+                }
+                s_dimmed = false;
+            } else if (!s_dimmed && inactive_time >= dim_threshold_ms) {
+                // Enter dim — write dim levels.
+                uint8_t dim_disp = (cached_brightness > 2) ? cached_brightness / 3 : 1;
+                uint8_t dim_kb   = (cached_kb_brightness > 2) ? cached_kb_brightness / 3 : 1;
+                if (s_dim_disp_written != dim_disp) {
+                    hw_set_disp_backlight(dim_disp);
+                    s_dim_disp_written = dim_disp;
+                }
+                if (s_dim_kb_written != dim_kb) {
+                    hw_set_kb_backlight(dim_kb);
+                    s_dim_kb_written = dim_kb;
+                }
+                s_dimmed = true;
+            } else if (!s_dimmed) {
+                // Not dimmed and not at threshold: make sure cache stays in sync
+                // with the current user setting (handles settings changes while awake).
+                s_dim_disp_written = cached_brightness;
+                s_dim_kb_written   = cached_kb_brightness;
+            }
+        }
+        s_prev_inactive_time = inactive_time;
 
         // Auto fake-sleep: fire the vendor toggle when the LVGL inactivity
         // clock exceeds the user's display-timeout setting and no guarded
@@ -239,11 +339,44 @@ void loop()
                 && !hw_player_running()
                 && !hw_rec_running()
                 && !core::isTextInputFocused()
-                && !ssh_session_is_active()) {
+                && !ssh_session_is_active()
+                // P4.9: do not blank the screen mid-transfer — the "Unsafe to
+                // disconnect" overlay lives on lv_layer_top() and would go
+                // invisible. Evaluated last so the (cheap) checks above
+                // short-circuit it on all but the one tick that would sleep.
+                && !hw_is_usb_msc_mounted()
+                // P4.9: do not auto-sleep on external power. Deliberate product
+                // call: a docked device stays awake. Note this means P4.5's
+                // in-sleep 80 % cap enforcement only covers the sleep-then-plug-in
+                // order — the plug-in-then-idle order never reaches fake sleep at
+                // all. hw_get_monitor_params() is TTL-cached (1 s charging / 5 s
+                // discharging), and the short-circuit above means it is only read
+                // on a tick that would otherwise sleep.
+                && !is_on_external_power()) {
             lilygo_request_fake_sleep_toggle();
             auto_sleep_pending = true;
         }
+
+        // P4.3: restore full brightness when waking (s_dimmed may have been
+        // set just before the sleep threshold fired). The restore-on-wake path
+        // runs through ui_resume_timers() -> hw_power_up_all() ->
+        // hw_set_disp_backlight(user_setting.brightness_level), so the
+        // hardware is already correct; we just need to clear our dim state so
+        // the next awake cycle doesn't mis-detect "activity" from the counter
+        // wrapping at zero.
+        if (auto_sleep_pending && s_dimmed) {
+            s_dimmed = false;
+            // Hardware restore is handled by hw_power_up_all() on wake.
+        }
     }
+
+    // P4.17: drive the WiFi reconnect supervisor. It self-throttles internally
+    // (30 s -> 1 min -> 5 min backoff, then WIFI_OFF + a 15 min retry after five
+    // consecutive failures), so calling it every loop() iteration is correct and
+    // cheap. Without it an AP that goes away is never recovered, and the modem
+    // stays powered for zero connectivity because both power-save wrappers guard
+    // on hw_get_wifi_connected().
+    hw_wifi_supervise(millis());
 
     // Idle cadence. This loop is pure housekeeping (NTP re-trigger, vendor
     // instance.loop(), CPU-freq management) — LVGL rendering and rotary/NFC

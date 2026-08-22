@@ -12,6 +12,9 @@
 
 #ifdef USING_INPUT_DEV_KEYBOARD
 #include <Adafruit_TCA8418.h>
+// [LOCAL PATCH P4.12] ISR-notify hook: lets our keyboard_task block on
+// ulTaskNotifyTake instead of polling at 50 Hz.
+#include <freertos/task.h>
 
 #define KB_NONE     -1
 #define KB_PRESSED  1
@@ -144,6 +147,17 @@ public:
      * @param enable true to enable key repeat, false to disable it.
      */
     void setRepeat(bool enable);
+
+    /**
+     * @brief [LOCAL PATCH P4.12] Register a FreeRTOS task to be notified from
+     * the TCA8418 ISR via vTaskNotifyGiveFromISR(). Pass nullptr to unregister.
+     * The registered task should block on ulTaskNotifyTake() with a fallback
+     * timeout; the notify fires immediately on every interrupt edge so keypress
+     * latency is bounded by ISR→task wake time rather than a poll interval.
+     *
+     * @param h TaskHandle_t of the task to notify, or nullptr to disable.
+     */
+    void setNotifyTask(TaskHandle_t h);
 
     /**
      * @brief Returns whether the Alt modifier key is currently held.

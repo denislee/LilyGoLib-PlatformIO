@@ -622,7 +622,7 @@ void hw_set_volume(uint8_t volume)
     if (HW_CODEC_ONLINE & hw_get_device_online()) {
         instance.codec.setVolume(volume);
     } else {
-        printf("Audio codec not online!\n");
+        log_d("Audio codec not online!");
     }
 #endif //USING_AUDIO_CODEC
 }
@@ -649,7 +649,7 @@ void hw_set_sd_music_play(audio_source_type_t source_type, const char *filename)
         .filename = filename,
         .source_type = source_type
     };
-    printf("hw_set_sd_music_play : %s source_type:%d\n", filename, source_type);
+    log_d("hw_set_sd_music_play : %s source_type:%d", filename, source_type);
 #ifdef ARDUINO
     xEventGroupClearBits(playerEvent, PLAYER_PLAY | PLAYER_END | PLAYER_STOPPED);
     if (hw_player_running()) {

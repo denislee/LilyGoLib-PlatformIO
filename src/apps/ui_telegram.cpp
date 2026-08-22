@@ -24,8 +24,9 @@
  *            s_drain_timer (result drain)— lv_timer_del + null
  *   tasks:   s_bg_task (HTTPS worker)    — left to self-delete; the epoch bump
  *                                          makes any late result be discarded
- *   note:    s_bg_timer is the global background notifier (60 s) created once
- *            at boot by tg_begin_background_poll(); it is NOT torn down here.
+ *   note:    s_bg_timer is the global background notifier (fast: 60 s / slow: 5 min)
+ *            created once at boot by tg_begin_background_poll(); it is NOT torn
+ *            down here.  onStart() snaps its period back to TG_BG_POLL_FAST_MS.
  *
  * The foreground poll / send / mark-read run on a one-shot worker (§2.1):
  * it only writes heap state under the instance mutex, never the LVGL tree, so
@@ -69,7 +70,10 @@ namespace {
 #define TG_CHAT_POLL_MS   5000
 #define TG_CHAT_LIMIT     30
 #define TG_MSG_LIMIT      20
-#define TG_DRAIN_MS       120     // async-worker result poll (see §2.1 worker)
+#define TG_DRAIN_MS         120     // async-worker result poll (see §2.1 worker)
+#define TG_BG_POLL_FAST_MS  60000   // background poll: 60 s while user active
+#define TG_BG_POLL_SLOW_MS  300000  // background poll: 5 min while user idle
+#define TG_BG_IDLE_MS       180000  // inactivity threshold for slow cadence (3 min)
 
 // --- persisted config ------------------------------------------------------
 
@@ -196,6 +200,10 @@ static int s_last_notified_unread = -1;
 // unread notifier and the foreground poll/send worker so the two never run a
 // TLS session at the same time (each costs several KB of internal heap).
 static TaskHandle_t s_bg_task = nullptr;
+// Mirrors the period currently set on s_bg_timer so tg_bg_tick() can detect
+// when it needs to change without a second lv_timer API call.
+// Also kept in sync by onStart() which snaps back to the fast cadence on open.
+static uint32_t s_bg_timer_period = 0;
 
 // --- foreground async worker state (§2.1) ---------------------------------
 enum FgOp { FG_FETCH_CHATS, FG_FETCH_MSGS, FG_SEND };
@@ -1508,6 +1516,15 @@ public:
         reload_config();
 
 #ifdef ARDUINO
+        // Snap the background notifier back to the fast poll cadence so that
+        // when the app closes the first background tick fires promptly.
+        // While the app is open tg_bg_tick() early-returns (s_view != V_NONE),
+        // so this period governs only the cadence after the next onStop().
+        if (s_bg_timer) {
+            lv_timer_set_period(s_bg_timer, TG_BG_POLL_FAST_MS);
+            s_bg_timer_period = TG_BG_POLL_FAST_MS;
+        }
+
         // Drop any result a worker from a previous session published after we
         // tore down (no drain timer was live to collect it) so it can't flash
         // into this fresh view. onStop already bumped the epoch, so a still-
@@ -1704,13 +1721,28 @@ static void tg_bg_task(void *arg)
 
 static void tg_bg_tick(lv_timer_t *t)
 {
-    (void)t;
     if (s_view != V_NONE) return;               // app is open → its timer drives updates
     if (!internet_available()) return;
     // Skip while typing elsewhere: this tick runs an HTTPS fetch (~1s).
     if (core::isTextInputFocused()) return;
 
-    if (s_bg_task != nullptr) return; // Previous task still running
+    // Adaptive cadence: poll every TG_BG_POLL_FAST_MS while the user has
+    // interacted recently (LVGL inactive time < TG_BG_IDLE_MS = 3 min), and
+    // back off to TG_BG_POLL_SLOW_MS (5 min) when idle.  lv_timer_set_period()
+    // reuses the existing timer — no allocation or teardown.  onStart() snaps
+    // back to the fast cadence immediately whenever the Telegram app is opened,
+    // and this same logic re-applies on the next tick after the user interacts.
+    // lv_timers freeze during fake sleep, so the awake window is exactly where
+    // this matters and exactly where the user is most likely to be looking.
+    uint32_t inactive   = lv_display_get_inactive_time(NULL);
+    uint32_t want_period = (inactive < TG_BG_IDLE_MS) ? TG_BG_POLL_FAST_MS
+                                                       : TG_BG_POLL_SLOW_MS;
+    if (s_bg_timer_period != want_period) {
+        lv_timer_set_period(t, want_period);
+        s_bg_timer_period = want_period;
+    }
+
+    if (s_bg_task != nullptr) return;           // previous fetch still in flight
 
     // Launch background task to avoid blocking the LVGL timer thread
     xTaskCreate(tg_bg_task, "tg_bg", 8192, nullptr, 2, &s_bg_task);
@@ -1865,10 +1897,12 @@ void tg_begin_background_poll() {
     // pattern this function already tolerates still holds.
     purge_legacy_plaintext_token();
     if (s_bg_timer) return;
-    // 60s cadence — the HTTP call blocks the LVGL thread for ~1s on a good
-    // connection, so we keep the frequency low to stay invisible to the
-    // rest of the UI.
-    s_bg_timer = lv_timer_create(tg_bg_tick, 60000, nullptr);
+    // Start at the fast cadence (TG_BG_POLL_FAST_MS = 60 s).  tg_bg_tick()
+    // backs off to TG_BG_POLL_SLOW_MS (5 min) once the LVGL inactive time
+    // exceeds TG_BG_IDLE_MS (3 min), and snaps back to fast whenever the
+    // user interacts or the Telegram app is opened (onStart).
+    s_bg_timer_period = TG_BG_POLL_FAST_MS;
+    s_bg_timer = lv_timer_create(tg_bg_tick, TG_BG_POLL_FAST_MS, nullptr);
 #endif
 }
 

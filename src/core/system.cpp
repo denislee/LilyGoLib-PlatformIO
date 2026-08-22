@@ -185,6 +185,19 @@ void System::setupGlobalUI() {
         // under the instance mutex that the keyboard reader also needs.
         if (core::isTextInputFocused()) return;
 
+        // P4.10: per-tick caches for labels whose text rarely changes.
+        // LVGL 9 lv_label_set_text* unconditionally copies the string and calls
+        // lv_obj_invalidate(), so every unchanged write forces a dirty-rect +
+        // SPI flush — defeating PB.8's 200 ms idle cap on a static screen.
+        // Initialised to sentinel values that guarantee a write on the first tick.
+        static int      prev_clock_min    = -1, prev_clock_hour = -1;
+        static int      prev_clock_mday   = -1, prev_clock_mon  = -1;
+        static int      prev_clock_year   = -1;
+        static int      prev_batt_pct     = -1;
+        static bool     prev_is_charging  = false;
+        static uint32_t prev_file_count   = UINT32_MAX; // UINT32_MAX = never written
+        static uint32_t prev_mem_free_kb  = UINT32_MAX;
+
         static const lv_font_t *applied_header_font = nullptr;
         const lv_font_t *cur_font = get_header_font();
         if (applied_header_font == nullptr) applied_header_font = cur_font;
@@ -219,24 +232,45 @@ void System::setupGlobalUI() {
                 if (v_res <= 0) v_res = 222;
                 lv_obj_set_height(self._mainScreen, v_res - new_bar_h);
             }
+            // Font changed: invalidate caches so the next tick re-writes label
+            // text with the new font metrics.
+            prev_clock_min = prev_clock_hour = prev_clock_mday =
+                prev_clock_mon = prev_clock_year = -1;
+            prev_batt_pct    = -1;
+            prev_file_count  = UINT32_MAX;
+            prev_mem_free_kb = UINT32_MAX;
         }
 
         // Status bar update logic. Use the system clock (not the RTC over
         // I2C) for this once-per-second label — see hw_get_wall_clock.
         struct tm timeinfo;
         hw_get_wall_clock(timeinfo);
-        if (self._statTimeLabel) {
-            lv_label_set_text_fmt(self._statTimeLabel, "%02d/%02d/%04d %02d:%02d", 
+        if (self._statTimeLabel &&
+            (timeinfo.tm_min  != prev_clock_min  ||
+             timeinfo.tm_hour != prev_clock_hour ||
+             timeinfo.tm_mday != prev_clock_mday ||
+             timeinfo.tm_mon  != prev_clock_mon  ||
+             timeinfo.tm_year != prev_clock_year)) {
+            lv_label_set_text_fmt(self._statTimeLabel, "%02d/%02d/%04d %02d:%02d",
                                 timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900,
                                 timeinfo.tm_hour, timeinfo.tm_min);
+            prev_clock_min  = timeinfo.tm_min;
+            prev_clock_hour = timeinfo.tm_hour;
+            prev_clock_mday = timeinfo.tm_mday;
+            prev_clock_mon  = timeinfo.tm_mon;
+            prev_clock_year = timeinfo.tm_year;
         }
 
         monitor_params_t params;
         hw_get_monitor_params(params);
-        if (self._statBattLabel) {
+        if (self._statBattLabel &&
+            (params.battery_percent != prev_batt_pct ||
+             params.is_charging     != prev_is_charging)) {
             lv_label_set_text_fmt(self._statBattLabel, "%s %d%%",
                                   ui_battery_icon(params.battery_percent, params.is_charging),
                                   params.battery_percent);
+            prev_batt_pct    = params.battery_percent;
+            prev_is_charging = params.is_charging;
         }
 
         // When the back button is visible, push the memory readout right so
@@ -412,7 +446,10 @@ void System::setupGlobalUI() {
                     cached_file_count = hw_count_internal_files();
                     file_count_tick = 0;
                 }
-                lv_label_set_text_fmt(self._statFileCountLabel, "%u", (unsigned)cached_file_count);
+                if (cached_file_count != prev_file_count) {
+                    lv_label_set_text_fmt(self._statFileCountLabel, "%u", (unsigned)cached_file_count);
+                    prev_file_count = cached_file_count;
+                }
                 lv_obj_clear_flag(self._statFileCountLabel, LV_OBJ_FLAG_HIDDEN);
             } else {
                 lv_obj_add_flag(self._statFileCountLabel, LV_OBJ_FLAG_HIDDEN);
@@ -423,7 +460,11 @@ void System::setupGlobalUI() {
             if (settings.show_mem_usage) {
                 uint32_t total, free_h;
                 hw_get_heap_info(total, free_h);
-                lv_label_set_text_fmt(self._statMemLabel, "M:%uK", free_h / 1024);
+                uint32_t mem_free_kb = free_h / 1024;
+                if (mem_free_kb != prev_mem_free_kb) {
+                    lv_label_set_text_fmt(self._statMemLabel, "M:%uK", mem_free_kb);
+                    prev_mem_free_kb = mem_free_kb;
+                }
                 lv_obj_clear_flag(self._statMemLabel, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_set_x(self._statMemLabel, 5 + back_off);
             } else {

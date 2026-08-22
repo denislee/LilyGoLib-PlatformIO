@@ -18,7 +18,7 @@
 // --- Battery history ---------------------------------------------------
 
 static std::vector<int16_t> battery_history;
-static const size_t MAX_BATTERY_HISTORY = 60; // 5 hours if 5 mins interval
+static const size_t MAX_BATTERY_HISTORY = 60; // 1 hour at 60 s interval (was "5 hours if 5 mins", corrected P4.30)
 
 void hw_update_battery_history()
 {
@@ -81,7 +81,7 @@ int16_t hw_get_battery_voltage()
         instance.gauge.refresh();
         return instance.gauge.getVoltage();
     } else {
-        printf("Gauge Not online !\n");
+        log_d("Gauge Not online !");
         return 0;
     }
 #elif defined(USING_PMU_MANAGE)
@@ -212,7 +212,7 @@ uint16_t hw_set_charger_current_level(uint8_t level)
 {
 #ifdef ARDUINO
 #if defined(USING_PPM_MANAGE)
-    printf("set charge current:%u mA\n", level * dev_conts_var.charge_steps);
+    log_d("set charge current:%u mA", level * dev_conts_var.charge_steps);
     instance.ppm.setChargerConstantCurr(level * dev_conts_var.charge_steps);
     return  level * dev_conts_var.charge_steps;
 #elif defined(USING_PMU_MANAGE)
@@ -225,7 +225,7 @@ uint16_t hw_set_charger_current_level(uint8_t level)
     if (level > (sizeof(table) / sizeof(table[0]) - 1)) {
         level = sizeof(table) / sizeof(table[0]) - 1;
     }
-    printf("set charge current:%u mA\n", table[level]);
+    log_d("set charge current:%u mA", table[level]);
     instance.setChargeCurrent(table[level]);
     return  table[level];
 #endif
@@ -240,7 +240,7 @@ uint16_t hw_set_charger_current_level(uint8_t level)
     if (level > (sizeof(table) / sizeof(table[0]) - 1)) {
         level = sizeof(table) / sizeof(table[0]) - 1;
     }
-    printf("set charge current:%u mA\n", table[level]);
+    log_d("set charge current:%u mA", table[level]);
     return  table[level];
 #endif
 
@@ -248,11 +248,22 @@ uint16_t hw_set_charger_current_level(uint8_t level)
 
 // --- Monitor / power params -------------------------------------------
 
+// File-level so hw_invalidate_monitor_cache() can zero last_refresh.
+static monitor_params_t s_cached_monitor_params;
+static uint32_t s_monitor_last_refresh = 0;
+
+// Force the next hw_get_monitor_params() call to bypass the TTL cache and
+// do a fresh hardware read.  Call this before re-enabling the BQ25896 ADC
+// (e.g. in the charge overlay wakeup path) so usb_voltage / sys_voltage
+// are read with the ADC live rather than served from a stale pre-sleep cache.
+void hw_invalidate_monitor_cache()
+{
+    s_monitor_last_refresh = 0;
+}
+
 void hw_get_monitor_params(monitor_params_t &params)
 {
 #ifdef ARDUINO
-    static monitor_params_t cached_params;
-    static uint32_t last_refresh = 0;
 
     // Refresh at most once per second while charging (the status bar animates
     // the bolt / rising percent), but back off to 5 s when discharging: the
@@ -260,12 +271,12 @@ void hw_get_monitor_params(monitor_params_t &params)
     // plus ~5 PPM reads, all under the instance mutex, and an idle battery
     // percent barely moves second-to-second. A freshly-plugged charger is
     // picked up within one 5 s tick.
-    uint32_t ttl_ms = cached_params.is_charging ? 1000 : 5000;
-    if (last_refresh != 0 && (millis() - last_refresh < ttl_ms)) {
-        params = cached_params;
+    uint32_t ttl_ms = s_cached_monitor_params.is_charging ? 1000 : 5000;
+    if (s_monitor_last_refresh != 0 && (millis() - s_monitor_last_refresh < ttl_ms)) {
+        params = s_cached_monitor_params;
         return;
     }
-    last_refresh = millis();
+    s_monitor_last_refresh = millis();
 
     params = monitor_params_t{};
 
@@ -324,7 +335,7 @@ void hw_get_monitor_params(monitor_params_t &params)
         }
     }
 #endif
-    cached_params = params;
+    s_cached_monitor_params = params;
 #else
     params.type = MONITOR_PPM;
     params.battery_percent = 30 + rand() % (100 - 30 + 1);;

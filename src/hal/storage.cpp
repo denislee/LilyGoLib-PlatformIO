@@ -243,7 +243,7 @@ bool hw_delete_file(const char *path)
     bool res_int = FFat.remove(str);
     return res_sd || res_int;
 #else
-    printf("Delete file: %s\n", path);
+    log_d("Delete file: %s", path);
     return true;
 #endif
 }
@@ -298,7 +298,7 @@ bool hw_delete_path(const char *path, bool use_sd)
     return delete_path_recursive(FFat, str);
 #else
     (void)use_sd;
-    printf("Delete path: %s\n", path);
+    log_d("Delete path: %s", path);
     return true;
 #endif
 }
@@ -342,7 +342,7 @@ bool hw_read_file(const char *path, std::string &content)
     }
     return true;
 #else
-    printf("Read from file: %s\n", path);
+    log_d("Read from file: %s", path);
     content = "Dummy content for simulation";
     return true;
 #endif
@@ -767,16 +767,16 @@ void hw_prune_internal_storage(void (*cb)(int, int, const char *))
             HalError herr = hal::hub_upload_note(leaf, buf.data(), sz);
             hub_ok = (herr == HalError::Ok);
             if (!hub_ok) {
-                printf("Eviction hub upload failed (%s): %s\n", leaf, hal_error_string(herr));
+                log_e("Eviction hub upload failed (%s): %s", leaf, hal_error_string(herr));
             }
         }
 
         if (copied || hub_ok) {
-            printf("Eviction move: %s (sd=%d hub=%d)\n",
+            log_d("Eviction move: %s (sd=%d hub=%d)",
                    path.c_str(), (int)copied, (int)hub_ok);
             FFat.remove(path);
         } else {
-            printf("Eviction copy failed, keeping: %s\n", path.c_str());
+            log_e("Eviction copy failed, keeping: %s", path.c_str());
         }
     }
 
@@ -883,7 +883,7 @@ bool hw_save_preferred_file(const char *path, const char *content, std::string *
 #else
     (void)error;
     (void)allow_prune;
-    printf("Save to preferred file: %s, content: %s\n", path, content);
+    log_d("Save to preferred file: %s, content: %s", path, content);
     return true;
 #endif
 }

@@ -142,28 +142,20 @@ bool hw_is_face_down()
     return false;
 }
 
+// Tracks whether the three BHI260 virtual sensors are currently configured.
+// Guards against double-register and against unregistering what was never
+// registered (P4.22).
+static bool s_imu_registered = false;
+
+bool hw_imu_is_registered() { return s_imu_registered; }
+
 void hw_register_imu_process()
 {
+    if (s_imu_registered) return; // guard: already registered
 #if defined(ARDUINO)
 #if defined(USING_BHI260_SENSOR)
     s_imu_diag.bhi260_online = (hw_get_device_online() & HW_BHI260AP_ONLINE) != 0;
     if (s_imu_diag.bhi260_online) {
-        // Dump the firmware's virtual-sensor table to Serial so the user can
-        // see which IDs the loaded firmware actually exposes. Then sensor
-        // count goes into the diag struct for the on-screen readout.
-        BoschSensorInfo info = instance.sensor.getSensorInfo();
-        info.printInfo(Serial);
-        // Pinned SensorLib version lacks getAvailableSensorCount(), so walk
-        // the BHY2 sensor table directly via the C helper to count what the
-        // firmware actually exposes.
-        uint16_t count = 0;
-        if (info.dev) {
-            for (uint8_t id = 1; id < BHY2_SENSOR_ID_MAX; ++id) {
-                if (bhy2_is_sensor_available(id, info.dev)) count++;
-            }
-        }
-        s_imu_diag.sensor_count = count;
-
         // Power: the only consumers of the accel + game-rotation streams are
         // hw_is_face_down() (a slow physical gesture) and the IMU debug page,
         // which reads the cached values at 5 Hz — nothing needs 100 Hz. Run the
@@ -209,6 +201,31 @@ void hw_register_imu_process()
     }
 #endif // SENSOR
 #endif // ARDUINO
+    s_imu_registered = true;
+}
+
+// hw_probe_imu_info() — heavy diagnostic path (P4.6).
+// Dumps the BHI260 firmware's virtual-sensor table to Serial and counts
+// available sensors into s_imu_diag.sensor_count. Separated from
+// hw_register_imu_process() so it only runs when the IMU debug page
+// explicitly requests it, not on every wake.
+void hw_probe_imu_info()
+{
+#if defined(ARDUINO) && defined(USING_BHI260_SENSOR)
+    if (!(hw_get_device_online() & HW_BHI260AP_ONLINE)) return;
+    BoschSensorInfo info = instance.sensor.getSensorInfo();
+    // Pinned SensorLib version lacks getAvailableSensorCount(), so walk
+    // the BHY2 sensor table directly via the C helper to count what the
+    // firmware actually exposes.
+    uint16_t count = 0;
+    if (info.dev) {
+        for (uint8_t id = 1; id < BHY2_SENSOR_ID_MAX; ++id) {
+            if (bhy2_is_sensor_available(id, info.dev)) count++;
+        }
+    }
+    s_imu_diag.sensor_count = count;
+    log_v("BHI260 probe: %u virtual sensors available", (unsigned)count);
+#endif
 }
 
 void hw_get_imu_diag(imu_diag_t &out)
@@ -218,6 +235,7 @@ void hw_get_imu_diag(imu_diag_t &out)
 
 void hw_unregister_imu_process()
 {
+    if (!s_imu_registered) return; // guard: nothing registered, nothing to undo
 #if defined(ARDUINO)
 #if defined(USING_BHI260_SENSOR)
     if (hw_get_device_online() & HW_BHI260AP_ONLINE) {
@@ -234,4 +252,5 @@ void hw_unregister_imu_process()
     }
 #endif // SENSOR
 #endif // ARDUINO
+    s_imu_registered = false;
 }

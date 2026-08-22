@@ -5,8 +5,9 @@
  *
  * Read-only info rows: MAC, WiFi SSID/IP/RSSI, battery, SD + internal
  * storage usage, LVGL version, Arduino core version, build date, firmware
- * hash, chip id. A 1 Hz lv_timer refreshes the live rows (clock, RSSI,
- * battery voltage); storage + SSID + IP are loaded once on first tick
+ * hash, chip id. A 1 Hz lv_timer refreshes the live rows (RSSI, battery
+ * voltage); the RTC clock row is updated every 5 s to avoid per-second I2C
+ * traffic (P4.13b). Storage + SSID + IP are loaded once on first tick
  * (gated by `info_loaded`) because they're expensive.
  */
 #include "../ui_define.h"
@@ -30,6 +31,14 @@ struct sys_label_t {
     lv_obj_t *local_storage_used_label  = nullptr;
     lv_obj_t *local_storage_free_label  = nullptr;
     bool      info_loaded            = false;
+    // P4.13b: cadence counter + per-label caches to avoid redundant I2C reads
+    // and unconditional lv_label_set_text* calls (which call lv_obj_invalidate
+    // in LVGL 9 regardless of whether the text changed).
+    // All reset to defaults by `sys_label = sys_label_t{}` in reset_state().
+    uint8_t   rtc_tick              = 0;      // increments each 1s tick; RTC read every 5
+    std::string cached_datetime;              // last string written to datetime_label
+    int       cached_rssi           = 1;      // 1 = sentinel (valid RSSI is always <= 0)
+    int       cached_batt_mv        = -1;     // -1 = sentinel (valid voltage > 0)
 };
 
 sys_label_t sys_label;
@@ -47,19 +56,37 @@ void sys_timer_event_cb(lv_timer_t *)
     // after one visit here. Fully torn down on Settings exit (reset_state).
     if (!s_menu || lv_menu_get_cur_main_page(s_menu) != s_page) return;
 
-    std::string datetime;
-    hw_get_date_time(datetime);
-    lv_label_set_text_fmt(sys_label.datetime_label, "%s", datetime.c_str());
+    // P4.13b: read the PCF85063 over I2C only every 5 s (the timer fires at
+    // 1 Hz so other rows keep their 1 s update cadence). The cached_datetime
+    // compare also skips the label write when the second-display text hasn't
+    // changed — lv_label_set_text_fmt in LVGL 9 calls lv_obj_invalidate()
+    // unconditionally.
+    if (++sys_label.rtc_tick >= 5) {
+        sys_label.rtc_tick = 0;
+        std::string datetime;
+        hw_get_date_time(datetime);
+        if (datetime != sys_label.cached_datetime) {
+            sys_label.cached_datetime = datetime;
+            lv_label_set_text_fmt(sys_label.datetime_label, "%s", datetime.c_str());
+        }
+    }
 
     if (hw_get_wifi_connected()) {
-        lv_label_set_text_fmt(sys_label.wifi_rssi_label, "%d", hw_get_wifi_rssi());
+        int rssi = hw_get_wifi_rssi();
+        if (rssi != sys_label.cached_rssi) {
+            sys_label.cached_rssi = rssi;
+            lv_label_set_text_fmt(sys_label.wifi_rssi_label, "%d", rssi);
+        }
     }
     // Read through the TTL-cached sweep rather than hw_get_battery_voltage(),
     // which forces a full gauge.refresh() every second. <=5 s staleness on a
     // static voltage label is fine, and this shares the status bar's cache. (PB.15)
     monitor_params_t mp;
     hw_get_monitor_params(mp);
-    lv_label_set_text_fmt(sys_label.batt_voltage_label, "%d mV", mp.battery_voltage);
+    if (mp.battery_voltage != sys_label.cached_batt_mv) {
+        sys_label.cached_batt_mv = mp.battery_voltage;
+        lv_label_set_text_fmt(sys_label.batt_voltage_label, "%d mV", mp.battery_voltage);
+    }
 
     if (!sys_label.info_loaded) {
         std::string wifi_ssid = "N/A";

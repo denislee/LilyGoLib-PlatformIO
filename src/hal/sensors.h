@@ -15,8 +15,22 @@ bool hw_get_gps_powered();
 void hw_set_gps_powered(bool on);
 
 // --- IMU ---
+// Register/unregister the three BHI260 virtual sensors (or BMA423 accel).
+// hw_register_imu_process() is idempotent — double-calls are safe.
+// hw_unregister_imu_process() is idempotent — calling when nothing is
+// registered is a no-op. Both update the shared s_imu_registered flag.
 void hw_register_imu_process();
 void hw_unregister_imu_process();
+
+// Returns true if the IMU pipeline is currently registered (i.e. sensors are
+// configured and streaming). Used by system.cpp to decide whether to
+// suspend/resume the pipeline across fake sleep cycles.
+bool hw_imu_is_registered();
+
+// Heavy diagnostic probe (P4.6): dumps the BHI260 firmware's virtual-sensor
+// table and updates imu_diag_t::sensor_count. Call lazily from the IMU debug
+// page, not on every wake — this walks all 255 BHY2 sensor IDs.
+void hw_probe_imu_info();
 void hw_get_imu_params(imu_params_t &params);
 
 // True if the device is lying roughly flat with the screen pointing down

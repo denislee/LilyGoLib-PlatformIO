@@ -37,6 +37,14 @@ void hw_wifi_forget();  // drop every saved network
 // restore the prior session — we have to drive WiFi.begin() ourselves.
 void hw_wifi_reconnect_saved();
 
+// P4.17: WiFi reconnect supervisor with exponential backoff.
+// Call from the main loop at any cadence >= 1 Hz; the function self-throttles.
+// Retries hw_wifi_reconnect_saved() at 30 s -> 60 s -> 5 min (cap); after
+// 5 consecutive failures drops to WIFI_OFF and retries after 15 min.
+// Resets all state on a successful association. setAutoReconnect stays false.
+// Driven from loop() in factory.ino.
+void hw_wifi_supervise(uint32_t now_ms);
+
 // PB.2 — power-save escalation for fake sleep.
 // hw_wifi_powersave_sleep() escalates to WIFI_PS_MAX_MODEM when connected,
 // letting the RF front-end sleep for the listen interval during fake sleep.
